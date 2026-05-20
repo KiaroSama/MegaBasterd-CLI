@@ -1,0 +1,108 @@
+[build-system]
+requires = ["setuptools>=77.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "megabasterd-cli"
+version = "1.0.0"
+description = "A script-first MEGA.nz downloader/uploader inspired by MegaBasterd"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+authors = [
+    { name = "Kiaro Sama" }
+]
+keywords = ["mega", "mega.nz", "downloader", "uploader", "cli", "megabasterd"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Communications :: File Sharing",
+]
+dependencies = [
+    "click>=8.1.0",
+    "rich>=13.5.0",
+    "requests>=2.31.0",
+    "pycryptodome>=3.19.0",
+    "tenacity>=8.2.0",
+    "tqdm>=4.66.0",
+    "cryptography>=41.0.0",
+    "colorama>=0.4.6; platform_system=='Windows'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.9.0",
+    "ruff>=0.1.0",
+    "mypy>=1.6.0",
+    "pre-commit>=3.5.0",
+]
+build = [
+    "build>=1.0.0",
+    "twine>=4.0.0",
+]
+release = [
+    "build>=1.0.0",
+    "twine>=4.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/KiaroSama/megabasterd-cli"
+Repository = "https://github.com/KiaroSama/megabasterd-cli"
+"Bug Tracker" = "https://github.com/KiaroSama/megabasterd-cli/issues"
+Documentation = "https://github.com/KiaroSama/megabasterd-cli#readme"
+"Original Project" = "https://github.com/tonikelope/megabasterd"
+
+[project.scripts]
+megabasterd-cli = "megabasterd_cli.cli:main"
+mbcli = "megabasterd_cli.cli:main"
+mb = "megabasterd_cli.cli:main"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["megabasterd_cli*"]
+
+[tool.setuptools.package-data]
+megabasterd_cli = ["py.typed"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM"]
+ignore = ["E501", "B008"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short --strict-markers"
+pythonpath = ["src"]

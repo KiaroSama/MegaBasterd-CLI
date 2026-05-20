@@ -1,0 +1,63 @@
+name: Bug report
+description: Report a problem with MegaBasterd CLI
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Please fill in the details below.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "Run `./Run.ps1 --version` or `mb --version` and paste the output."
+      placeholder: "megabasterd-cli 1.0.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - Linux
+        - macOS
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "3.12.1"
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Describe the bug clearly.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to reproduce
+      description: Exact command you ran and what you expected.
+      placeholder: |
+        1. ./Run.ps1 download "https://mega.nz/file/..."
+        2. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste the output of running with `-vv` (debug logging).
+      render: shell

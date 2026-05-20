@@ -1,0 +1,157 @@
+# Architecture
+
+MegaBasterd CLI is a source-run Python application. `Run.ps1` is the launcher,
+and the importable package lives under `src/megabasterd_cli`.
+
+## Runtime Flow
+
+```text
+Run.ps1
+  |-- find Python 3.9+
+  |-- create per-run logs under Logs/
+  |-- check/import dependency modules
+  |-- optionally create .venv and install requirements.txt
+  |-- open the interactive menu when no CLI args are supplied
+  |-- add src/ to PYTHONPATH
+  `-- python -m megabasterd_cli <args>
+
+src/megabasterd_cli/__main__.py
+  `-- cli.main()
+
+src/megabasterd_cli/cli.py
+  |-- creates shared config/logging context
+  `-- dispatches Click commands
+```
+
+## Package Layout
+
+```text
+src/megabasterd_cli/
+|-- cli.py              # Click root command and subcommand registration
+|-- config.py           # Config dataclass and project-local User/ paths
+|-- commands/           # Thin command adapters
+|-- core/               # MEGA protocol, crypto, transfers, links, state
+|-- accounts/           # Encrypted account vault
+|-- proxy/              # Smart proxy pool and CONNECT proxy
+|-- queue/              # Persistent transfer queue
+|-- streaming/          # Local HTTP stream server
+|-- ui/                 # Rich theme, tables, prompts, progress
+`-- utils/              # Logging, hooks, speed limiting, formatting
+```
+
+Tests live in `tests/`. Documentation lives in `docs/`. Packaging and tool
+configuration lives in `pyproject.toml`.
+
+## Layers
+
+```text
++-------------------------------------------------------+
+| Launcher                                               |
+|   Run.ps1 dependency check + Python dispatch           |
+|   launcher transcript + CLI log file wiring            |
++-------------------------+-----------------------------+
+                          |
++-------------------------v-----------------------------+
+| CLI layer                                             |
+|   Click root group + commands/*.py                    |
++-------------------------+-----------------------------+
+                          |
++-------------------------v-----------------------------+
+| Orchestration                                         |
+|   MegaDownloader, MegaFolderDownloader, MegaUploader  |
+|   StreamingServer, QueueManager                       |
++-------------------------+-----------------------------+
+                          |
++-------------------------v-----------------------------+
+| Protocol and crypto                                   |
+|   MegaAPIClient, MegaClient, links.py, crypto.py      |
+|   chunks.py, hashcash.py, state.py                    |
++-------------------------+-----------------------------+
+                          |
++-------------------------v-----------------------------+
+| Support systems                                       |
+|   accounts vault, config, proxy pool, themed UI       |
++-------------------------------------------------------+
+```
+
+## Command Design
+
+Command modules should stay thin:
+
+- parse Click arguments;
+- load config and account context;
+- construct core objects;
+- render results through `ui/`;
+- leave protocol and crypto behavior in `core/`.
+
+This keeps commands easy to test and avoids duplicating MEGA protocol logic.
+
+## Theme Design
+
+`ui/theme.py` defines a shared 20-color Rich palette. New UI code should create
+consoles with `make_console()` and use the `mb.*` styles already registered in
+the theme. This keeps tables, prompts, and progress bars visually consistent.
+
+## Transfer Invariants
+
+### Crypto is deterministic
+
+`core/crypto.py` and `core/chunks.py` are pure helpers. They should not perform
+network calls, filesystem writes, or config reads.
+
+### Transfers are restartable
+
+Downloads and uploads write `.mbstate` files next to transfer targets. State
+contains completed chunks and MAC metadata so an interrupted command can resume
+without redoing finished chunks.
+
+### Parallelism is per transfer
+
+One file transfer owns a thread pool of chunk workers. Folder and multi-file
+operations can run several file transfers concurrently, each with its own chunk
+workers.
+
+### Integrity is explicit
+
+Downloaded chunks are folded into MEGA's final CBC-MAC. Mismatches raise an
+integrity error and leave the state file in place.
+
+### Account secrets are encrypted on disk
+
+The account vault encrypts stored passwords with AES-GCM and a scrypt-derived
+key. The vault passphrase is requested interactively unless a command receives
+`--vault-passphrase`.
+
+## MEGA Protocol Notes
+
+### File keys
+
+MEGA file keys are eight uint32 values. The first four are XORed with the last
+four to recover the AES key and metadata:
+
+```text
+[ aes_xor_nonce_hi, aes_xor_nonce_lo, aes_xor_mac_hi, aes_xor_mac_lo,
+  nonce_hi,         nonce_lo,         mac_iv_hi,      mac_iv_lo        ]
+```
+
+`core.crypto.unpack_file_key` returns `(aes_key, nonce, mac)`.
+
+### Chunk sizing
+
+The first eight chunks grow from 128 KB to 1024 KB. Later chunks stay at 1024
+KB. `core.chunks.iter_chunks` centralizes this pattern.
+
+### Folder node keys
+
+Files inside public folder shares store per-node keys wrapped by the folder key.
+Folder-file and folder-subtree operations must fetch the parent folder listing,
+unwrap the target node key, and then request the CDN URL in folder context.
+
+## Extension Points
+
+- Add link formats in `core/links.py`.
+- Add public-link metadata renderers in `commands/info_cmd.py`.
+- Add transfer behavior in `core/downloader.py` or `core/uploader.py`.
+- Add new cloud operations to `core/client.py` and expose them from
+  `commands/cloud_cmd.py`.
+- Add UI styles in `ui/theme.py`, then consume them through `make_console()`.
