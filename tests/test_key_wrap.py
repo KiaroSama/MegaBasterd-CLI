@@ -12,7 +12,6 @@ import os
 import pytest
 
 from megabasterd_cli.core.crypto import (
-    aes_cbc_decrypt,
     aes_cbc_encrypt,
     aes_key_wrap_decrypt,
     aes_key_wrap_encrypt,

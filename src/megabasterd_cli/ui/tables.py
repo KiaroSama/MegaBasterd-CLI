@@ -8,7 +8,6 @@ from ..accounts.storage import Account
 from ..utils.helpers import format_bytes
 from .theme import make_console
 
-
 _console = make_console()
 
 

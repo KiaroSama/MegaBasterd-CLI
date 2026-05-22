@@ -1,6 +1,7 @@
 include README.md
 include LICENSE
 include ATTRIBUTION.md
+include CHANGELOG.md
 include GITHUB_RELEASE_NOTES.md
 include CONTRIBUTING.md
 include SECURITY.md
@@ -10,7 +11,9 @@ include Run.ps1
 recursive-include docs *.md
 recursive-include src *.py
 recursive-include src *.typed
+recursive-include src/megabasterd_cli/native *.c
 recursive-include tests *.py
+recursive-include tools *.ps1
 global-exclude __pycache__
 global-exclude *.pyc
 global-exclude *.pyo

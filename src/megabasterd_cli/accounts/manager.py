@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass
 from pathlib import Path
 
 from .storage import Account, AccountStorage, AccountStore, CredentialVault
 
 
-class AccountNotFound(Exception):
+class AccountNotFound(Exception):  # noqa: N818 - public CLI API name
     pass
 
 
@@ -73,13 +72,9 @@ class AccountManager:
 
     def remove_account(self, email_or_label: str) -> None:
         account = self.get_account(email_or_label)
-        self.store.accounts = [
-            a for a in self.store.accounts if a.email != account.email
-        ]
+        self.store.accounts = [a for a in self.store.accounts if a.email != account.email]
         if self.store.default_email == account.email:
-            self.store.default_email = (
-                self.store.accounts[0].email if self.store.accounts else None
-            )
+            self.store.default_email = self.store.accounts[0].email if self.store.accounts else None
         self.storage.save(self.store)
 
     def get_password(self, email_or_label: str) -> str:
@@ -98,7 +93,7 @@ class AccountManager:
             if a.email == email:
                 a.quota_used = used
                 a.quota_total = total
-                a.last_used_iso = dt.datetime.utcnow().isoformat()
+                a.last_used_iso = dt.datetime.now(dt.timezone.utc).isoformat()
                 break
         self.storage.save(self.store)
 

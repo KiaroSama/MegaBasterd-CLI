@@ -5,13 +5,16 @@ import pytest
 from megabasterd_cli.core.links import LinkType, is_mega_url, parse_link
 
 
-@pytest.mark.parametrize("url,expected_type", [
-    ("https://mega.nz/file/abc123#xyz", LinkType.FILE),
-    ("https://mega.nz/folder/abc123#xyz", LinkType.FOLDER),
-    ("https://mega.nz/folder/abc123#xyz/file/inner", LinkType.FILE_IN_FOLDER),
-    ("https://mega.nz/#!abc123!xyz", LinkType.FILE),
-    ("https://mega.nz/#F!abc123!xyz", LinkType.FOLDER),
-])
+@pytest.mark.parametrize(
+    "url,expected_type",
+    [
+        ("https://mega.nz/file/abc123#xyz", LinkType.FILE),
+        ("https://mega.nz/folder/abc123#xyz", LinkType.FOLDER),
+        ("https://mega.nz/folder/abc123#xyz/file/inner", LinkType.FILE_IN_FOLDER),
+        ("https://mega.nz/#!abc123!xyz", LinkType.FILE),
+        ("https://mega.nz/#F!abc123!xyz", LinkType.FOLDER),
+    ],
+)
 def test_parse_link_types(url, expected_type):
     parsed = parse_link(url)
     assert parsed.type == expected_type
@@ -21,6 +24,14 @@ def test_parse_link_extracts_id_and_key():
     parsed = parse_link("https://mega.nz/file/MyFileID#MyKeyValue")
     assert parsed.public_id == "MyFileID"
     assert parsed.key == "MyKeyValue"
+
+
+def test_parse_link_accepts_trailing_slash_after_key():
+    parsed = parse_link("https://mega.nz/file/abc123#xyz/")
+
+    assert parsed.type == LinkType.FILE
+    assert parsed.public_id == "abc123"
+    assert parsed.key == "xyz"
 
 
 def test_parse_link_rejects_non_mega():

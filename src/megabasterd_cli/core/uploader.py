@@ -14,6 +14,7 @@ Uploading a file to MEGA:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import threading
@@ -26,22 +27,24 @@ from typing import Callable
 import requests
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from ..utils.helpers import sanitize_filename
+from ..utils.speed import make_limiter
 from .chunks import Chunk, chunk_mac, combine_chunk_macs, condense_mac, iter_chunks
 from .crypto import (
     a32_to_bytes,
     aes_key_wrap_encrypt,
     b64_url_encode,
+    ctr_offset_to_counter,
     encrypt_attributes,
     make_ctr_cipher,
-    ctr_offset_to_counter,
     pack_file_key,
 )
 from .errors import TransferError
-from .state import TransferState, clear_state, load_state, save_state
-from ..utils.helpers import sanitize_filename
-from ..utils.speed import make_limiter
+from .state import TransferState, clear_state, load_state, save_state, snapshot_state
 
 log = logging.getLogger(__name__)
+
+UPLOAD_URL_EXPIRY_STATUS = {403, 404, 410, 509}
 
 
 @dataclass
@@ -60,6 +63,10 @@ class UploadResult:
     size: int
     elapsed_seconds: float
     public_link: str | None = None
+
+
+class UploadUrlExpiredError(Exception):
+    """Raised when an upload slot is no longer usable and must be refreshed."""
 
 
 class MegaUploader:
@@ -91,6 +98,7 @@ class MegaUploader:
         self._chunks_done = 0
         self._start_time = 0.0
         self._completion_token: bytes | None = None
+        self.last_directory_failures: list[str] = []
 
     def _proxies_for_request(self) -> tuple[dict[str, str] | None, str | None]:
         """Same precedence as MegaDownloader: pool, then static, then force/direct."""
@@ -104,7 +112,7 @@ class MegaUploader:
         if self.force_proxy:
             raise TransferError(
                 message="force_smart_proxy is on but no proxy is available "
-                        "(pool empty, no --proxy)"
+                "(pool empty, no --proxy)"
             )
         return None, None
 
@@ -136,20 +144,28 @@ class MegaUploader:
         upload_url: str | None = None
 
         # State for resume
-        state_path = source.with_suffix(source.suffix + ".upload")
+        state_path = self._upload_state_destination(source)
         state = load_state(state_path)
-        if state is not None and state.total_size == file_size:
+        if state is not None and state.total_size == file_size and state.source == str(source):
             try:
                 aes_key = bytes.fromhex(state.metadata["aes_key"])
                 nonce = bytes.fromhex(state.metadata["nonce"])
+                if len(aes_key) != 16 or len(nonce) != 8:
+                    raise ValueError("Invalid upload encryption material in state file")
                 upload_url = state.metadata["upload_url"]
+                token_hex = state.metadata.get("completion_token")
+                self._completion_token = bytes.fromhex(token_hex) if token_hex else None
             except (KeyError, ValueError):
+                clear_state(state_path)
                 state = None
+        else:
+            state = None
 
         if state is None:
             # Request a fresh upload slot
             upload_info = self.api.request_upload(file_size)
             upload_url = upload_info["p"]
+            self._completion_token = None
             state = TransferState(
                 transfer_type="upload",
                 source=str(source),
@@ -163,47 +179,93 @@ class MegaUploader:
             )
 
         all_chunks = list(iter_chunks(file_size))
-        pending = [c for c in all_chunks if not state.is_chunk_done(c.index)]
-
-        self._bytes_done = sum(c.size for c in all_chunks if state.is_chunk_done(c.index))
-        self._chunks_done = len(all_chunks) - len(pending)
-        self._start_time = time.monotonic()
-        self._stop_event.clear()
-        self._completion_token = None
+        refreshed_upload_url = False
 
         log.info(
             "Uploading %s (%d bytes, %d chunks, %d already done)",
-            source.name, file_size, len(all_chunks), self._chunks_done,
+            source.name,
+            file_size,
+            len(all_chunks),
+            sum(1 for c in all_chunks if state.is_chunk_done(c.index)),
         )
 
-        # Spawn uploader workers
-        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
-            futures = []
-            for chunk in pending:
-                if self._stop_event.is_set():
-                    break
-                fut = pool.submit(
-                    self._upload_chunk, upload_url, source, chunk, aes_key, nonce, state,
-                    len(all_chunks),
-                )
-                futures.append((chunk, fut))
+        while True:
+            pending = [c for c in all_chunks if not state.is_chunk_done(c.index)]
+            self._bytes_done = sum(c.size for c in all_chunks if state.is_chunk_done(c.index))
+            self._chunks_done = len(all_chunks) - len(pending)
+            self._start_time = time.monotonic()
+            self._stop_event.clear()
 
-            for chunk, fut in futures:
-                try:
-                    fut.result()
-                except Exception as e:
-                    self._stop_event.set()
-                    raise TransferError(message=f"Upload chunk {chunk.index} failed: {e}") from e
-                if on_progress:
-                    elapsed = time.monotonic() - self._start_time
-                    speed = self._bytes_done / elapsed if elapsed > 0 else 0
-                    on_progress(UploadProgress(
-                        bytes_done=self._bytes_done,
-                        total_bytes=file_size,
-                        chunks_done=self._chunks_done,
-                        total_chunks=len(all_chunks),
-                        speed_bps=speed,
-                    ))
+            try:
+                # Spawn uploader workers
+                with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+                    futures = []
+                    for chunk in pending:
+                        if self._stop_event.is_set():
+                            break
+                        fut = pool.submit(
+                            self._upload_chunk,
+                            upload_url,
+                            source,
+                            chunk,
+                            aes_key,
+                            nonce,
+                            state,
+                            len(all_chunks),
+                        )
+                        futures.append((chunk, fut))
+
+                    for chunk, fut in futures:
+                        try:
+                            fut.result()
+                        except UploadUrlExpiredError:
+                            self._stop_event.set()
+                            raise
+                        except Exception as e:
+                            self._stop_event.set()
+                            with self._lock:
+                                state_to_save = snapshot_state(state)
+                            save_state(state_to_save)
+                            raise TransferError(
+                                message=f"Upload chunk {chunk.index} failed: {e}"
+                            ) from e
+                        if on_progress:
+                            elapsed = time.monotonic() - self._start_time
+                            speed = self._bytes_done / elapsed if elapsed > 0 else 0
+                            on_progress(
+                                UploadProgress(
+                                    bytes_done=self._bytes_done,
+                                    total_bytes=file_size,
+                                    chunks_done=self._chunks_done,
+                                    total_chunks=len(all_chunks),
+                                    speed_bps=speed,
+                                )
+                            )
+                break
+            except UploadUrlExpiredError as exc:
+                if refreshed_upload_url:
+                    with self._lock:
+                        state_to_save = snapshot_state(state)
+                    save_state(state_to_save)
+                    raise TransferError(
+                        message=(
+                            "Upload URL expired after refresh. Delete the upload state file "
+                            f"and retry if the problem repeats: {state_path}"
+                        )
+                    ) from exc
+                refreshed_upload_url = True
+                upload_info = self.api.request_upload(file_size)
+                upload_url = upload_info["p"]
+                state.metadata["upload_url"] = upload_url
+                state.metadata.pop("completion_token", None)
+                state.completed_chunks.clear()
+                state.chunk_macs.clear()
+                self._completion_token = None
+                with self._lock:
+                    state_to_save = snapshot_state(state)
+                save_state(state_to_save)
+                log.info("Upload URL expired; requested a fresh upload slot")
+                continue
 
         if self._completion_token is None:
             raise TransferError(message="Upload finished without a completion token")
@@ -220,7 +282,8 @@ class MegaUploader:
         # file key with the master key (KEY-WRAP mode, not chained CBC).
         encrypted_attrs = encrypt_attributes({"n": upload_name}, aes_key)
         wrapped_key = aes_key_wrap_encrypt(
-            a32_to_bytes(file_key_a32), self.client.session.master_key,
+            a32_to_bytes(file_key_a32),
+            self.client.session.master_key,
         )
 
         # Register the new node
@@ -230,6 +293,7 @@ class MegaUploader:
             encrypted_attrs=b64_url_encode(encrypted_attrs),
             wrapped_key=b64_url_encode(wrapped_key),
         )
+        self.client.invalidate_cache()
 
         nodes = result.get("f", []) if isinstance(result, dict) else []
         file_handle = nodes[0]["h"] if nodes else self._completion_token.hex()
@@ -237,9 +301,19 @@ class MegaUploader:
 
         elapsed = time.monotonic() - self._start_time
         return UploadResult(
-            file_handle=file_handle, name=upload_name, size=file_size,
+            file_handle=file_handle,
+            name=upload_name,
+            size=file_size,
             elapsed_seconds=elapsed,
         )
+
+    @staticmethod
+    def _upload_state_destination(source: Path) -> Path:
+        from ..config import data_dir
+
+        identity = f"{source.resolve()}|{source.stat().st_size}".encode("utf-8", errors="replace")
+        digest = hashlib.sha256(identity).hexdigest()[:24]
+        return data_dir() / "upload-state" / f"{sanitize_filename(source.name)}.{digest}.upload"
 
     def upload_directory(
         self,
@@ -247,11 +321,13 @@ class MegaUploader:
         target_handle: str | None = None,
         on_progress: Callable[[UploadProgress], None] | None = None,
         on_file_done: Callable[[UploadResult, Path], None] | None = None,
+        keep_going: bool = False,
     ) -> list[UploadResult]:
         """Upload an entire local directory tree, preserving structure.
 
         Creates remote folders as needed and uploads each file in place.
         """
+        self.last_directory_failures = []
         if not source_dir.is_dir():
             raise FileNotFoundError(f"Not a directory: {source_dir}")
 
@@ -266,7 +342,12 @@ class MegaUploader:
         handle_for[source_dir] = root_handle
 
         results: list[UploadResult] = []
+        failures: list[str] = []
+        failed_dirs: set[Path] = set()
         for local_path in sorted(source_dir.rglob("*")):
+            if any(parent in failed_dirs for parent in local_path.parents):
+                failures.append(f"{local_path}: parent folder creation failed")
+                continue
             try:
                 if local_path.is_dir():
                     parent_remote = handle_for.get(local_path.parent, root_handle)
@@ -285,6 +366,15 @@ class MegaUploader:
                         on_file_done(result, local_path)
             except Exception as exc:  # noqa: BLE001
                 log.error("Failed to upload %s: %s", local_path, exc)
+                failures.append(f"{local_path}: {exc}")
+                if local_path.is_dir():
+                    failed_dirs.add(local_path)
+
+        self.last_directory_failures = list(failures)
+        if failures and not keep_going:
+            sample = "; ".join(failures[:3])
+            more = "" if len(failures) <= 3 else f"; and {len(failures) - 3} more"
+            raise TransferError(message=f"{len(failures)} upload item(s) failed: {sample}{more}")
 
         return results
 
@@ -312,16 +402,16 @@ class MegaUploader:
             f.seek(chunk.offset)
             plaintext = f.read(chunk.size)
         if len(plaintext) != chunk.size:
-            raise TransferError(
-                message=f"Local chunk {chunk.index} short read"
-            )
+            raise TransferError(message=f"Local chunk {chunk.index} short read")
 
         # Compute MAC on plaintext
         mac = chunk_mac(plaintext, aes_key, nonce)
 
         # Encrypt with AES-CTR
         cipher = make_ctr_cipher(
-            aes_key, nonce, initial_value=ctr_offset_to_counter(chunk.offset),
+            aes_key,
+            nonce,
+            initial_value=ctr_offset_to_counter(chunk.offset),
         )
         encrypted = cipher.encrypt(plaintext)
 
@@ -331,19 +421,23 @@ class MegaUploader:
         request_proxies, picked_proxy = self._proxies_for_request()
         try:
             resp = requests.post(
-                put_url, data=encrypted, timeout=self.timeout,
+                put_url,
+                data=encrypted,
+                timeout=self.timeout,
                 proxies=request_proxies,
             )
         except (requests.ConnectionError, requests.Timeout):
             if picked_proxy and self.proxy_pool is not None:
                 self.proxy_pool.report_failure(picked_proxy)
             raise
+        if resp.status_code in UPLOAD_URL_EXPIRY_STATUS:
+            resp.close()
+            raise UploadUrlExpiredError(f"Upload URL expired on chunk {chunk.index}")
         if resp.status_code != 200:
             if picked_proxy and self.proxy_pool is not None:
                 self.proxy_pool.report_failure(picked_proxy)
-            raise TransferError(
-                message=f"Upload chunk {chunk.index} HTTP {resp.status_code}"
-            )
+            resp.close()
+            raise TransferError(message=f"Upload chunk {chunk.index} HTTP {resp.status_code}")
         if picked_proxy and self.proxy_pool is not None:
             self.proxy_pool.report_success(picked_proxy)
 
@@ -354,11 +448,15 @@ class MegaUploader:
         # last; otherwise a race between the offset-final chunk and any
         # earlier chunk causes the token to be dropped.
         body = resp.content
+        resp.close()
         with self._lock:
             state.mark_chunk_done(chunk.index, mac)
             self._bytes_done += chunk.size
             self._chunks_done += 1
             if body:
                 self._completion_token = body
-            if self._chunks_done % 8 == 0:
-                save_state(state)
+                state.metadata["completion_token"] = body.hex()
+            should_save = self._chunks_done % 8 == 0 or bool(body)
+            state_to_save = snapshot_state(state) if should_save else None
+        if should_save:
+            save_state(state_to_save)

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from ..utils.helpers import sanitize_filename
 from .crypto import (
     a32_to_bytes,
     aes_key_wrap_decrypt,
@@ -26,7 +27,6 @@ from .crypto import (
 from .downloader import DownloadProgress, DownloadResult, MegaDownloader
 from .errors import TransferError
 from .links import LinkType, parse_link
-from ..utils.helpers import sanitize_filename
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +34,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class FolderNode:
     """A decrypted node inside a public folder share."""
+
     handle: str
     parent: str
     node_type: int  # 0=file, 1=folder
@@ -69,8 +70,6 @@ class MegaFolderDownloader:
         `parallel_files` controls how many files are pulled simultaneously
         (each one still spawns the downloader's per-chunk workers internally).
         """
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
         parsed = parse_link(url)
         if parsed.type not in (LinkType.FOLDER, LinkType.FOLDER_IN_FOLDER):
             raise ValueError(f"Link is not a folder share: {parsed.type}")
@@ -99,67 +98,61 @@ class MegaFolderDownloader:
         if on_folder_manifest:
             on_folder_manifest(file_jobs)
 
-        results: list[DownloadResult] = []
-        if parallel_files <= 1:
-            for node, destination in file_jobs:
-                log.info("Downloading folder file: %s", destination)
-                try:
-                    def _progress(progress: DownloadProgress, path: Path = destination) -> None:
-                        if on_file_progress:
-                            on_file_progress(path, progress)
-                        if on_progress:
-                            on_progress(progress)
+        return self._download_file_jobs(
+            parsed.public_id,
+            file_jobs,
+            on_progress=on_progress,
+            on_file_done=on_file_done,
+            on_file_progress=on_file_progress,
+            parallel_files=parallel_files,
+        )
 
-                    result = self._download_owned_file(
-                        parsed.public_id, node, destination, _progress
-                    )
-                    results.append(result)
-                    if on_file_done:
-                        on_file_done(result)
-                except Exception as e:
-                    log.error("Failed to download %s: %s", node.name, e)
+    def download_node_in_folder(
+        self,
+        url: str,
+        output_dir: Path,
+        on_progress: Callable[[DownloadProgress], None] | None = None,
+        on_file_done: Callable[[DownloadResult], None] | None = None,
+        on_folder_manifest: Callable[[list[tuple[FolderNode, Path]]], None] | None = None,
+        on_file_progress: Callable[[Path, DownloadProgress], None] | None = None,
+        parallel_files: int = 1,
+    ) -> list[DownloadResult]:
+        """Download a file or subfolder handle from a public folder share."""
+        parsed = parse_link(url)
+        if parsed.type != LinkType.FILE_IN_FOLDER or not parsed.subpath:
+            raise ValueError(f"Link is not a node inside a folder share: {parsed.type}")
+
+        folder_key = a32_to_bytes(str_to_a32(parsed.key))
+        listing = self.api.get_public_folder_listing(parsed.public_id)
+        nodes = self._decrypt_folder_nodes(listing.get("f", []), folder_key)
+        if not nodes:
+            raise TransferError(message="No nodes returned for folder share")
+
+        target = next((n for n in nodes if n.handle == parsed.subpath), None)
+        if target is None:
+            raise TransferError(message=f"Node {parsed.subpath!r} not found in folder share")
+
+        if target.is_file:
+            root_handle = self._find_folder_root(nodes)
+            destination = self._local_path_for_node(nodes, output_dir, root_handle, target)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            file_jobs = [(target, destination)]
         else:
-            # Multiple files downloading in parallel — each needs its own downloader
-            # instance because the downloader stores per-transfer state.
-            from .downloader import MegaDownloader
+            keep = self._subtree_handles(nodes, target.handle)
+            subtree = [n for n in nodes if n.handle in keep]
+            file_jobs = self._build_file_jobs(subtree, output_dir, target.handle)
 
-            def _worker(job):
-                node, destination = job
-                worker_dl = MegaDownloader(
-                    api=self.api,
-                    max_workers=self.downloader.max_workers,
-                    speed_limit_kbps=0,  # Per-file limit; global limiter is the upstream caller's job
-                    verify_integrity=self.downloader.verify_integrity,
-                    timeout=self.downloader.timeout,
-                    proxies=self.downloader.proxies,
-                    proxy_pool=self.downloader.proxy_pool,
-                    force_proxy=self.downloader.force_proxy,
-                )
-                worker_dl.limiter = self.downloader.limiter  # Share the global limiter
-                sub_folder = MegaFolderDownloader(worker_dl)
-                def _progress(progress: DownloadProgress, path: Path = destination) -> None:
-                    if on_file_progress:
-                        on_file_progress(path, progress)
-                    if on_progress:
-                        on_progress(progress)
+        if on_folder_manifest:
+            on_folder_manifest(file_jobs)
 
-                return sub_folder._download_owned_file(
-                    parsed.public_id, node, destination, _progress
-                )
-
-            with ThreadPoolExecutor(max_workers=parallel_files) as pool:
-                futures = {pool.submit(_worker, job): job for job in file_jobs}
-                for fut in as_completed(futures):
-                    node, _ = futures[fut]
-                    try:
-                        result = fut.result()
-                        results.append(result)
-                        if on_file_done:
-                            on_file_done(result)
-                    except Exception as e:
-                        log.error("Failed to download %s: %s", node.name, e)
-
-        return results
+        return self._download_file_jobs(
+            parsed.public_id,
+            file_jobs,
+            on_progress=on_progress,
+            on_file_done=on_file_done,
+            on_file_progress=on_file_progress,
+            parallel_files=parallel_files,
+        )
 
     def download_file_in_folder(
         self,
@@ -188,13 +181,95 @@ class MegaFolderDownloader:
         root_handle = self._find_folder_root(nodes)
         destination = self._local_path_for_node(nodes, output_dir, root_handle, target)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        return self._download_owned_file(
-            parsed.public_id, target, destination, on_progress
-        )
+        return self._download_owned_file(parsed.public_id, target, destination, on_progress)
 
-    def _decrypt_folder_nodes(
-        self, raw_nodes: list[dict], folder_key: bytes
-    ) -> list[FolderNode]:
+    def _download_file_jobs(
+        self,
+        folder_public_id: str,
+        file_jobs: list[tuple[FolderNode, Path]],
+        on_progress: Callable[[DownloadProgress], None] | None = None,
+        on_file_done: Callable[[DownloadResult], None] | None = None,
+        on_file_progress: Callable[[Path, DownloadProgress], None] | None = None,
+        parallel_files: int = 1,
+    ) -> list[DownloadResult]:
+        """Download prepared folder-file jobs and fail if any file fails."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        results: list[DownloadResult] = []
+        failures: list[str] = []
+        if parallel_files <= 1:
+            for node, destination in file_jobs:
+                log.info("Downloading folder file: %s", destination)
+                try:
+
+                    def _progress(progress: DownloadProgress, path: Path = destination) -> None:
+                        if on_file_progress:
+                            on_file_progress(path, progress)
+                        if on_progress:
+                            on_progress(progress)
+
+                    result = self._download_owned_file(
+                        folder_public_id, node, destination, _progress
+                    )
+                    results.append(result)
+                    if on_file_done:
+                        on_file_done(result)
+                except Exception as e:  # noqa: BLE001
+                    log.error("Failed to download %s: %s", node.name, e)
+                    failures.append(f"{node.name}: {e}")
+        else:
+            # Multiple files downloading in parallel: each needs its own downloader
+            # instance because the downloader stores per-transfer state.
+            from .downloader import MegaDownloader
+
+            def _worker(job):
+                node, destination = job
+                worker_dl = MegaDownloader(
+                    api=self.api,
+                    max_workers=self.downloader.max_workers,
+                    speed_limit_kbps=0,
+                    verify_integrity=self.downloader.verify_integrity,
+                    timeout=self.downloader.timeout,
+                    proxies=self.downloader.proxies,
+                    proxy_pool=self.downloader.proxy_pool,
+                    force_proxy=self.downloader.force_proxy,
+                    quota_wait_seconds=self.downloader.quota_wait_seconds,
+                    quota_max_wait_loops=self.downloader.quota_max_wait_loops,
+                    keep_state_files_on_error=self.downloader.keep_state_files_on_error,
+                )
+                worker_dl.limiter = self.downloader.limiter
+                sub_folder = MegaFolderDownloader(worker_dl)
+
+                def _progress(progress: DownloadProgress, path: Path = destination) -> None:
+                    if on_file_progress:
+                        on_file_progress(path, progress)
+                    if on_progress:
+                        on_progress(progress)
+
+                return sub_folder._download_owned_file(
+                    folder_public_id, node, destination, _progress
+                )
+
+            with ThreadPoolExecutor(max_workers=parallel_files) as pool:
+                futures = {pool.submit(_worker, job): job for job in file_jobs}
+                for fut in as_completed(futures):
+                    node, _ = futures[fut]
+                    try:
+                        result = fut.result()
+                        results.append(result)
+                        if on_file_done:
+                            on_file_done(result)
+                    except Exception as e:  # noqa: BLE001
+                        log.error("Failed to download %s: %s", node.name, e)
+                        failures.append(f"{node.name}: {e}")
+
+        if failures:
+            sample = "; ".join(failures[:3])
+            more = "" if len(failures) <= 3 else f"; and {len(failures) - 3} more"
+            raise TransferError(message=f"{len(failures)} folder file(s) failed: {sample}{more}")
+        return results
+
+    def _decrypt_folder_nodes(self, raw_nodes: list[dict], folder_key: bytes) -> list[FolderNode]:
         """Decrypt the per-node attributes/keys using the folder share key."""
         decrypted: list[FolderNode] = []
         for raw in raw_nodes:
@@ -211,7 +286,7 @@ class MegaFolderDownloader:
             try:
                 key_bytes = aes_key_wrap_decrypt(b64_url_decode(wrapped), folder_key)
             except Exception as e:
-                log.debug("Skipping node %s (key decrypt failed: %s)", raw.get("h"), e)
+                log.warning("Skipping node %s (key decrypt failed: %s)", raw.get("h"), e)
                 continue
 
             raw_key_a32 = None
@@ -230,15 +305,17 @@ class MegaFolderDownloader:
             )
             name = (attrs or {}).get("n") or raw.get("h", "unnamed")
 
-            decrypted.append(FolderNode(
-                handle=raw["h"],
-                parent=raw.get("p", ""),
-                node_type=node_type,
-                size=raw.get("s", 0),
-                name=name,
-                key=key_bytes[:32],
-                raw_key_a32=raw_key_a32,
-            ))
+            decrypted.append(
+                FolderNode(
+                    handle=raw["h"],
+                    parent=raw.get("p", ""),
+                    node_type=node_type,
+                    size=raw.get("s", 0),
+                    name=name,
+                    key=key_bytes[:32],
+                    raw_key_a32=raw_key_a32,
+                )
+            )
         return decrypted
 
     @staticmethod
@@ -349,21 +426,26 @@ class MegaFolderDownloader:
         on_progress,
     ) -> DownloadResult:
         """Download one file from inside a public folder share."""
-        info = self.api.request(
-            {"a": "g", "g": 1, "n": node.handle},
-            extra_params={"n": folder_public_id},
+        info = self.downloader._get_with_quota_wait(
+            lambda: self.api.request(
+                {"a": "g", "g": 1, "n": node.handle},
+                extra_params={"n": folder_public_id},
+            )
         )
         if "g" not in info:
             raise TransferError(message=f"No download URL for {node.name}")
 
         from .crypto import unpack_file_key
+
         aes_key, nonce, mac_iv_a32 = unpack_file_key(node.raw_key_a32)
 
         # Closure that the downloader can call when the URL expires
         def _resolver() -> str:
-            fresh = self.api.request(
-                {"a": "g", "g": 1, "n": node.handle},
-                extra_params={"n": folder_public_id},
+            fresh = self.downloader._get_with_quota_wait(
+                lambda: self.api.request(
+                    {"a": "g", "g": 1, "n": node.handle},
+                    extra_params={"n": folder_public_id},
+                )
             )
             if "g" not in fresh:
                 raise TransferError(message=f"Resolver got no URL for {node.handle}")

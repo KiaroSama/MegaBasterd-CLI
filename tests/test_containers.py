@@ -72,9 +72,9 @@ def test_resolve_elc_links(monkeypatch):
 def test_decrypt_dlc_container(monkeypatch):
     dlc_key = b"abcdefghijklmnop"
     dlc_key_b64 = base64.b64encode(dlc_key)
-    enc_key = AES.new(
-        bytes.fromhex("447E787351E60E2C6A96B3964BE0C9BD"), AES.MODE_ECB
-    ).encrypt(_pad_spaces(dlc_key_b64))
+    enc_key = AES.new(bytes.fromhex("447E787351E60E2C6A96B3964BE0C9BD"), AES.MODE_ECB).encrypt(
+        _pad_spaces(dlc_key_b64)
+    )
 
     url = "https://mega.nz/file/ABC#KEY"
     encoded_url = base64.b64encode(url.encode()).decode()

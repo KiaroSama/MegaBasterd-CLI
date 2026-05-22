@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -12,7 +11,7 @@ def test_run_ps1_exists_and_dispatches_package():
     text = launcher.read_text(encoding="utf-8")
     assert "requirements.txt" in text
     assert "src" in text
-    assert "-m\", \"megabasterd_cli" in text
+    assert '-m", "megabasterd_cli' in text
     assert "Logs" in text
     assert "MEGABASTERD_CLI_LOG_FILE" in text
     assert "Write-LauncherBanner" in text
@@ -55,7 +54,6 @@ def test_launcher_uses_expected_dependency_modules():
         "requests",
         "Crypto",
         "tenacity",
-        "tqdm",
         "cryptography",
     ]:
         assert f'"{module}"' in text

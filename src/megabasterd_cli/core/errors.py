@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 # MEGA API negative error codes (returned as integers from the API)
 ERROR_CODES = {
     -1: ("EINTERNAL", "Internal error"),

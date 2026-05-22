@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
 
@@ -59,7 +59,7 @@ class QueueManager:
             self.items = []
             return
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
+            with open(self.path, encoding="utf-8") as f:
                 data = json.load(f)
             self.items = [QueueItem(**i) for i in data]
         except (json.JSONDecodeError, OSError, TypeError):
@@ -74,10 +74,11 @@ class QueueManager:
 
     def add(self, item: QueueItem) -> str:
         import datetime as dt
+
         if not item.id:
             item.id = QueueItem.new_id()
         if not item.created_iso:
-            item.created_iso = dt.datetime.utcnow().isoformat()
+            item.created_iso = dt.datetime.now(dt.timezone.utc).isoformat()
         self.items.append(item)
         self.save()
         return item.id
@@ -92,13 +93,14 @@ class QueueManager:
 
     def update_status(self, item_id: str, status: JobStatus, error: str | None = None) -> None:
         import datetime as dt
+
         for item in self.items:
             if item.id == item_id:
                 item.status = status.value
                 if error:
                     item.error = error
                 if status in (JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELED):
-                    item.finished_iso = dt.datetime.utcnow().isoformat()
+                    item.finished_iso = dt.datetime.now(dt.timezone.utc).isoformat()
                 break
         self.save()
 
@@ -108,7 +110,8 @@ class QueueManager:
     def clear_done(self) -> int:
         before = len(self.items)
         self.items = [
-            i for i in self.items
+            i
+            for i in self.items
             if i.status not in (JobStatus.DONE.value, JobStatus.CANCELED.value)
         ]
         if len(self.items) != before:

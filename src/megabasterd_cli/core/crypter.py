@@ -33,7 +33,6 @@ from typing import Callable
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
-
 MAGIC = b"MBCR"
 VERSION = 1
 SALT_LEN = 16
@@ -110,8 +109,8 @@ def decrypt_file(
             raise CrypterError("Not a MegaBasterd Crypter file (bad magic)")
         if version != VERSION:
             raise CrypterError(f"Unsupported Crypter version {version}")
-        salt = header[5:5 + SALT_LEN]
-        chunk_size = struct.unpack(">I", header[5 + SALT_LEN:])[0]
+        salt = header[5 : 5 + SALT_LEN]
+        chunk_size = struct.unpack(">I", header[5 + SALT_LEN :])[0]
         if chunk_size <= 0 or chunk_size > (1 << 24):
             raise CrypterError("Invalid chunk size in header")
 

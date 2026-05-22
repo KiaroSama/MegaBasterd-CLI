@@ -14,8 +14,8 @@ produced by MegaBasterd can be merged here and vice versa.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -101,9 +101,7 @@ def merge_parts(
     """
     m = _PART_RE.match(first_part.name)
     if not m:
-        raise SplitterError(
-            f"{first_part.name!r} doesn't match the *.part<n>-<total> convention"
-        )
+        raise SplitterError(f"{first_part.name!r} doesn't match the *.part<n>-<total> convention")
     base = m.group("base")
     total = int(m.group("total"))
     part_dir = first_part.parent
@@ -139,19 +137,13 @@ def merge_parts(
         expected = sha_file.read_text(encoding="ascii").strip().split()[0].lower()
         got = sha.hexdigest().lower()
         if expected != got:
-            raise SplitterError(
-                f"SHA-1 mismatch: expected {expected}, got {got}"
-            )
+            raise SplitterError(f"SHA-1 mismatch: expected {expected}, got {got}")
 
     if delete_parts:
         for part in parts:
-            try:
+            with contextlib.suppress(OSError):
                 part.unlink()
-            except OSError:
-                pass
-        try:
+        with contextlib.suppress(OSError, TypeError):
             sha_file.unlink(missing_ok=True)  # py3.8+: missing_ok via try
-        except (OSError, TypeError):
-            pass
 
     return target

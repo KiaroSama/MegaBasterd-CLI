@@ -2,8 +2,6 @@
 
 import os
 
-import pytest
-
 from megabasterd_cli.core.crypto import (
     a32_to_bytes,
     aes_cbc_decrypt,
@@ -11,6 +9,7 @@ from megabasterd_cli.core.crypto import (
     b64_url_decode,
     b64_url_encode,
     bytes_to_a32,
+    decrypt_attributes,
     make_ctr_cipher,
     pack_file_key,
     unpack_file_key,
@@ -33,6 +32,10 @@ def test_aes_cbc_roundtrip():
     plaintext = os.urandom(64)
     ct = aes_cbc_encrypt(plaintext, key)
     assert aes_cbc_decrypt(ct, key) == plaintext
+
+
+def test_decrypt_attributes_rejects_wrong_length_blob():
+    assert decrypt_attributes(b"hello", b"\0" * 16) is None
 
 
 def test_file_key_pack_unpack():
@@ -62,6 +65,8 @@ def test_ctr_offset_decryption():
     full = make_ctr_cipher(key, nonce, initial_value=0).encrypt(plaintext)
     # Decrypt only the last 128 bytes with the corresponding counter
     decrypted_tail = make_ctr_cipher(
-        key, nonce, initial_value=128 // 16,
+        key,
+        nonce,
+        initial_value=128 // 16,
     ).decrypt(full[128:])
     assert decrypted_tail == plaintext[128:]

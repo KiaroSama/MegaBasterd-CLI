@@ -6,7 +6,6 @@ import os
 import re
 from pathlib import Path
 
-
 _INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
@@ -16,11 +15,20 @@ def sanitize_filename(name: str, replacement: str = "_") -> str:
     # Avoid empty names and reserved Windows names
     if not cleaned:
         cleaned = "unnamed"
-    reserved = {"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(1, 10)} | {f"LPT{i}" for i in range(1, 10)}
+    reserved = (
+        {"CON", "PRN", "AUX", "NUL"}
+        | {f"COM{i}" for i in range(1, 10)}
+        | {f"LPT{i}" for i in range(1, 10)}
+    )
     base = cleaned.split(".")[0].upper()
     if base in reserved:
         cleaned = "_" + cleaned
     # Cap at 240 chars to leave room for paths
+    if len(cleaned) <= 240:
+        return cleaned
+    suffix = Path(cleaned).suffix
+    if suffix and len(suffix) < 32:
+        return cleaned[: 240 - len(suffix)] + suffix
     return cleaned[:240]
 
 
@@ -86,4 +94,5 @@ def available_disk_space(path: Path) -> int:
         pass
     # Windows fallback
     import shutil
+
     return shutil.disk_usage(str(path)).free

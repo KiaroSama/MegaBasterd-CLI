@@ -1,8 +1,10 @@
 """Smoke tests: every CLI module can be imported and the top-level group works."""
 
+import sys
+
 from click.testing import CliRunner
 
-from megabasterd_cli.cli import _redacted_argv, cli
+from megabasterd_cli.cli import _redacted_argv, _startup_args_for_log, cli
 
 
 def test_cli_help_runs():
@@ -23,11 +25,28 @@ def test_cli_subcommands_registered():
     runner = CliRunner()
     result = runner.invoke(cli, ["--help"])
     expected = [
-        "download", "upload", "stream",
-        "ls", "mkdir", "rm", "mv", "rename", "search",
-        "import", "trash", "share", "info",
-        "account", "queue", "proxy", "config", "crypter",
-        "split", "merge", "thumbnail", "watch",
+        "download",
+        "upload",
+        "stream",
+        "ls",
+        "mkdir",
+        "rm",
+        "mv",
+        "rename",
+        "search",
+        "import",
+        "trash",
+        "share",
+        "info",
+        "account",
+        "queue",
+        "proxy",
+        "config",
+        "crypter",
+        "split",
+        "merge",
+        "thumbnail",
+        "watch",
     ]
     for cmd in expected:
         assert cmd in result.output, f"Missing command: {cmd}"
@@ -96,6 +115,7 @@ def test_info_help():
     runner = CliRunner()
     result = runner.invoke(cli, ["info", "--help"])
     assert result.exit_code == 0
+    assert "no account or mfa needed" in result.output.lower()
 
 
 def test_startup_log_redacts_sensitive_arguments():
@@ -104,6 +124,10 @@ def test_startup_log_redacts_sensitive_arguments():
         "https://mega.nz/file/ABC#SECRET",
         "--password",
         "secret",
+        "--share-password",
+        "share-secret",
+        "--vault-passphrase",
+        "vault-secret",
         "--elc-api-key",
         "key",
     ]
@@ -113,6 +137,24 @@ def test_startup_log_redacts_sensitive_arguments():
         "<redacted-link>",
         "--password",
         "<redacted>",
+        "--share-password",
+        "<redacted>",
+        "--vault-passphrase",
+        "<redacted>",
         "--elc-api-key",
         "<redacted>",
     ]
+
+
+def test_startup_args_handles_python_module_entrypoint(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            r"C:\project\src\megabasterd_cli\__main__.py",
+            "download",
+            "https://mega.nz/file/ABC#SECRET",
+        ],
+    )
+
+    assert _startup_args_for_log() == ["download", "<redacted-link>"]

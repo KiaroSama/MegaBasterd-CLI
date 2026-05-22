@@ -7,7 +7,6 @@ import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-
 APP_NAME = "megabasterd-cli"
 APP_AUTHOR = "MegaBasterdCLI"
 
@@ -15,11 +14,12 @@ APP_AUTHOR = "MegaBasterdCLI"
 @dataclass
 class Config:
     """User-tunable settings."""
+
     download_path: str = ""  # Defaults to <project>/Output
     max_workers: int = 8
     upload_workers: int = 4
-    max_parallel_downloads: int = 6   # Number of files downloading simultaneously
-    max_parallel_uploads: int = 1     # Number of files uploading simultaneously
+    max_parallel_downloads: int = 6  # Number of files downloading simultaneously
+    max_parallel_uploads: int = 1  # Number of files uploading simultaneously
     chunk_size_kb: int = 1024
     speed_limit_kbps: float = 0  # 0 = unlimited
     upload_speed_limit_kbps: float = 0
@@ -52,7 +52,7 @@ class Config:
     upload_log_path: str | None = None
 
     # Smart proxy extras
-    force_smart_proxy: bool = False           # Refuse direct connections
+    force_smart_proxy: bool = False  # Refuse direct connections
     smart_proxy_autorefresh_minutes: int = 0  # 0 = disabled
     smart_proxy_timeout_seconds: int = 10
     smart_proxy_random: bool = True
@@ -135,7 +135,7 @@ class ConfigStore:
             return cfg
 
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
+            with open(self.path, encoding="utf-8") as f:
                 data = json.load(f)
         except (json.JSONDecodeError, OSError):
             cfg = Config()
@@ -163,7 +163,13 @@ class ConfigStore:
         # Cast to the existing type when feasible
         current = getattr(self.config, key)
         if isinstance(current, bool):
-            value = str(value).lower() in ("1", "true", "yes", "on")
+            lowered = str(value).strip().lower()
+            if lowered in ("1", "true", "yes", "y", "on"):
+                value = True
+            elif lowered in ("0", "false", "no", "n", "off"):
+                value = False
+            else:
+                raise ValueError("Expected a boolean value: true/false, yes/no, on/off, or 1/0")
         elif isinstance(current, dict):
             value = json.loads(value)
             if not isinstance(value, dict):

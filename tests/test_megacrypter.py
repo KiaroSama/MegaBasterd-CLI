@@ -2,6 +2,7 @@
 
 import base64
 
+import pytest
 from Crypto.Cipher import AES
 from Crypto.Hash import SHA256
 from Crypto.Protocol.KDF import PBKDF2
@@ -9,6 +10,7 @@ from Crypto.Util.Padding import pad
 
 from megabasterd_cli.core.crypto import b64_url_decode
 from megabasterd_cli.core.links import (
+    _decrypt_megacrypter_password_info,
     get_megacrypter_download_url,
     get_megacrypter_info,
     parse_link,
@@ -51,7 +53,7 @@ def test_megacrypter_password_metadata_and_url(monkeypatch):
         password.encode(),
         salt,
         dkLen=32,
-        count=2 ** iterations_power,
+        count=2**iterations_power,
         hmac_hash_module=SHA256,
     )
 
@@ -99,3 +101,13 @@ def test_megacrypter_password_metadata_and_url(monkeypatch):
     assert b64_url_decode(info.key) == raw_file_key
     assert info.noexpire_token == "token-1"
     assert get_megacrypter_download_url(parsed, info=info) == cdn_url
+
+
+def test_megacrypter_rejects_unbounded_password_iterations():
+    with pytest.raises(ValueError, match="too many iterations"):
+        _decrypt_megacrypter_password_info({"pass": "30#a#b#c"}, password="secret")
+
+
+def test_megacrypter_rejects_non_string_password_descriptor():
+    with pytest.raises(ValueError, match="Malformed"):
+        _decrypt_megacrypter_password_info({"pass": 12345}, password="secret")

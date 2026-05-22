@@ -29,7 +29,7 @@ Booleans accept `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off`.
 | `max_parallel_downloads` | `6` | Number of files downloaded at once. |
 | `max_parallel_uploads` | `1` | Number of files uploaded at once. |
 | `chunk_size_kb` | `1024` | Maximum MEGA chunk size. |
-| `speed_limit_kbps` | `0` | Download cap in KB/s. `0` means unlimited. |
+| `speed_limit_kbps` | `0` | Global download cap in KB/s for one command. `0` means unlimited. |
 | `upload_speed_limit_kbps` | `0` | Upload cap in KB/s. `0` means unlimited. |
 | `verify_integrity` | `true` | Verify final MAC after download. |
 | `timeout_seconds` | `60` | HTTP timeout. |

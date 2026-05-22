@@ -1,10 +1,10 @@
 # Local command/request notes
-.Commands/
-.Commands/**
-.Comments/
-.Comments/**
-Commands/
-Commands/**
+/.Commands/
+/.Commands/**
+/.Comments/
+/.Comments/**
+/Commands/
+/Commands/**
 
 # Logs
 logs/
@@ -84,6 +84,8 @@ Downloads/
 Download/
 dist/
 build/
+Bin/
+bin/
 processed/
 remuxed/
 *.mbstate

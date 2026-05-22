@@ -53,6 +53,7 @@ class LinkType(str, Enum):
 @dataclass
 class ParsedLink:
     """A parsed MEGA share link."""
+
     type: LinkType
     public_id: str
     key: str | None = None
@@ -61,8 +62,8 @@ class ParsedLink:
     crypter_server: str | None = None  # For MegaCrypter links
     crypter_token: str | None = None
     container_variant: str | None = None  # enc, enc2, fenc, fenc2
-    container_blob: str | None = None      # base64 ciphertext for mega://enc
-    elc_blob: str | None = None            # base64 payload for mega://elc
+    container_blob: str | None = None  # base64 ciphertext for mega://enc
+    elc_blob: str | None = None  # base64 payload for mega://elc
 
     @property
     def is_folder(self) -> bool:
@@ -76,6 +77,7 @@ class ParsedLink:
 @dataclass
 class ElcPayload:
     """Decoded ELC envelope before the server returns the decrypt key."""
+
     encrypted_links: bytes
     service_url: str
     data_token: str
@@ -84,6 +86,7 @@ class ElcPayload:
 @dataclass
 class MegaCrypterInfo:
     """Metadata returned by a MegaCrypter server."""
+
     name: str | None = None
     size: int | None = None
     key: str | None = None
@@ -91,6 +94,9 @@ class MegaCrypterInfo:
     noexpire_token: str | None = None
     inline_url: str | None = None
     raw: dict = field(default_factory=dict)
+
+
+MAX_MEGACRYPTER_PBKDF2_ITERATIONS = 200_000
 
 
 # Modern format patterns
@@ -105,8 +111,10 @@ _RE_PASSWORD = re.compile(r"^https?://mega(?:\.co)?\.nz/#P!(.+)$")
 
 # Legacy format patterns
 _RE_LEGACY_FILE = re.compile(r"^https?://mega(?:\.co)?\.nz/#!([^!]+)!(.+)$")
-# Folder share, optionally with a subfolder (#F!<id>@<sub>!<key>) or a file
-# trailer (#F!<id>!<key>!<file_handle>).
+# Folder share, optionally with an explicit @subfolder (#F!<id>@<sub>!<key>) or
+# an ambiguous trailer (#F!<id>!<key>!<handle>). Legacy MEGA links used the
+# trailer for both files and folders; parse it as FILE_IN_FOLDER and let callers
+# that have the folder listing resolve the handle's real node type at runtime.
 _RE_LEGACY_FOLDER = re.compile(
     r"^https?://mega(?:\.co)?\.nz/#F!(?P<id>[^!@]+)(?:@(?P<sub>[^!]+))?!"
     r"(?P<key>[^!]+)(?:!(?P<trailer>.+))?$"
@@ -142,6 +150,13 @@ def parse_link(url: str) -> ParsedLink:
     Raises ValueError if the URL is not a recognizable MEGA link.
     """
     url = url.strip()
+    try:
+        parsed_url = urlparse(url)
+        host = parsed_url.netloc.lower()
+        if host.endswith("mega.nz") or host.endswith("mega.co.nz"):
+            url = url.rstrip("/")
+    except Exception:
+        pass
 
     # Password-protected
     m = _RE_PASSWORD.match(url)
@@ -323,9 +338,7 @@ def resolve_password_link(parsed: ParsedLink, password: str) -> ParsedLink:
 
     if parsed.type != LinkType.PASSWORD_PROTECTED or not parsed.encrypted_blob:
         raise ValueError("Not a password-protected link")
-    node_type, public_handle, raw_key = decrypt_password_link(
-        parsed.encrypted_blob, password
-    )
+    node_type, public_handle, raw_key = decrypt_password_link(parsed.encrypted_blob, password)
     public_id = b64_url_encode(public_handle)
     key_str = b64_url_encode(raw_key)
     return ParsedLink(
@@ -340,12 +353,8 @@ def resolve_password_link(parsed: ParsedLink, password: str) -> ParsedLink:
 # CryptTools.decryptMegaDownloaderLink). The ciphertext is base64-encoded
 # AES-256-CBC with the indicated key + a fixed IV, no padding.
 _ENC_KEYS = {
-    "1": bytes.fromhex(
-        "6B316F36416C2D316B7A3F217A30357958585858585858585858585858585858"
-    ),
-    "2": bytes.fromhex(
-        "ED1F4C200B35139806B260563B3D3876F011B4750F3A1A4A5EFD0BBE67554B44"
-    ),
+    "1": bytes.fromhex("6B316F36416C2D316B7A3F217A30357958585858585858585858585858585858"),
+    "2": bytes.fromhex("ED1F4C200B35139806B260563B3D3876F011B4750F3A1A4A5EFD0BBE67554B44"),
 }
 _ENC_IV = bytes.fromhex("79F10A01844A0B27FF5B2D4E0ED3163E")
 
@@ -357,6 +366,7 @@ def resolve_encrypted_container_link(parsed: ParsedLink) -> ParsedLink:
     returns the first decoded result that parses as a real MEGA link.
     """
     import base64
+
     from Crypto.Cipher import AES
 
     if parsed.type != LinkType.ENCRYPTED_CONTAINER or not parsed.container_blob:
@@ -378,10 +388,7 @@ def resolve_encrypted_container_link(parsed: ParsedLink) -> ParsedLink:
 
     variant = parsed.container_variant or ""
     # Choose initial key preference based on the trailing digit (1 or 2).
-    if variant.endswith("2"):
-        order = ["2", "1"]
-    else:
-        order = ["1", "2"]
+    order = ["2", "1"] if variant.endswith("2") else ["1", "2"]
 
     last_error: Exception | None = None
     for key_id in order:
@@ -407,8 +414,7 @@ def resolve_encrypted_container_link(parsed: ParsedLink) -> ParsedLink:
                 last_error = exc
                 continue
     raise ValueError(
-        f"Could not decrypt mega://{parsed.container_variant} blob "
-        f"(last error: {last_error})"
+        f"Could not decrypt mega://{parsed.container_variant} blob " f"(last error: {last_error})"
     )
 
 
@@ -466,7 +472,7 @@ def decode_elc_payload(parsed: ParsedLink) -> ElcPayload:
         nonlocal offset
         if offset + n > len(payload):
             raise ValueError("Truncated ELC payload")
-        part = payload[offset:offset + n]
+        part = payload[offset : offset + n]
         offset += n
         return part
 
@@ -563,10 +569,7 @@ def decrypt_dlc_container(
     import requests
     from Crypto.Cipher import AES
 
-    if isinstance(data, bytes):
-        text = data.decode("utf-8", errors="ignore")
-    else:
-        text = data
+    text = data.decode("utf-8", errors="ignore") if isinstance(data, bytes) else data
     text = "".join(text.split())
     if len(text) <= 88:
         raise ValueError("DLC data is too short")
@@ -667,15 +670,22 @@ def _decrypt_megacrypter_password_info(body: dict, password: str | None) -> tupl
     from Crypto.Util.Padding import unpad
 
     pass_value = body.get("pass")
-    if not isinstance(pass_value, str) or not pass_value:
+    if pass_value is None or pass_value == "":
         return body, None
+    if not isinstance(pass_value, str):
+        raise ValueError("Malformed MegaCrypter password descriptor")
     if not password:
         raise ValueError("MegaCrypter link requires a password")
 
     parts = pass_value.split("#")
     if len(parts) != 4:
         raise ValueError("Malformed MegaCrypter password descriptor")
-    iterations = 2 ** int(parts[0])
+    iteration_power = int(parts[0])
+    if iteration_power < 0:
+        raise ValueError("Malformed MegaCrypter password descriptor")
+    iterations = 2**iteration_power
+    if iterations > MAX_MEGACRYPTER_PBKDF2_ITERATIONS:
+        raise ValueError("MegaCrypter password descriptor requests too many iterations")
     key_check = _std_b64_decode(parts[1])
     salt = _std_b64_decode(parts[2])
     iv = _std_b64_decode(parts[3])
@@ -837,6 +847,5 @@ def resolve_megacrypter_link(
                 pass
 
     raise ValueError(
-        "MegaCrypter server did not expose an underlying MEGA link "
-        f"(last response: {last_body})"
+        "MegaCrypter server did not expose an underlying MEGA link " f"(last response: {last_body})"
     )

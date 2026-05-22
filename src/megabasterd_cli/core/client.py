@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
-from dataclasses import dataclass, field
+from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable
+
+from cryptography.exceptions import InvalidTag
 
 from .api import MegaAPIClient
 from .crypto import (
     a32_to_bytes,
     aes_cbc_decrypt,
     aes_cbc_decrypt_a32,
-    aes_cbc_encrypt,
     aes_key_wrap_decrypt,
     aes_key_wrap_encrypt,
     b64_url_decode,
@@ -36,6 +39,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class MegaNode:
     """A node (file or folder) in the user's MEGA tree or in a shared folder."""
+
     handle: str
     parent: str
     owner: str
@@ -72,6 +76,7 @@ class MegaNode:
 @dataclass
 class MegaSession:
     """Active MEGA login session."""
+
     sid: str
     master_key: bytes  # 16 bytes
     rsa_private_key: bytes | None = None
@@ -133,9 +138,7 @@ class MegaClient:
 
         # Step 2: actual login (handle 2FA challenge)
         try:
-            result = self.api.request(
-                {"a": "us", "user": email.lower(), "uh": password_hash}
-            )
+            result = self.api.request({"a": "us", "user": email.lower(), "uh": password_hash})
         except MegaError as exc:
             if exc.code == -26:  # EMFAREQUIRED
                 code = mfa_code
@@ -194,17 +197,15 @@ class MegaClient:
         The RSA private key is stored as four big-endian length-prefixed integers
         (p, q, d, u). We decrypt CSID with d/n and take the first 43 bytes.
         """
-        from Crypto.PublicKey import RSA
-
         parts = []
         cursor = 0
         for _ in range(4):
             if cursor + 2 > len(rsa_priv_blob):
                 break
-            bit_len = int.from_bytes(rsa_priv_blob[cursor:cursor + 2], "big")
+            bit_len = int.from_bytes(rsa_priv_blob[cursor : cursor + 2], "big")
             byte_len = (bit_len + 7) // 8
             cursor += 2
-            parts.append(int.from_bytes(rsa_priv_blob[cursor:cursor + byte_len], "big"))
+            parts.append(int.from_bytes(rsa_priv_blob[cursor : cursor + byte_len], "big"))
             cursor += byte_len
 
         if len(parts) < 4:
@@ -212,20 +213,23 @@ class MegaClient:
 
         p, q, d, _u = parts
         n = p * q
-        key = RSA.construct((n, 0x10001, d, p, q))
-        decrypted = key._decrypt(int.from_bytes(csid_encrypted, "big"))
-        decrypted_bytes = decrypted.to_bytes((decrypted.bit_length() + 7) // 8, "big")
+        decrypted = pow(int.from_bytes(csid_encrypted, "big"), d, n)
+        decrypted_bytes = decrypted.to_bytes((n.bit_length() + 7) // 8, "big")
+        if len(decrypted_bytes) < 43:
+            raise AuthError(message="Malformed encrypted session ID in login response")
         return b64_url_encode(decrypted_bytes[:43])
 
     def logout(self) -> None:
         """Invalidate the current session."""
         if self.session:
-            try:
+            with contextlib.suppress(MegaError):
                 self.api.request({"a": "sml"})
-            except MegaError:
-                pass
         self.api.clear_session()
         self.session = None
+        self.invalidate_cache()
+
+    def invalidate_cache(self) -> None:
+        """Clear cached cloud node listings after a mutation."""
         self._node_cache = None
 
     # ------------------------------------------------------------------
@@ -369,6 +373,7 @@ class MegaClient:
     def search(self, pattern: str, regex: bool = False) -> list[MegaNode]:
         """Search the user's cloud by filename. Case-insensitive substring or regex."""
         import re as _re
+
         nodes = self.list_files()
         if regex:
             rx = _re.compile(pattern, _re.IGNORECASE)
@@ -396,7 +401,7 @@ class MegaClient:
             wrapped_key=b64_url_encode(wrapped_key),
         )
         nodes = result.get("f", []) if isinstance(result, dict) else []
-        self._node_cache = None  # Invalidate
+        self.invalidate_cache()
         return nodes[0]["h"] if nodes else ""
 
     def delete(self, handle: str) -> None:
@@ -404,14 +409,14 @@ class MegaClient:
         if not self.session:
             raise AuthError(message="Not logged in")
         self.api.delete_node(handle)
-        self._node_cache = None
+        self.invalidate_cache()
 
     def move(self, handle: str, new_parent_handle: str) -> None:
         """Move a node to a different parent."""
         if not self.session:
             raise AuthError(message="Not logged in")
         self.api.move_node(handle, new_parent_handle)
-        self._node_cache = None
+        self.invalidate_cache()
 
     def rename(self, handle: str, new_name: str) -> None:
         """Rename a node by writing new encrypted attributes."""
@@ -438,7 +443,7 @@ class MegaClient:
             encrypted_attrs=b64_url_encode(enc_attrs),
             wrapped_key=b64_url_encode(wrapped_raw),
         )
-        self._node_cache = None
+        self.invalidate_cache()
 
     def empty_trash(self) -> None:
         """Permanently delete every node in the trash."""
@@ -452,7 +457,7 @@ class MegaClient:
                 self.api.delete_node(child.handle)
             except MegaError as exc:
                 log.warning("Failed to delete %s: %s", child.handle, exc)
-        self._node_cache = None
+        self.invalidate_cache()
 
     # ------------------------------------------------------------------
     # Public link generation
@@ -546,10 +551,7 @@ class MegaClient:
         # Identify the share root: its parent doesn't appear in the listing.
         by_handle = {n["h"]: n for n in raw_nodes if "h" in n}
         all_handles = set(by_handle.keys())
-        root_candidates = [
-            n for n in raw_nodes
-            if n.get("p") and n.get("p") not in all_handles
-        ]
+        root_candidates = [n for n in raw_nodes if n.get("p") and n.get("p") not in all_handles]
         if not root_candidates:
             root_candidates = [raw_nodes[0]]
         share_root_parent = root_candidates[0].get("p", "")
@@ -573,10 +575,14 @@ class MegaClient:
 
         # Topologically order the listing so every parent precedes its
         # children (BFS from the share root).
+        children_by_parent: dict[str, list[dict]] = {}
+        for node in raw_nodes:
+            children_by_parent.setdefault(node.get("p", ""), []).append(node)
+
         ordered: list[dict] = []
         seen: set[str] = set()
         # Start with the nodes whose parent is the share root parent
-        queue_layer = [n for n in raw_nodes if n.get("p") == share_root_parent]
+        queue_layer = list(children_by_parent.get(share_root_parent, []))
         while queue_layer:
             next_layer: list[dict] = []
             for node in queue_layer:
@@ -584,9 +590,7 @@ class MegaClient:
                     continue
                 ordered.append(node)
                 seen.add(node["h"])
-                next_layer.extend(
-                    c for c in raw_nodes if c.get("p") == node["h"]
-                )
+                next_layer.extend(children_by_parent.get(node["h"], []))
             queue_layer = next_layer
         # Anything left (orphaned) — append at the end
         for node in raw_nodes:
@@ -620,9 +624,7 @@ class MegaClient:
                 log.warning("Skipping %s: empty wrapped key", src_handle)
                 continue
             try:
-                shared_key_bytes = aes_key_wrap_decrypt(
-                    b64_url_decode(wrapped), folder_key
-                )
+                shared_key_bytes = aes_key_wrap_decrypt(b64_url_decode(wrapped), folder_key)
             except Exception as exc:  # noqa: BLE001
                 log.warning("Skipping %s: key decrypt failed: %s", src_handle, exc)
                 continue
@@ -650,42 +652,61 @@ class MegaClient:
                 new_handles.append(new_handle)
                 parent_map[src_handle] = new_handle
 
-        self._node_cache = None
+        self.invalidate_cache()
         return new_handles
 
     # ------------------------------------------------------------------
     # Session persistence
     # ------------------------------------------------------------------
-    def save_session(self, path: Path) -> None:
-        """Serialize the current session to `path` as JSON (no encryption!)."""
+    def save_session(self, path: Path, passphrase: str | None = None) -> None:
+        """Serialize the current session to `path` encrypted with `passphrase`."""
         if not self.session:
             raise AuthError(message="Not logged in")
-        data = {
+        if not passphrase:
+            raise AuthError(message="Saving sessions requires a passphrase")
+        from ..accounts.storage import CredentialVault
+
+        payload = {
             "sid": self.session.sid,
             "master_key": self.session.master_key.hex(),
             "rsa_private_key": (
-                self.session.rsa_private_key.hex()
-                if self.session.rsa_private_key else None
+                self.session.rsa_private_key.hex() if self.session.rsa_private_key else None
             ),
             "user_handle": self.session.user_handle,
             "email": self.session.email,
         }
+        data = {
+            "version": 2,
+            "encrypted": CredentialVault(passphrase).encrypt(
+                json.dumps(payload, separators=(",", ":"))
+            ),
+        }
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f)
-        try:
+        with contextlib.suppress(OSError, AttributeError):
             os.chmod(path, 0o600)
-        except (OSError, AttributeError):
-            pass
 
     @staticmethod
-    def load_session(path: Path) -> MegaSession | None:
+    def load_session(path: Path, passphrase: str | None = None) -> MegaSession | None:
         """Read a saved session JSON. Returns None if the file is missing/corrupt."""
         if not path.exists():
             return None
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
+            if "encrypted" in data:
+                if data.get("version") != 2:
+                    log.warning("Refusing to load unsupported session file version: %s", path)
+                    return None
+                if not passphrase:
+                    return None
+                from ..accounts.storage import CredentialVault
+
+                data = json.loads(CredentialVault(passphrase).decrypt(data["encrypted"]))
+            elif os.environ.get("MEGABASTERD_ALLOW_PLAINTEXT_SESSION") != "1":
+                log.warning("Refusing to load plaintext session file: %s", path)
+                return None
             rsa = data.get("rsa_private_key")
             return MegaSession(
                 sid=data["sid"],
@@ -694,5 +715,5 @@ class MegaClient:
                 user_handle=data.get("user_handle", ""),
                 email=data.get("email", ""),
             )
-        except (json.JSONDecodeError, KeyError, ValueError, OSError):
+        except (json.JSONDecodeError, KeyError, ValueError, OSError, InvalidTag):
             return None

@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
-from dataclasses import dataclass
 import threading
 import time
-from typing import Iterator
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 
-from rich.console import Console
-from rich.console import Group
+from rich.console import Console, Group
 from rich.live import Live
 from rich.progress import (
     BarColumn,
@@ -24,7 +23,6 @@ from rich.progress import (
 from rich.text import Text
 
 from .theme import make_console
-
 
 PROGRESS_SEPARATOR = "=" * 120
 
@@ -91,7 +89,7 @@ class MultiFileProgressView:
         self.status = "Starting"
         self.file_states: list[ProgressFileState] = []
         self._lock = threading.RLock()
-        self._console = make_console(force_terminal=True, color_system="truecolor")
+        self._console = make_console(color_system="truecolor")
         self._live = Live(
             self._render(),
             console=self._console,
@@ -126,7 +124,9 @@ class MultiFileProgressView:
             if overall_speed is not None:
                 self.overall_speed = max(0.0, float(overall_speed))
             elif file_states:
-                self.overall_speed = sum(max(0.0, float(state.speed or 0.0)) for state in file_states)
+                self.overall_speed = sum(
+                    max(0.0, float(state.speed or 0.0)) for state in file_states
+                )
             if force or now - self.last_render >= self.min_interval:
                 self._live.update(self._render(), refresh=True)
                 self.last_render = now
@@ -169,7 +169,10 @@ class MultiFileProgressView:
             name_style = self._state_style(state.status)
             prefix = f"File {index:02d}: "
             lines.append(
-                Text(prefix + _shorten_middle(state.name, max(10, width - len(prefix))), style=name_style)
+                Text(
+                    prefix + _shorten_middle(state.name, max(10, width - len(prefix))),
+                    style=name_style,
+                )
             )
             lines.append(
                 self._stats_text(
@@ -201,9 +204,13 @@ class MultiFileProgressView:
         done = status in {"complete", "downloaded", "resumed"} or bool(total and completed >= total)
         failed = status in {"failed", "error"}
         eta = (
-            "Done" if done else
-            "Failed" if failed else
-            (_format_eta(remaining / speed) if total and speed and speed > 1 else "--:--")
+            "Done"
+            if done
+            else (
+                "Failed"
+                if failed
+                else (_format_eta(remaining / speed) if total and speed and speed > 1 else "--:--")
+            )
         )
         speed_label = "Done" if done else "Failed" if failed else _format_speed(speed)
         speed_style = "bold green" if done else "bold red" if failed else "bold #39ff6a"
@@ -211,7 +218,10 @@ class MultiFileProgressView:
         text = Text()
         text.append_text(_rich_bar(percent, bar_width, status))
         text.append(f" {percent:5.1f}% | ", style="bold #0fd139")
-        text.append(f"{_format_bytes(completed)} / {_format_bytes(total) if total else '?'}", style="bold #8eeeff")
+        text.append(
+            f"{_format_bytes(completed)} / {_format_bytes(total) if total else '?'}",
+            style="bold #8eeeff",
+        )
         text.append(" | ", style="white")
         text.append(speed_label, style=speed_style)
         text.append(" | ", style="white")
@@ -220,7 +230,9 @@ class MultiFileProgressView:
         if include_elapsed:
             if width >= 96:
                 text.append(" | Elapsed ", style="white")
-                text.append(_format_eta(time.perf_counter() - self.started_at), style="bold #d99145")
+                text.append(
+                    _format_eta(time.perf_counter() - self.started_at), style="bold #d99145"
+                )
             if width >= 124:
                 item_text = f" | {self.completed_items}/{self.total_items} {self.item_label}"
                 if self.failed_items:

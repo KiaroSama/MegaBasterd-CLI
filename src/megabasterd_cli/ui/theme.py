@@ -5,7 +5,6 @@ from __future__ import annotations
 from rich.console import Console
 from rich.theme import Theme
 
-
 PALETTE = {
     "primary": "#4F8CFF",
     "secondary": "#8B5CF6",
