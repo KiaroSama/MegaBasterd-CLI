@@ -12,7 +12,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install ruff black
+      - run: pip install ruff "black<26"
       - name: Ruff lint
         run: ruff check src tests
       - name: Black format check

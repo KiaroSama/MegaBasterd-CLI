@@ -65,6 +65,7 @@ def test_password_link_resolve_to_normal():
     assert resolved.type == LinkType.FILE
     # public_id should base64-decode back to the original public_handle
     from megabasterd_cli.core.crypto import b64_url_decode
+
     assert b64_url_decode(resolved.public_id) == public_handle
 
 

@@ -9,10 +9,14 @@ CONNECT requests to `*.mega.nz` (or `mega.co.nz`) on port 443.
 from __future__ import annotations
 
 import base64
+import contextlib
+import hmac
 import logging
+import platform
 import re
 import socket
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 log = logging.getLogger(__name__)
@@ -20,6 +24,7 @@ log = logging.getLogger(__name__)
 
 MAX_HEADER_LINE_LEN = 8192
 MAX_PROXY_THREADS = 64
+CONNECT_TUNNEL_JOIN_TIMEOUT_SECONDS = 30
 ALLOWED_HOST_RE = re.compile(r"^(.+\.)?mega(?:\.co)?\.nz$", re.IGNORECASE)
 CONNECT_RE = re.compile(
     r"^CONNECT\s+(?P<host>[A-Za-z0-9.\-]+):(?P<port>\d+)\s+HTTP/(?P<ver>1\.[01])\s*$"
@@ -69,9 +74,10 @@ class _ProxyHandler:
 
             # Authorization
             if not self._check_auth(headers):
+                time.sleep(0.25)
                 client_sock.sendall(
                     b"HTTP/1.1 407 Proxy Authentication Required\r\n"
-                    b"Proxy-Authenticate: Basic realm=\"megabasterd-cli\"\r\n"
+                    b'Proxy-Authenticate: Basic realm="megabasterd-cli"\r\n'
                     b"Content-Length: 0\r\nConnection: close\r\n\r\n"
                 )
                 return
@@ -116,10 +122,8 @@ class _ProxyHandler:
         except Exception as exc:  # noqa: BLE001
             log.debug("Proxy handler error from %s: %s", addr, exc)
         finally:
-            try:
+            with contextlib.suppress(OSError):
                 client_sock.close()
-            except OSError:
-                pass
 
     def _check_auth(self, headers: list[str]) -> bool:
         for line in headers:
@@ -132,7 +136,7 @@ class _ProxyHandler:
                 continue
             if ":" in decoded:
                 _user, supplied = decoded.split(":", 1)
-                if supplied == self.password:
+                if hmac.compare_digest(supplied, self.password):
                     return True
         return False
 
@@ -163,7 +167,9 @@ class _ProxyHandler:
     @staticmethod
     def _reply(sock: socket.socket, code: int, message: str) -> None:
         sock.sendall(
-            f"HTTP/1.1 {code} {message}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".encode("ascii")
+            f"HTTP/1.1 {code} {message}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".encode(
+                "ascii"
+            )
         )
 
     @staticmethod
@@ -184,15 +190,13 @@ class _ProxyHandler:
             finally:
                 stop.set()
                 for s in (src, dst):
-                    try:
+                    with contextlib.suppress(OSError):
                         s.shutdown(socket.SHUT_RDWR)
-                    except OSError:
-                        pass
 
         t = threading.Thread(target=pipe, args=(upstream, client), daemon=True)
         t.start()
         pipe(client, upstream)
-        t.join(timeout=5)
+        t.join(timeout=CONNECT_TUNNEL_JOIN_TIMEOUT_SECONDS)
         upstream.close()
 
 
@@ -216,7 +220,12 @@ class MegaConnectProxy:
 
     def start(self) -> None:
         self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if platform.system() == "Windows" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self._server.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if len(self.password) < 8:
+            log.warning("CONNECT proxy password is short; use at least 8 characters")
         self._server.bind((self.host, self.port))
         self._server.listen(50)
         self._pool = ThreadPoolExecutor(max_workers=MAX_PROXY_THREADS)
@@ -240,10 +249,8 @@ class MegaConnectProxy:
     def stop(self) -> None:
         self._stop.set()
         if self._server:
-            try:
+            with contextlib.suppress(OSError):
                 self._server.close()
-            except OSError:
-                pass
             self._server = None
         if self._pool:
             self._pool.shutdown(wait=False)

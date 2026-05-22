@@ -61,7 +61,9 @@ def test_delete_parts_on_merge(tmp_path: Path) -> None:
     src.write_bytes(b"abcdefgh" * 100_000)  # 800 KB
     result = split_file(src, part_size_mb=1, output_dir=tmp_path)
     merged = merge_parts(
-        result.parts[0], output=tmp_path / "out.bin", delete_parts=True,
+        result.parts[0],
+        output=tmp_path / "out.bin",
+        delete_parts=True,
     )
     assert merged.is_file()
     for p in result.parts:

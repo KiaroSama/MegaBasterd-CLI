@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from cryptography.exceptions import InvalidTag
 
 from megabasterd_cli.accounts.manager import AccountManager, AccountNotFound
 
@@ -27,7 +28,7 @@ def test_wrong_passphrase_fails_to_decrypt(tmp_path: Path):
 
     mgr2 = AccountManager(tmp_path / "accounts.json")
     mgr2.unlock("wrong-pass")
-    with pytest.raises(Exception):
+    with pytest.raises(InvalidTag):
         mgr2.get_password("u@example.com")
 
 

@@ -13,11 +13,10 @@ The chunk MACs are then combined into the file MAC via CBC-MAC.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator
 
 from Crypto.Cipher import AES
-
 
 # MEGA's chunk size progression: 128KB increments up to 1MB, then 1MB chunks.
 CHUNK_SIZES_KB = [128, 256, 384, 512, 640, 768, 896, 1024]
@@ -27,6 +26,7 @@ MAX_CHUNK_SIZE = 1024 * 1024  # 1 MiB
 @dataclass(frozen=True)
 class Chunk:
     """One chunk of a file: a byte range [offset, offset + size)."""
+
     index: int
     offset: int
     size: int
@@ -83,6 +83,7 @@ def chunks_for_range(file_size: int, start: int, end: int) -> list[Chunk]:
 # ---------------------------------------------------------------------------
 # CBC-MAC for chunk integrity
 # ---------------------------------------------------------------------------
+
 
 def chunk_mac(plaintext: bytes, aes_key: bytes, nonce: bytes) -> bytes:
     """Compute the 16-byte CBC-MAC of one chunk's plaintext.

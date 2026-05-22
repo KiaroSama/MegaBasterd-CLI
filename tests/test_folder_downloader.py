@@ -39,9 +39,7 @@ def test_folder_layout_preserves_root_and_nested_paths(tmp_path: Path):
 
     assert paths["root"] == tmp_path / "Root Folder"
     assert paths["sub"] == tmp_path / "Root Folder" / "Season 01"
-    assert {
-        node.handle: destination for node, destination in jobs
-    } == {
+    assert {node.handle: destination for node, destination in jobs} == {
         "deep": tmp_path / "Root Folder" / "Season 01" / "Episode 01.mkv",
         "top": tmp_path / "Root Folder" / "cover.jpg",
     }
@@ -83,8 +81,6 @@ def test_single_file_in_folder_keeps_full_mega_path(tmp_path: Path):
         _file("deep", "sub", "Episode 01.mkv"),
     ]
 
-    destination = MegaFolderDownloader._local_path_for_node(
-        nodes, tmp_path, "root", nodes[-1]
-    )
+    destination = MegaFolderDownloader._local_path_for_node(nodes, tmp_path, "root", nodes[-1])
 
     assert destination == tmp_path / "Root Folder" / "Season 01" / "Episode 01.mkv"

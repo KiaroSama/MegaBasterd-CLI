@@ -34,7 +34,14 @@ and is focused on CLI/source-script usage rather than a desktop GUI.
 - Persistent transfer queue and clipboard watcher.
 - File split/merge helpers with SHA-1 verification.
 - Local AES-256-GCM crypter for files.
+- Windows Hashcash acceleration through the bundled PowerShell/.NET helper,
+  with optional C helper source for building a native executable.
 - Optional thumbnail generation for supported image files when Pillow is installed.
+
+DLC container support uses JDownloader's public HTTP-only DLC service endpoint.
+The DLC master key is a known public constant, but resolve DLC files only on
+networks you trust because returned URLs could be substituted by a hostile
+network.
 
 ## Requirements
 
@@ -50,7 +57,6 @@ Python dependencies are listed in [requirements.txt](requirements.txt) and
 - requests
 - pycryptodome
 - tenacity
-- tqdm
 - cryptography
 - colorama on Windows
 
@@ -87,6 +93,19 @@ mb
 mbcli
 megabasterd-cli
 ```
+
+Optional Windows Hashcash native executable:
+
+```powershell
+.\tools\build_hashcash_windows.ps1
+```
+
+The CLI automatically tries `Bin\hashcash-solver-win64.exe` first when it
+exists. On Windows source runs, it can also use the bundled
+`tools\hashcash_solver_windows.ps1` helper. Set `MEGABASTERD_HASHCASH_NATIVE=0`
+to force the pure-Python fallback. Advanced users can set
+`MEGABASTERD_HASHCASH_SOLVER` to a custom executable path; that executable is
+launched directly, so only point it at code you trust.
 
 ## Usage
 
@@ -128,7 +147,7 @@ mb download "https://mega.nz/file/ID#KEY"
 | `download` | Download public files, folders, containers, and link lists. |
 | `upload` | Upload files or folders to an authenticated MEGA account. |
 | `stream` | Serve a MEGA file through a local HTTP server. |
-| `info` | Show metadata for a MEGA link without downloading it. |
+| `info` | Show public MEGA link metadata without downloading or logging in. |
 | `share` | Create or remove public links for account-owned nodes. |
 | `ls`, `mkdir`, `rm`, `mv`, `rename`, `search`, `trash`, `import` | Cloud filesystem operations. |
 | `account` | Add, remove, list, set default, and refresh MEGA accounts. |
@@ -224,7 +243,8 @@ generated output.
 | [.github/](.github/) | Issue templates and CI workflows. |
 | [LICENSE](LICENSE) | MIT License. |
 | [ATTRIBUTION.md](ATTRIBUTION.md) | Public attribution notice. |
-| [GITHUB_RELEASE_NOTES.md](GITHUB_RELEASE_NOTES.md) | Draft release notes for the first release. |
+| [CHANGELOG.md](CHANGELOG.md) | User-facing release history. |
+| [GITHUB_RELEASE_NOTES.md](GITHUB_RELEASE_NOTES.md) | Draft notes for the next GitHub release. |
 
 ## Documentation
 

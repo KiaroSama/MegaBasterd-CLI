@@ -14,11 +14,11 @@ prevents casual reading.
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import os
-from dataclasses import dataclass, asdict, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
@@ -27,6 +27,7 @@ from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 @dataclass
 class Account:
     """One stored MEGA account."""
+
     email: str
     enc_password: str  # base64(salt + nonce + ciphertext)
     label: str | None = None  # Friendly name
@@ -39,6 +40,7 @@ class Account:
 @dataclass
 class AccountStore:
     """The on-disk container for accounts."""
+
     accounts: list[Account] = field(default_factory=list)
     default_email: str | None = None
     version: int = 1
@@ -92,7 +94,7 @@ class AccountStorage:
         if not self.path.exists():
             return AccountStore()
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
+            with open(self.path, encoding="utf-8") as f:
                 data = json.load(f)
             return AccountStore(
                 accounts=[Account(**a) for a in data.get("accounts", [])],
@@ -114,7 +116,5 @@ class AccountStorage:
             json.dump(data, f, indent=2)
         os.replace(tmp, self.path)
         # Permission hardening on POSIX
-        try:
+        with contextlib.suppress(OSError, AttributeError):
             os.chmod(self.path, 0o600)
-        except (OSError, AttributeError):
-            pass

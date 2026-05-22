@@ -12,7 +12,7 @@ import logging
 import random
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import requests
 
@@ -115,6 +115,4 @@ def detect_blocked(response: requests.Response | None, exc: Exception | None) ->
     """Heuristic: did this look like an ISP/CDN block?"""
     if exc is not None and isinstance(exc, (requests.ConnectionError, requests.Timeout)):
         return True
-    if response is not None and response.status_code in (403, 451, 503):
-        return True
-    return False
+    return bool(response is not None and response.status_code in (403, 451, 503))

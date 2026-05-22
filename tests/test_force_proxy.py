@@ -14,7 +14,6 @@ from megabasterd_cli.core.downloader import MegaDownloader
 from megabasterd_cli.core.errors import MegaError, TransferError
 from megabasterd_cli.proxy.smart_proxy import SmartProxyPool
 
-
 # ---------------------------------------------------------------------------
 # MegaAPIClient._request_proxies
 # ---------------------------------------------------------------------------
@@ -29,7 +28,8 @@ def test_api_force_proxy_no_pool_no_static_refuses():
 def test_api_force_proxy_with_static_proxy_ok():
     client = MegaAPIClient(
         proxies={"http": "http://manual:8080", "https": "http://manual:8080"},
-        proxy_pool=None, force_proxy=True,
+        proxy_pool=None,
+        force_proxy=True,
     )
     result, picked = client._request_proxies()
     assert result == {"http": "http://manual:8080", "https": "http://manual:8080"}
@@ -54,7 +54,8 @@ def test_api_pool_pick_wins_over_static():
     pool = SmartProxyPool(["http://pool-pick:1111"])
     client = MegaAPIClient(
         proxies={"http": "http://manual:8080", "https": "http://manual:8080"},
-        proxy_pool=pool, force_proxy=True,
+        proxy_pool=pool,
+        force_proxy=True,
     )
     result, picked = client._request_proxies()
     assert picked == "http://pool-pick:1111"
@@ -79,7 +80,8 @@ def test_downloader_force_proxy_no_pool_no_static_refuses():
 def test_downloader_force_proxy_with_static_ok():
     dl = _make_downloader(
         proxies={"http": "http://manual:8080", "https": "http://manual:8080"},
-        proxy_pool=None, force_proxy=True,
+        proxy_pool=None,
+        force_proxy=True,
     )
     result, picked = dl._proxies_for_request()
     assert result == {"http": "http://manual:8080", "https": "http://manual:8080"}

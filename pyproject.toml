@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "megabasterd-cli"
-version = "1.0.0"
+version = "1.1.0"
 description = "A script-first MEGA.nz downloader/uploader inspired by MegaBasterd"
 readme = "README.md"
 license = "MIT"
@@ -35,7 +35,6 @@ dependencies = [
     "requests>=2.31.0",
     "pycryptodome>=3.19.0",
     "tenacity>=8.2.0",
-    "tqdm>=4.66.0",
     "cryptography>=41.0.0",
     "colorama>=0.4.6; platform_system=='Windows'",
 ]
@@ -45,7 +44,7 @@ dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
     "pytest-asyncio>=0.21.0",
-    "black>=23.9.0",
+    "black>=23.9.0,<26",
     "ruff>=0.1.0",
     "mypy>=1.6.0",
     "pre-commit>=3.5.0",
@@ -79,7 +78,7 @@ where = ["src"]
 include = ["megabasterd_cli*"]
 
 [tool.setuptools.package-data]
-megabasterd_cli = ["py.typed"]
+megabasterd_cli = ["py.typed", "native/windows/*.c"]
 
 [tool.black]
 line-length = 100

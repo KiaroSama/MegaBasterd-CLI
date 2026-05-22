@@ -13,10 +13,8 @@ The session ID (`sid`) and a sequence number (`sn`) are passed as query params.
 
 from __future__ import annotations
 
-import json
 import logging
 import random
-import time
 from typing import Any
 
 import requests
@@ -79,7 +77,7 @@ class MegaAPIClient:
         if self.force_proxy:
             raise MegaError(
                 message="force_smart_proxy is on but no proxy is available "
-                        "for an API call (pool empty, no --proxy)"
+                "for an API call (pool empty, no --proxy)"
             )
         return None, None
 
@@ -99,7 +97,7 @@ class MegaAPIClient:
     def close(self) -> None:
         self._session.close()
 
-    def __enter__(self) -> "MegaAPIClient":
+    def __enter__(self) -> MegaAPIClient:
         return self
 
     def __exit__(self, *exc_info) -> None:
@@ -147,13 +145,17 @@ class MegaAPIClient:
         extra_headers: dict[str, str] = {}
         request_proxies, picked_proxy = self._request_proxies()
         try:
-            for _attempt in range(3):  # At most one re-issue for hashcash
+            for _attempt in range(3):  # Initial request plus up to two hashcash retries
                 response = self._session.post(
-                    url, json=payload, timeout=self.timeout,
-                    headers=extra_headers, proxies=request_proxies,
+                    url,
+                    json=payload,
+                    timeout=self.timeout,
+                    headers=extra_headers,
+                    proxies=request_proxies,
                 )
                 if response.status_code == 402 and "X-Hashcash" in response.headers:
                     from .hashcash import build_solution_header
+
                     challenge = response.headers["X-Hashcash"]
                     log.info("Solving MEGA hashcash challenge: %s", challenge.split(":", 2)[:2])
                     extra_headers["X-Hashcash"] = build_solution_header(challenge)
@@ -322,9 +324,7 @@ class MegaAPIClient:
             extra_params={"n": share_handle},
         )
 
-    def login_with_mfa(
-        self, email: str, password_hash: str, mfa_code: str
-    ) -> dict:
+    def login_with_mfa(self, email: str, password_hash: str, mfa_code: str) -> dict:
         """Login including a TOTP/MFA code for accounts that require 2FA."""
         return self.request(
             {"a": "us", "user": email.lower(), "uh": password_hash, "mfa": mfa_code}

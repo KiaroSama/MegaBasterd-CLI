@@ -45,7 +45,7 @@ directory.
 | `-o`, `--output DIR` | Destination directory. |
 | `-w`, `--workers N` | Parallel chunk workers per file. |
 | `-P`, `--parallel N` | Number of files to download at once. |
-| `-l`, `--limit KBPS` | Per-transfer speed cap. `0` means unlimited. |
+| `-l`, `--limit KBPS` | Global download speed cap for this command. `0` means unlimited. |
 | `-p`, `--password TEXT` | Password for protected links. |
 | `--no-verify` | Skip final MAC verification. |
 | `--rename NAME` | Local filename override for one-file downloads. |
@@ -77,10 +77,11 @@ vault.
 | `-a`, `--account ID` | Account email or label. |
 | `-w`, `--workers N` | Parallel chunk workers per file. |
 | `-P`, `--parallel N` | Number of files to upload at once. |
-| `-l`, `--limit KBPS` | Upload speed cap. |
+| `-l`, `--limit KBPS` | Global upload speed cap for this command. `0` means unlimited. |
 | `--rename NAME` | Remote filename override for a single file. |
 | `--target HANDLE_OR_PATH` | Destination folder handle or path. |
 | `--keep-structure` | Preserve local directory structure. |
+| `--keep-going` | Continue directory uploads after item failures and print a warning summary. |
 | `--auto-account` | Pick an account by available quota. |
 | `--share` | Print a public link after upload. |
 | `--share-password TEXT` | Create password-protected share links. |
@@ -121,8 +122,9 @@ the fly, and serves media players through normal HTTP Range requests.
 .\Run.ps1 info URL [--password TEXT] [--elc-user TEXT] [--elc-api-key TEXT]
 ```
 
-Shows link metadata without downloading: type, name, size, node count, and
-container details where available.
+Shows public link metadata without downloading or logging into an account: type,
+name, size, node count, and container details where available. No MFA code is
+needed because this command uses public-link APIs.
 
 ### `share`
 
@@ -218,6 +220,10 @@ imports public proxy lists into the local pool.
 `encrypt` and `decrypt` are local file operations. `make-link`, `resolve`,
 `elc-resolve`, and `dlc-resolve` interoperate with supported container/link
 formats.
+
+`dlc-resolve` uses JDownloader's public DLC service endpoint, which is HTTP-only
+upstream. The DLC master key is a known public constant, but the returned URLs
+could be substituted by a hostile network.
 
 ## Local File Utility Commands
 

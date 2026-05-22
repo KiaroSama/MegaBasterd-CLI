@@ -17,7 +17,8 @@ import logging
 import mimetypes
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote
+from typing import Callable
+from urllib.parse import quote
 
 import requests
 
@@ -33,11 +34,27 @@ from ..utils.helpers import sanitize_filename
 
 log = logging.getLogger(__name__)
 
+URL_EXPIRY_STATUS = {403, 410, 509}
+
+
+def _content_disposition(filename: str) -> str:
+    """Build a safe Content-Disposition value for an untrusted MEGA filename."""
+    cleaned = filename.replace("\r", "_").replace("\n", "_").replace("\\", "_")
+    ascii_name = cleaned.encode("ascii", errors="ignore").decode("ascii") or "download"
+    ascii_name = ascii_name.replace('"', r"\"")
+    return f'inline; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(cleaned, safe="")}'
+
 
 class _StreamSource:
     """Resolved MEGA file ready to be streamed."""
 
-    def __init__(self, url: str, api, password: str | None = None):
+    def __init__(
+        self,
+        url: str,
+        api,
+        password: str | None = None,
+        proxies: dict[str, str] | None = None,
+    ):
         from ..core.crypto import a32_to_bytes, aes_key_wrap_decrypt, bytes_to_a32
         from ..core.links import (
             LinkType,
@@ -47,6 +64,9 @@ class _StreamSource:
             resolve_megacrypter_link,
             resolve_password_link,
         )
+
+        self._cdn_url_lock = threading.Lock()
+        self._resolver: Callable[[], str] | None = None
 
         parsed = parse_link(url)
         # Unwrap any container/password/MegaCrypter wrappers down to a normal
@@ -60,14 +80,27 @@ class _StreamSource:
         elif parsed.type == LinkType.MEGACRYPTER:
             try:
                 parsed = resolve_megacrypter_link(parsed, password=password)
-            except ValueError:
-                mc_info = get_megacrypter_info(parsed, password=password)
+            except ValueError as exc:
+                mc_info = get_megacrypter_info(parsed, password=password, proxies=proxies)
                 if not mc_info.key or mc_info.size is None:
-                    raise RuntimeError("MegaCrypter metadata is missing key or size")
-                self.cdn_url = get_megacrypter_download_url(parsed, info=mc_info, password=password)
+                    raise RuntimeError("MegaCrypter metadata is missing key or size") from exc
+                self.cdn_url = get_megacrypter_download_url(
+                    parsed,
+                    info=mc_info,
+                    password=password,
+                    proxies=proxies,
+                )
+                self._resolver = lambda: get_megacrypter_download_url(
+                    parsed,
+                    info=mc_info,
+                    password=password,
+                    proxies=proxies,
+                )
                 self.size = mc_info.size
                 self.aes_key, self.nonce, _ = unpack_file_key(str_to_a32(mc_info.key))
-                self.filename = sanitize_filename(mc_info.name or parsed.crypter_token or "megacrypter")
+                self.filename = sanitize_filename(
+                    mc_info.name or parsed.crypter_token or "megacrypter"
+                )
                 self.mimetype = mimetypes.guess_type(self.filename)[0] or "application/octet-stream"
                 return
         if parsed.type not in (LinkType.FILE, LinkType.FILE_IN_FOLDER):
@@ -85,8 +118,7 @@ class _StreamSource:
             folder_key = a32_to_bytes(str_to_a32(parsed.key))
             listing = api.get_public_folder_listing(folder_id)
             file_raw = next(
-                (n for n in listing.get("f", [])
-                 if n.get("h") == file_handle and n.get("t") == 0),
+                (n for n in listing.get("f", []) if n.get("h") == file_handle and n.get("t") == 0),
                 None,
             )
             if file_raw is None:
@@ -103,14 +135,35 @@ class _StreamSource:
             )
             if "g" not in info:
                 raise RuntimeError(f"No CDN URL returned for folder-file: {info}")
+
+            def _resolver() -> str:
+                fresh = api.request(
+                    {"a": "g", "g": 1, "n": file_handle},
+                    extra_params={"n": folder_id},
+                )
+                if "g" not in fresh:
+                    raise RuntimeError(f"No refreshed CDN URL returned for {file_handle}: {fresh}")
+                return fresh["g"]
+
+            self._resolver = _resolver
             # The attribute blob lives on the listing node, not the get response.
             encrypted_attrs = b64_url_decode(file_raw.get("a", "") or "")
         else:
             info = api.get_public_file_info(parsed.public_id)
             if "g" not in info:
                 raise RuntimeError(f"No CDN URL returned: {info}")
+
+            def _resolver() -> str:
+                fresh = api.get_public_file_info(parsed.public_id)
+                if "g" not in fresh:
+                    raise RuntimeError(
+                        f"No refreshed CDN URL returned for {parsed.public_id}: {fresh}"
+                    )
+                return fresh["g"]
+
+            self._resolver = _resolver
             key_a32 = str_to_a32(parsed.key)
-            encrypted_attrs = b64_url_decode(info["at"])
+            encrypted_attrs = b64_url_decode(info.get("at", "") or "")
 
         self.cdn_url: str = info["g"]
         self.size: int = int(info["s"])
@@ -119,9 +172,21 @@ class _StreamSource:
         self.filename = sanitize_filename(attrs.get("n") or parsed.public_id)
         self.mimetype = mimetypes.guess_type(self.filename)[0] or "application/octet-stream"
 
+    def current_cdn_url(self) -> str:
+        with self._cdn_url_lock:
+            return self.cdn_url
+
+    def refresh_cdn_url(self) -> str:
+        if self._resolver is None:
+            raise RuntimeError("CDN URL expired and no resolver is available")
+        fresh = self._resolver()
+        with self._cdn_url_lock:
+            self.cdn_url = fresh
+            return self.cdn_url
+
 
 class _StreamingRequestHandler(BaseHTTPRequestHandler):
-    server: "StreamingServer"  # type: ignore[assignment]
+    server: StreamingServer  # type: ignore[assignment]
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002
         log.debug("HTTP: " + format, *args)
@@ -135,9 +200,7 @@ class _StreamingRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", source.mimetype)
         self.send_header("Content-Length", str(source.size))
         self.send_header("Accept-Ranges", "bytes")
-        self.send_header(
-            "Content-Disposition", f'inline; filename="{source.filename}"',
-        )
+        self.send_header("Content-Disposition", _content_disposition(source.filename))
         self.end_headers()
 
     def do_GET(self) -> None:  # noqa: N802
@@ -146,45 +209,31 @@ class _StreamingRequestHandler(BaseHTTPRequestHandler):
             self.send_error(503, "No source configured")
             return
 
-        # Parse Range header
-        range_header = self.headers.get("Range", "")
-        start, end = 0, source.size - 1
-        is_partial = False
-        if range_header.startswith("bytes="):
-            try:
-                spec = range_header.split("=", 1)[1].split("-", 1)
-                if spec[0]:
-                    start = int(spec[0])
-                if spec[1]:
-                    end = int(spec[1])
-                is_partial = True
-            except (IndexError, ValueError):
-                self.send_error(400, "Malformed Range")
-                return
-        start = max(0, min(start, source.size - 1))
-        end = max(start, min(end, source.size - 1))
+        try:
+            start, end, is_partial = self._parse_range(source.size)
+        except ValueError:
+            self.send_error(400, "Malformed Range")
+            return
+        except IndexError:
+            self.send_response(416)
+            self.send_header("Content-Range", f"bytes */{source.size}")
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
+            return
         length = end - start + 1
 
         # Align CTR counter on 16-byte boundary
         block_start = (start // 16) * 16
         block_skip = start - block_start
 
-        try:
-            resp = requests.get(
-                source.cdn_url,
-                headers={"Range": f"bytes={block_start}-{end}"},
-                stream=True, timeout=60,
-                proxies=self.server.proxies,
-            )
-        except requests.RequestException as e:
-            self.send_error(502, f"Upstream error: {e}")
-            return
-        if resp.status_code not in (200, 206):
-            self.send_error(502, f"Upstream HTTP {resp.status_code}")
+        resp = self._open_upstream(source, block_start, end)
+        if resp is None:
             return
 
         cipher = make_ctr_cipher(
-            source.aes_key, source.nonce, initial_value=block_start // 16,
+            source.aes_key,
+            source.nonce,
+            initial_value=block_start // 16,
         )
 
         if is_partial:
@@ -195,9 +244,7 @@ class _StreamingRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", source.mimetype)
         self.send_header("Content-Length", str(length))
         self.send_header("Accept-Ranges", "bytes")
-        self.send_header(
-            "Content-Disposition", f'inline; filename="{source.filename}"',
-        )
+        self.send_header("Content-Disposition", _content_disposition(source.filename))
         self.end_headers()
 
         try:
@@ -222,6 +269,63 @@ class _StreamingRequestHandler(BaseHTTPRequestHandler):
         finally:
             resp.close()
 
+    def _parse_range(self, size: int) -> tuple[int, int, bool]:
+        range_header = self.headers.get("Range", "")
+        if not range_header:
+            return 0, size - 1, False
+        if not range_header.startswith("bytes="):
+            raise ValueError("Unsupported range unit")
+        spec = range_header.split("=", 1)[1]
+        if "," in spec:
+            raise ValueError("Multiple ranges are not supported")
+        left, sep, right = spec.partition("-")
+        if not sep:
+            raise ValueError("Malformed range")
+        if left:
+            start = int(left)
+            end = int(right) if right else size - 1
+        else:
+            suffix_len = int(right)
+            if suffix_len <= 0:
+                raise IndexError("Unsatisfiable range")
+            start = max(0, size - suffix_len)
+            end = size - 1
+        if start < 0 or end < start or start >= size:
+            raise IndexError("Unsatisfiable range")
+        return start, min(end, size - 1), True
+
+    def _open_upstream(
+        self, source: _StreamSource, start: int, end: int
+    ) -> requests.Response | None:
+        for attempt in range(2):
+            try:
+                resp = requests.get(
+                    source.current_cdn_url(),
+                    headers={"Range": f"bytes={start}-{end}"},
+                    stream=True,
+                    timeout=60,
+                    proxies=self.server.proxies,
+                )
+            except requests.RequestException as e:
+                self.send_error(502, f"Upstream error: {e}")
+                return None
+            if resp.status_code in URL_EXPIRY_STATUS and attempt == 0:
+                resp.close()
+                try:
+                    source.refresh_cdn_url()
+                except Exception as exc:  # noqa: BLE001
+                    self.send_error(502, f"CDN URL refresh failed: {exc}")
+                    return None
+                continue
+            if resp.status_code not in (200, 206):
+                status = resp.status_code
+                resp.close()
+                self.send_error(502, f"Upstream HTTP {status}")
+                return None
+            return resp
+        self.send_error(502, "Upstream CDN URL expired")
+        return None
+
 
 class StreamingServer(ThreadingHTTPServer):
     """Threaded HTTP server with a single configured MEGA source."""
@@ -239,7 +343,7 @@ class StreamingServer(ThreadingHTTPServer):
         self.proxies = proxies
 
     def set_source(self, url: str, password: str | None = None) -> None:
-        self.source = _StreamSource(url, self.api, password=password)
+        self.source = _StreamSource(url, self.api, password=password, proxies=self.proxies)
 
     def serve_forever_in_thread(self) -> threading.Thread:
         t = threading.Thread(target=self.serve_forever, daemon=True)

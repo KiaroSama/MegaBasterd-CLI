@@ -17,15 +17,15 @@ from __future__ import annotations
 import base64
 import json
 import struct
-from typing import Iterable
+from collections.abc import Iterable
 
 from Crypto.Cipher import AES
 from Crypto.Util import Counter
 
-
 # ---------------------------------------------------------------------------
 # Base64 (MEGA-flavoured, URL-safe without padding)
 # ---------------------------------------------------------------------------
+
 
 def b64_url_decode(data: str) -> bytes:
     """Decode MEGA's URL-safe base64 (no padding)."""
@@ -36,18 +36,13 @@ def b64_url_decode(data: str) -> bytes:
 
 def b64_url_encode(data: bytes) -> str:
     """Encode bytes to MEGA's URL-safe base64 (no padding)."""
-    return (
-        base64.b64encode(data)
-        .decode("ascii")
-        .replace("+", "-")
-        .replace("/", "_")
-        .rstrip("=")
-    )
+    return base64.b64encode(data).decode("ascii").replace("+", "-").replace("/", "_").rstrip("=")
 
 
 # ---------------------------------------------------------------------------
 # int <-> a32 array conversions (MEGA represents keys as arrays of 32-bit ints)
 # ---------------------------------------------------------------------------
+
 
 def bytes_to_a32(data: bytes) -> list[int]:
     """Convert bytes to a list of unsigned 32-bit ints (big-endian)."""
@@ -76,6 +71,7 @@ def str_to_a32(s: str) -> list[int]:
 # AES-CBC (key wrapping)
 # ---------------------------------------------------------------------------
 
+
 def aes_cbc_encrypt(data: bytes, key: bytes) -> bytes:
     """AES-128-CBC encrypt with zero IV. Used for attribute encryption."""
     cipher = AES.new(key, AES.MODE_CBC, b"\x00" * 16)
@@ -100,7 +96,7 @@ def aes_key_wrap_encrypt(data: bytes, key: bytes) -> bytes:
     out = b""
     for i in range(0, len(data), 16):
         cipher = AES.new(key, AES.MODE_CBC, b"\x00" * 16)
-        out += cipher.encrypt(data[i:i + 16])
+        out += cipher.encrypt(data[i : i + 16])
     return out
 
 
@@ -111,7 +107,7 @@ def aes_key_wrap_decrypt(data: bytes, key: bytes) -> bytes:
     out = b""
     for i in range(0, len(data), 16):
         cipher = AES.new(key, AES.MODE_CBC, b"\x00" * 16)
-        out += cipher.decrypt(data[i:i + 16])
+        out += cipher.decrypt(data[i : i + 16])
     return out
 
 
@@ -128,6 +124,7 @@ def aes_cbc_decrypt_a32(data_a32: list[int], key_a32: list[int]) -> list[int]:
 # ---------------------------------------------------------------------------
 # Password-based key derivation
 # ---------------------------------------------------------------------------
+
 
 def derive_key_legacy(password: str) -> list[int]:
     """Legacy MEGA key derivation (account version 1).
@@ -148,8 +145,8 @@ def derive_key_legacy(password: str) -> list[int]:
 
 def derive_key_v2(password: str, salt: bytes, iterations: int = 100_000) -> bytes:
     """Modern MEGA key derivation (account version 2). PBKDF2-HMAC-SHA512, 32 bytes."""
-    from Crypto.Protocol.KDF import PBKDF2
     from Crypto.Hash import SHA512
+    from Crypto.Protocol.KDF import PBKDF2
 
     return PBKDF2(
         password.encode("utf-8"),
@@ -175,6 +172,7 @@ def stringhash(string: str, aeskey_a32: list[int]) -> str:
 # AES-CTR (file content)
 # ---------------------------------------------------------------------------
 
+
 def make_ctr_cipher(key: bytes, nonce: bytes, initial_value: int = 0) -> AES:
     """Create an AES-128-CTR cipher.
 
@@ -198,6 +196,7 @@ def ctr_offset_to_counter(byte_offset: int) -> int:
 # ---------------------------------------------------------------------------
 # File-key unpacking
 # ---------------------------------------------------------------------------
+
 
 def unpack_file_key(key_a32: list[int]) -> tuple[bytes, bytes, list[int]]:
     """Unpack an 8-int file key into (aes_key, nonce, mac_iv_a32).
@@ -256,12 +255,12 @@ def encrypt_attributes(attrs: dict, key: bytes) -> bytes:
 
 def decrypt_attributes(data: bytes, key: bytes) -> dict | None:
     """Decrypt and parse the attribute blob for a file."""
-    if not data:
+    if not data or len(data) % 16 != 0:
         return None
     plaintext = aes_cbc_decrypt(data, key)
     if not plaintext.startswith(ATTR_PREFIX):
         return None
-    body = plaintext[len(ATTR_PREFIX):].rstrip(b"\x00").decode("utf-8", errors="replace")
+    body = plaintext[len(ATTR_PREFIX) :].rstrip(b"\x00").decode("utf-8", errors="replace")
     try:
         return json.loads(body)
     except json.JSONDecodeError:
@@ -272,6 +271,7 @@ def decrypt_attributes(data: bytes, key: bytes) -> dict | None:
 # Password-protected link decoding
 # ---------------------------------------------------------------------------
 
+
 def derive_password_link_keys(password: str, salt: bytes, algo: int = 2) -> tuple[bytes, bytes]:
     """Derive (aes_xor_key, hmac_key) for a password-protected MEGA link.
 
@@ -280,8 +280,8 @@ def derive_password_link_keys(password: str, salt: bytes, algo: int = 2) -> tupl
 
     Returns the AES XOR key and the HMAC verification key.
     """
-    from Crypto.Protocol.KDF import PBKDF2
     from Crypto.Hash import SHA512
+    from Crypto.Protocol.KDF import PBKDF2
 
     if algo not in (1, 2):
         raise ValueError(f"Unsupported password-link algorithm {algo}")
@@ -306,8 +306,8 @@ def decrypt_password_link(encoded_blob: str, password: str) -> tuple[int, bytes,
     Raises ValueError if the password is wrong (HMAC mismatch) or the blob is
     malformed.
     """
-    import hmac as _hmac
     import hashlib
+    import hmac as _hmac
 
     raw = b64_url_decode(encoded_blob)
     if len(raw) < 1 + 1 + 6 + 32 + 16 + 32:
@@ -318,8 +318,8 @@ def decrypt_password_link(encoded_blob: str, password: str) -> tuple[int, bytes,
     public_handle = raw[2:8]
     salt = raw[8:40]
     key_len = 32 if node_type == 0 else 16
-    encrypted_key = raw[40:40 + key_len]
-    expected_hmac = raw[40 + key_len:40 + key_len + 32]
+    encrypted_key = raw[40 : 40 + key_len]
+    expected_hmac = raw[40 + key_len : 40 + key_len + 32]
     body = raw[: 40 + key_len]
 
     aes_xor_key, hmac_key = derive_password_link_keys(password, salt, algo=algo)
@@ -337,9 +337,9 @@ def encrypt_password_link(
     node_type: int, public_handle: bytes, raw_key: bytes, password: str, algo: int = 2
 ) -> str:
     """Build a MEGA `#P!` blob for a node so it can be shared with a password."""
-    import os
-    import hmac as _hmac
     import hashlib
+    import hmac as _hmac
+    import os
 
     if node_type not in (0, 1):
         raise ValueError("node_type must be 0 (file) or 1 (folder)")

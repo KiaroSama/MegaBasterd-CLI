@@ -574,7 +574,6 @@ function Get-MissingModules {
         "requests",
         "Crypto",
         "tenacity",
-        "tqdm",
         "cryptography"
     )
     if ([System.Environment]::OSVersion.Platform -eq "Win32NT") {

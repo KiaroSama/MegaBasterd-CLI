@@ -23,6 +23,13 @@ def test_sanitize_filename_empty_input():
     assert sanitize_filename("") == "unnamed"
 
 
+def test_sanitize_filename_preserves_extension_when_truncated():
+    result = sanitize_filename(("a" * 260) + ".mkv")
+
+    assert len(result) <= 240
+    assert result.endswith(".mkv")
+
+
 def test_format_bytes_small():
     assert format_bytes(0) == "0 B"
     assert format_bytes(1023) == "1023 B"

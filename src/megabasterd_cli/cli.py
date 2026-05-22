@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import platform
@@ -37,7 +38,6 @@ from .config import ConfigStore, log_dir
 from .ui.theme import make_console
 from .utils.logger import setup_logging
 
-
 console = make_console()
 
 
@@ -69,20 +69,43 @@ def _redacted_argv(argv: list[str]) -> list[str]:
     return redacted
 
 
+def _startup_args_for_log() -> list[str]:
+    """Return process args only when this process looks like the CLI itself."""
+    argv0 = str(sys.argv[0]).replace("\\", "/").rsplit("/", 1)[-1].lower()
+    cli_names = {
+        "mb",
+        "mb.exe",
+        "mbcli",
+        "mbcli.exe",
+        "megabasterd-cli",
+        "megabasterd-cli.exe",
+        "run.ps1",
+        "__main__.py",
+    }
+    if argv0 in cli_names:
+        return _redacted_argv(sys.argv[1:])
+    return []
+
+
 @click.group(
     context_settings={"help_option_names": ["-h", "--help"]},
     help="MegaBasterd CLI - command-line MEGA.nz transfers.",
 )
 @click.option(
-    "-v", "--verbose", count=True,
+    "-v",
+    "--verbose",
+    count=True,
     help="Increase verbosity (-v for INFO, -vv for DEBUG).",
 )
 @click.option(
-    "-q", "--quiet", is_flag=True,
+    "-q",
+    "--quiet",
+    is_flag=True,
     help="Suppress console output (errors still shown).",
 )
 @click.option(
-    "--log-file/--no-log-file", default=None,
+    "--log-file/--no-log-file",
+    default=None,
     help="Write a debug log file in the user log directory.",
 )
 @click.version_option(version=__version__, prog_name="megabasterd-cli")
@@ -126,7 +149,7 @@ def cli(ctx: click.Context, verbose: int, quiet: bool, log_file: bool | None) ->
         os.getcwd(),
         sys.version.replace("\n", " "),
         platform.platform(),
-        _redacted_argv(sys.argv[1:]),
+        _startup_args_for_log(),
         log_path,
     )
 
@@ -175,10 +198,8 @@ def main() -> int:
         stream = getattr(sys, stream_name, None)
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
-            try:
+            with contextlib.suppress(ValueError, OSError):
                 reconfigure(encoding="utf-8", errors="replace")
-            except (ValueError, OSError):
-                pass
     try:
         cli(prog_name="mb")
         return 0

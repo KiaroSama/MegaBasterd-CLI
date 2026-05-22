@@ -3,6 +3,5 @@ rich>=13.5.0
 requests>=2.31.0
 pycryptodome>=3.19.0
 tenacity>=8.2.0
-tqdm>=4.66.0
 cryptography>=41.0.0
 colorama>=0.4.6; platform_system=="Windows"

@@ -1,6 +1,14 @@
 from pathlib import Path
 
-from megabasterd_cli.config import ConfigStore, config_file, data_dir, default_download_dir, user_dir
+import pytest
+
+from megabasterd_cli.config import (
+    ConfigStore,
+    config_file,
+    data_dir,
+    default_download_dir,
+    user_dir,
+)
 
 
 def test_default_download_dir_uses_project_output(monkeypatch, tmp_path: Path):
@@ -55,3 +63,13 @@ def test_logging_defaults_are_enabled(tmp_path: Path):
     assert cfg.log_to_file is True
     assert cfg.log_max_bytes > 0
     assert cfg.log_backups >= 1
+
+
+def test_bool_config_values_are_strict(tmp_path: Path):
+    store = ConfigStore(tmp_path / "config.json")
+
+    store.set("verify_integrity", "no")
+    assert store.config.verify_integrity is False
+
+    with pytest.raises(ValueError):
+        store.set("verify_integrity", "yse")

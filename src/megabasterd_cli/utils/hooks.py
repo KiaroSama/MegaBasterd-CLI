@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import logging
 import shlex
 import subprocess
-import datetime as _dt
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -47,7 +47,7 @@ def append_upload_log(
     if not log_path:
         return
     record = {
-        "ts": _dt.datetime.utcnow().isoformat() + "Z",
+        "ts": _dt.datetime.now(_dt.timezone.utc).isoformat(),
         "path": str(local_path),
         "name": local_path.name,
         "handle": file_handle,

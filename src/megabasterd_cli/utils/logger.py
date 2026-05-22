@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import logging
-from logging.handlers import RotatingFileHandler
 import re
 import sys
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
-
 
 _URL_RE = re.compile(r"https?://[^\s'\"\]\)>,]+", re.IGNORECASE)
 _MEGA_API_PATH_RE = re.compile(r"/cs\?[^\s'\"\]\)>,]+", re.IGNORECASE)
@@ -83,7 +82,9 @@ def setup_logging(
             root.addHandler(handler)
         except ImportError:
             handler = logging.StreamHandler(sys.stderr)
-            handler.setFormatter(RedactingFormatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+            handler.setFormatter(
+                RedactingFormatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+            )
             handler.setLevel(level)
             root.addHandler(handler)
 

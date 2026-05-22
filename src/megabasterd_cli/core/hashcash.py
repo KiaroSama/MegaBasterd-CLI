@@ -13,27 +13,37 @@ This module re-implements the algorithm from the original MegaBasterd
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
+import logging
+import os
+import platform
+import shutil
 import struct
+import subprocess
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
-
+from pathlib import Path
 
 TOKEN_BYTES = 48
 PREFIX_BYTES = 4
 REPEAT = 262_144
 BUF_SIZE = PREFIX_BYTES + REPEAT * TOKEN_BYTES
 DEFAULT_TIMEOUT_S = 300.0
+NATIVE_TIMEOUT_MARGIN_S = 5.0
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
 class HashcashChallenge:
     """Parsed `X-Hashcash` header."""
-    version: int        # Always 1 in current MEGA usage
-    easiness: int       # 0..255, controls difficulty
-    token: bytes        # 48 raw bytes (base64-decoded)
+
+    version: int  # Always 1 in current MEGA usage
+    easiness: int  # 0..255, controls difficulty
+    token: bytes  # 48 raw bytes (base64-decoded)
 
     @property
     def threshold(self) -> int:
@@ -68,6 +78,159 @@ def _check_nonce(nonce_bytes: bytes, token_repeated: bytes, threshold: int) -> b
     return head <= threshold
 
 
+def _project_root() -> Path | None:
+    """Return the source checkout root when running from a source tree."""
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "Run.ps1").is_file():
+            return parent
+    return None
+
+
+def _native_solver_commands() -> list[list[str]]:
+    """Return native solver commands in preference order."""
+    if os.environ.get("MEGABASTERD_HASHCASH_NATIVE", "").lower() in {
+        "0",
+        "false",
+        "n",
+        "no",
+        "off",
+    }:
+        return []
+
+    env_solver = os.environ.get("MEGABASTERD_HASHCASH_SOLVER")
+    commands: list[list[str]] = []
+    if env_solver:
+        candidate = Path(env_solver).expanduser()
+        if candidate.is_file():
+            if candidate.suffix.lower() == ".ps1":
+                powershell = shutil.which("pwsh.exe") or shutil.which("powershell.exe")
+                if powershell:
+                    commands.append(
+                        [
+                            powershell,
+                            "-NoProfile",
+                            "-ExecutionPolicy",
+                            "Bypass",
+                            "-File",
+                            str(candidate),
+                        ]
+                    )
+            else:
+                commands.append([str(candidate)])
+        return commands
+
+    if platform.system() != "Windows":
+        return commands
+
+    roots = []
+    source_root = _project_root()
+    if source_root is not None:
+        roots.append(source_root)
+
+    for root in roots:
+        exe = root / "Bin" / "hashcash-solver-win64.exe"
+        if exe.is_file():
+            commands.append([str(exe)])
+
+    packaged_exe = (
+        Path(__file__).resolve().parents[1] / "native" / "windows" / "hashcash_solver.exe"
+    )
+    if packaged_exe.is_file():
+        commands.append([str(packaged_exe)])
+
+    powershell = shutil.which("pwsh.exe") or shutil.which("powershell.exe")
+    if powershell and source_root is not None:
+        script = source_root / "tools" / "hashcash_solver_windows.ps1"
+        if script.is_file():
+            commands.append(
+                [
+                    powershell,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(script),
+                ]
+            )
+    return commands
+
+
+def _parse_native_nonce(output: str) -> bytes:
+    """Parse a native solver nonce printed as 8 hex characters."""
+    for line in reversed(output.splitlines()):
+        text = line.strip()
+        if len(text) == 8:
+            try:
+                return bytes.fromhex(text)
+            except ValueError:
+                continue
+    raise ValueError("Native solver did not return an 8-character hex nonce")
+
+
+def _solve_with_native(
+    challenge: HashcashChallenge,
+    timeout: float,
+    workers: int,
+) -> bytes | None:
+    """Try the Windows native helper. Return None when no helper is available."""
+    commands = _native_solver_commands()
+    if not commands:
+        return None
+
+    timeout_ms = max(1, int(timeout * 1000))
+    workers = max(1, min(workers, 32))
+    for base_command in commands:
+        if base_command[-1].lower().endswith(".ps1"):
+            args = [
+                *base_command,
+                "-Easiness",
+                str(challenge.easiness),
+                "-TokenHex",
+                challenge.token.hex(),
+                "-Workers",
+                str(workers),
+                "-TimeoutMs",
+                str(timeout_ms),
+            ]
+        else:
+            args = [
+                *base_command,
+                str(challenge.easiness),
+                challenge.token.hex(),
+                str(workers),
+                str(timeout_ms),
+            ]
+
+        try:
+            proc = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                timeout=timeout + NATIVE_TIMEOUT_MARGIN_S,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError("Native hashcash solver timed out") from exc
+        except OSError as exc:
+            log.debug("Native hashcash solver failed to start: %s", exc)
+            continue
+
+        if proc.returncode == 0:
+            try:
+                return _parse_native_nonce(proc.stdout)
+            except ValueError as exc:
+                log.warning("Native hashcash solver returned invalid output: %s", exc)
+                continue
+        if proc.returncode == 2:
+            raise TimeoutError("Hashcash challenge could not be solved in time")
+        log.debug(
+            "Native hashcash solver failed rc=%s stderr=%s",
+            proc.returncode,
+            proc.stderr.strip(),
+        )
+    return None
+
+
 def solve(
     challenge: HashcashChallenge,
     timeout: float = DEFAULT_TIMEOUT_S,
@@ -77,6 +240,13 @@ def solve(
 
     Raises TimeoutError if no solution is found within `timeout` seconds.
     """
+    native_nonce = _solve_with_native(challenge, timeout=timeout, workers=workers)
+    if native_nonce is not None:
+        token_repeated = challenge.token * REPEAT
+        if _check_nonce(native_nonce, token_repeated, challenge.threshold):
+            return native_nonce
+        log.warning("Native hashcash solver returned a nonce that failed verification")
+
     token_repeated = challenge.token * REPEAT
     threshold = challenge.threshold
     deadline = time.monotonic() + timeout
@@ -108,10 +278,8 @@ def solve(
                 break
         stop.set()
         for f in futures:
-            try:
+            with contextlib.suppress(Exception):
                 f.result(timeout=1.0)
-            except Exception:  # noqa: BLE001
-                pass
 
     if not result:
         raise TimeoutError("Hashcash challenge could not be solved in time")
@@ -129,11 +297,13 @@ def build_solution_header(challenge_header: str, timeout: float = DEFAULT_TIMEOU
     challenge = parse_challenge(challenge_header)
     nonce = solve(challenge, timeout=timeout)
     nonce_b64 = (
-        base64.b64encode(nonce).decode("ascii").rstrip("=")
-        .replace("+", "-").replace("/", "_")
+        base64.b64encode(nonce).decode("ascii").rstrip("=").replace("+", "-").replace("/", "_")
     )
     token_b64 = (
-        base64.b64encode(challenge.token).decode("ascii").rstrip("=")
-        .replace("+", "-").replace("/", "_")
+        base64.b64encode(challenge.token)
+        .decode("ascii")
+        .rstrip("=")
+        .replace("+", "-")
+        .replace("/", "_")
     )
     return f"{challenge.version}:{challenge.easiness}:{token_b64}:{nonce_b64}"

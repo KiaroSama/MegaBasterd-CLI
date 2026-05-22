@@ -61,6 +61,9 @@ No build step is needed.
 .\Run.ps1 upload .\archive.zip --share
 ```
 
+`info` inspects public links only and does not log into a MEGA account, so it
+does not need MFA options.
+
 If the package is installed with `python -m pip install -e .`, the same commands
 can be run as `mb`, `mbcli`, or `megabasterd-cli`.
 
@@ -84,6 +87,11 @@ The parser and transfer layer support:
 | ELC container | `mega://elc?...` |
 | DLC file | `.\Run.ps1 download -i .\container.dlc` |
 | MegaCrypter | `mc://...` |
+
+DLC containers are resolved through JDownloader's public DLC service endpoint,
+which is HTTP-only upstream. The DLC master key is a known public constant, so
+this does not protect or expose a secret key, but a hostile network could still
+substitute the returned URLs. Resolve DLC files only on networks you trust.
 
 ## 4. Download Behavior
 
@@ -114,7 +122,7 @@ Important flags:
 | --- | --- |
 | `-w`, `--workers` | Chunk workers per file. |
 | `-P`, `--parallel` | Number of files downloading at once. |
-| `-l`, `--limit` | Speed cap in KB/s. |
+| `-l`, `--limit` | Global download speed cap in KB/s for this command. |
 | `--no-verify` | Skip final MAC verification. |
 | `--proxy` | Proxy URL for this run. |
 | `--password` | Password for protected links. |
@@ -123,6 +131,28 @@ Important flags:
 Each partial download writes a `.mbstate` file next to the output. Re-running
 the same command resumes missing chunks. If final integrity verification fails,
 the state file is kept for investigation.
+
+### Windows Hashcash acceleration
+
+When MEGA returns an API Hashcash challenge, the CLI solves it before retrying
+the request. On Windows source runs, the CLI automatically tries the bundled
+PowerShell/.NET helper and falls back to pure Python if no helper is available.
+
+To build the optional native executable:
+
+```powershell
+.\tools\build_hashcash_windows.ps1
+```
+
+The generated helper is expected at:
+
+```text
+Bin\hashcash-solver-win64.exe
+```
+
+Set `MEGABASTERD_HASHCASH_NATIVE=0` to disable helper use for troubleshooting.
+Advanced users can set `MEGABASTERD_HASHCASH_SOLVER` to a custom executable
+path. The CLI runs that executable directly, so only use a solver you trust.
 
 ## 5. Upload Behavior
 
@@ -139,6 +169,9 @@ Useful upload modes:
 # Preserve a directory tree
 .\Run.ps1 upload .\Photos --keep-structure --target Backups
 
+# Keep uploading the rest of a directory when one item fails
+.\Run.ps1 upload .\Photos --keep-structure --keep-going
+
 # Pick account by free quota
 .\Run.ps1 upload .\LargeFiles --auto-account
 
@@ -148,6 +181,10 @@ Useful upload modes:
 # Create a password-protected share link
 .\Run.ps1 upload .\private.zip --share --share-password "secret"
 ```
+
+Upload resume state is stored under `<project>\User\Data\upload-state`. It is
+keyed by the local file path and size, so moving or renaming a source file starts
+a fresh upload state.
 
 ## 6. Accounts and Vault
 

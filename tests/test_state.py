@@ -1,10 +1,10 @@
 """Tests for resumable transfer state."""
 
+import json
 from pathlib import Path
 
-import pytest
-
 from megabasterd_cli.core.state import (
+    STATE_FORMAT_VERSION,
     TransferState,
     clear_state,
     load_state,
@@ -39,9 +39,42 @@ def test_missing_state_returns_none(tmp_path: Path):
 def test_clear_state_removes_file(tmp_path: Path):
     dest = tmp_path / "x.bin"
     state = TransferState(
-        transfer_type="download", source="x", destination=str(dest), total_size=10,
+        transfer_type="download",
+        source="x",
+        destination=str(dest),
+        total_size=10,
     )
     save_state(state)
     assert state_path_for(dest).exists()
     clear_state(dest)
     assert not state_path_for(dest).exists()
+
+
+def test_state_file_has_format_version(tmp_path: Path):
+    dest = tmp_path / "versioned.bin"
+    state = TransferState(
+        transfer_type="download",
+        source="x",
+        destination=str(dest),
+        total_size=10,
+    )
+
+    save_state(state)
+    raw = json.loads(state_path_for(dest).read_text(encoding="utf-8"))
+
+    assert raw["format_version"] == STATE_FORMAT_VERSION
+    assert load_state(dest).format_version == STATE_FORMAT_VERSION
+
+
+def test_unsupported_state_version_returns_none(tmp_path: Path):
+    dest = tmp_path / "future.bin"
+    state = TransferState(
+        transfer_type="download",
+        source="x",
+        destination=str(dest),
+        total_size=10,
+        format_version=999,
+    )
+    save_state(state)
+
+    assert load_state(dest) is None

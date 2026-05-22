@@ -26,6 +26,7 @@ def confirm(question: str, default: bool = True) -> bool:
 
 def print_panel(text: str, title: str = "", style: str = "cyan") -> None:
     from rich.panel import Panel
+
     _console.print(Panel(text, title=title, border_style=style))
 
 

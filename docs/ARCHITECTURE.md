@@ -36,11 +36,12 @@ src/megabasterd_cli/
 |-- queue/              # Persistent transfer queue
 |-- streaming/          # Local HTTP stream server
 |-- ui/                 # Rich theme, tables, prompts, progress
+|-- native/             # Optional native helper sources/binaries
 `-- utils/              # Logging, hooks, speed limiting, formatting
 ```
 
-Tests live in `tests/`. Documentation lives in `docs/`. Packaging and tool
-configuration lives in `pyproject.toml`.
+Tests live in `tests/`. Documentation lives in `docs/`. Helper build scripts
+live in `tools/`. Packaging and tool configuration lives in `pyproject.toml`.
 
 ## Layers
 
@@ -146,6 +147,15 @@ KB. `core.chunks.iter_chunks` centralizes this pattern.
 Files inside public folder shares store per-node keys wrapped by the folder key.
 Folder-file and folder-subtree operations must fetch the parent folder listing,
 unwrap the target node key, and then request the CDN URL in folder context.
+
+### Hashcash challenges
+
+MEGA may return an `X-Hashcash` challenge for API throttling. `core/hashcash.py`
+solves the challenge and verifies the returned nonce before retrying. On
+Windows, the solver prefers `Bin/hashcash-solver-win64.exe` when it exists, then
+the bundled PowerShell/.NET helper in `tools/hashcash_solver_windows.ps1`, and
+finally the pure-Python fallback. Set `MEGABASTERD_HASHCASH_NATIVE=0` to disable
+native helper use.
 
 ## Extension Points
 

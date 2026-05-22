@@ -23,7 +23,6 @@ from pathlib import Path
 from ..config import Config, data_dir
 from .smart_proxy import SmartProxyPool
 
-
 _SPLIT_RE = re.compile(r"[\s,;]+")
 
 
@@ -36,7 +35,7 @@ def _load_persisted_pool() -> SmartProxyPool:
     if not path.exists():
         return SmartProxyPool()
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
         pool = SmartProxyPool()
         for url in data.get("proxies", []):
