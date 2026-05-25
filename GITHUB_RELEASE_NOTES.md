@@ -1,69 +1,38 @@
-# MegaBasterd CLI v1.1.0
+# MegaBasterd CLI v1.2.0
 
-Suggested tag: `v1.1.0`
+Suggested tag: `v1.2.0`
 
 ## Summary
 
-MegaBasterd CLI v1.1.0 is a hardening and usability release for the
-script-first MEGA.nz transfer CLI. It improves resume safety, session security,
-streaming refresh behavior, folder upload handling, packaging metadata, and
-Windows Hashcash support.
+MegaBasterd CLI v1.2.0 is a logging and diagnostics release. It keeps the existing transfer behavior intact while making CLI log files more useful for debugging real user runs and safer to share after review.
 
 ## Added
 
-- Windows Hashcash acceleration support through the bundled PowerShell/.NET
-  helper and optional native C helper source.
-- `upload --keep-going` for directory uploads, allowing successful files to be
-  kept when some items fail.
-- Encrypted saved-session support using a passphrase-protected vault payload.
-- Transfer state format versioning for safer future resume-state changes.
-- Regression tests for session encryption, downloader resume validation,
-  streaming refresh behavior, MegaCrypter handling, uploader keep-going mode,
-  and state-file versioning.
+- Richer CLI file logs with a stable run id, command name, process id, thread name, module, function, and line number on each record.
+- Startup diagnostics that record the package version, working directory, Python executable, Python version, platform, redacted startup arguments, selected log file, config file, effective log level, and quiet/verbose state.
+- DEBUG-level runtime path and non-secret configuration summaries to make support reports easier to diagnose.
+- CLI shutdown timing so logs show when a process finishes and how long it ran.
+- Launcher-to-CLI run id propagation so `launcher-*.log`, launcher transcript files, and `cli-*.log` from the same run can be correlated.
+- Regression tests for contextual log file records and expanded redaction behavior.
 
 ## Changed
 
-- Package version is now `1.1.0`.
-- Upload resume state is stored under project user data instead of next to the
-  source file.
-- Download and upload speed-limit documentation now describes the actual global
-  per-command behavior.
-- Public `info` help text now clarifies that the command inspects public links
-  without account login or MFA.
-- Package data no longer includes Windows `.exe` helper artifacts.
-- CONNECT proxy tunnel shutdown waits longer before closing paired sockets.
+- Package version is now `1.2.0`.
+- README and usage documentation now describe the expanded logging metadata and privacy behavior.
+- Existing core transfer behavior is unchanged.
 
 ## Fixed
 
-- Integrity verification now fails loudly when required chunk MAC data is
-  missing.
-- Download resume state is rejected when it does not match the source,
-  destination, file size, key, nonce, or chunk map.
-- CDN URL refresh no longer holds the main URL lock across network I/O.
-- Streaming refresh now retries expired CDN URLs and preserves configured
-  proxies for MegaCrypter refreshes.
-- Upload URL expiry now retries once with clearer recovery guidance.
-- Account-backed cloud, share, queue, and upload paths now support MFA prompts
-  consistently where login is required.
-- `import --target` now resolves target paths as well as handles.
-- Boolean config values are parsed strictly instead of treating typos as false.
-- Malformed MEGA attribute blobs return a safe `None` result instead of
-  surfacing low-level crypto exceptions.
-- Filename truncation preserves file extensions when possible.
-- Modern MEGA links with trailing slashes are accepted.
-- Startup logs redact additional sensitive arguments.
+- Improved redaction for non-MEGA URLs that contain sensitive query parameters such as `token`, `password`, `api_key`, `sid`, or `session`.
+- Improved redaction for session-like, cookie-like, passphrase, password, and token-like payload fields in structured log messages.
 
 ## Removed
 
-- Removed the unused `tqdm` dependency.
-- Removed dead downloader URL setter code.
+No user-facing features were removed.
 
 ## Breaking Changes
 
 No intentional breaking CLI changes are included.
-
-Saved sessions are now encrypted. Plaintext legacy session files are refused by
-default unless `MEGABASTERD_ALLOW_PLAINTEXT_SESSION=1` is set explicitly.
 
 ## Requirements
 
@@ -73,25 +42,14 @@ default unless `MEGABASTERD_ALLOW_PLAINTEXT_SESSION=1` is set explicitly.
 
 ## Safety Notes
 
-- Downloads write files to disk and overwrite or resume existing destinations
-  by default.
-- Upload, import, share, rename, move, trash, and remove commands can modify
-  real MEGA account data.
-- Logs can contain local paths and operational details. Sensitive arguments and
-  MEGA links are redacted where the logger handles them, but logs should still
-  be treated as private.
-- DLC resolution uses JDownloader's public HTTP-only DLC service endpoint. The
-  DLC master key is public, but returned URLs could be substituted on hostile
-  networks.
+- Logs can contain local paths, filenames, runtime paths, and operational details. Sensitive arguments and token-like values are redacted where the logger handles them, but logs should still be treated as private.
+- Downloads write files to disk and overwrite or resume existing destinations by default.
+- Upload, import, share, rename, move, trash, and remove commands can modify real MEGA account data.
 
 ## Upgrade Notes
 
-- Re-run `.\Run.ps1` or reinstall with `python -m pip install -e .` so the
-  updated package metadata and dependencies are active.
-- If an upload resume state fails after a file was moved or renamed, start a
-  fresh upload; upload state is keyed by local path and size.
-- If a saved session no longer loads, log in again and save a new encrypted
-  session with a passphrase.
+- Re-run `.\Run.ps1` or reinstall with `python -m pip install -e .` so the updated package metadata is active.
+- Existing configuration files and transfer state files remain compatible.
 
 ## License and Attribution
 

@@ -1,6 +1,8 @@
 """Logging redaction tests."""
 
-from megabasterd_cli.utils.logger import redact_log_text
+import logging
+
+from megabasterd_cli.utils.logger import redact_log_text, setup_logging
 
 
 def test_redact_log_text_hides_mega_urls_and_sensitive_fields():
@@ -19,3 +21,37 @@ def test_redact_log_text_hides_mega_urls_and_sensitive_fields():
     assert "thumbnail-token" not in redacted
     assert "'a': 'f'" in redacted
     assert "<redacted-url>" in redacted
+
+
+def test_redact_log_text_hides_sensitive_query_values():
+    text = "GET https://example.invalid/api?token=secret&safe=value&password=pw"
+
+    redacted = redact_log_text(text)
+
+    assert "secret" not in redacted
+    assert "password=pw" not in redacted
+    assert "safe=value" in redacted
+    assert "token=%3Credacted%3E" in redacted
+
+
+def test_setup_logging_writes_contextual_file_records(tmp_path):
+    log_path = tmp_path / "cli.log"
+
+    setup_logging(
+        level="DEBUG",
+        log_file=log_path,
+        quiet=True,
+        run_id="testrun",
+        command="download",
+    )
+    logging.getLogger("megabasterd_cli.test").info(
+        "Downloaded from https://mega.nz/file/abc#secret"
+    )
+    logging.shutdown()
+
+    text = log_path.read_text(encoding="utf-8")
+    assert "run=testrun" in text
+    assert "cmd=download" in text
+    assert "megabasterd_cli.test" in text
+    assert "https://mega.nz" not in text
+    assert "<redacted-url>" in text

@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.2.0 - 2026-05-25
+
+### Added
+- Added richer CLI file logging with per-run identifiers, command context, process and thread details, source module/function/line metadata, runtime path details, non-secret configuration summaries, and shutdown timing.
+- Added launcher-to-CLI run id propagation so launcher logs and CLI logs from the same run can be correlated.
+- Added regression coverage for contextual log records and expanded redaction behavior.
+
+### Changed
+- Bumped the package version to `1.2.0`.
+- Updated README and usage documentation to describe the expanded logging metadata and privacy behavior.
+
+### Security
+- Expanded log redaction for MEGA links, MegaCrypter links, API-style query secrets, session-like fields, cookie-like fields, passphrases, and token-like payload values.
+- Logs still include local paths and operational details, so they should continue to be treated as private.
+
 ## v1.1.0 - 2026-05-22
 
 ### Added

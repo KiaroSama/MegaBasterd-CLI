@@ -27,6 +27,7 @@ $LauncherLogPath = Join-Path $LogDir "launcher-$RunId.log"
 $LauncherTranscriptPath = Join-Path $LogDir "launcher-transcript-$RunId.log"
 $CliLogPath = Join-Path $LogDir "cli-$RunId.log"
 $env:MEGABASTERD_PROJECT_ROOT = $ProjectRoot
+$env:MEGABASTERD_RUN_ID = $RunId
 $env:MEGABASTERD_LOG_DIR = $LogDir
 $env:MEGABASTERD_USER_DIR = $UserDir
 $env:MEGABASTERD_CLI_LOG_FILE = $CliLogPath
