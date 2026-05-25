@@ -3,18 +3,65 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import sys
+import time
+import uuid
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 _URL_RE = re.compile(r"https?://[^\s'\"\]\)>,]+", re.IGNORECASE)
 _MEGA_API_PATH_RE = re.compile(r"/cs\?[^\s'\"\]\)>,]+", re.IGNORECASE)
+_SENSITIVE_QUERY_KEYS = {
+    "ak",
+    "api_key",
+    "apikey",
+    "auth",
+    "at",
+    "fa",
+    "g",
+    "k",
+    "key",
+    "mfa",
+    "n",
+    "password",
+    "sid",
+    "session",
+    "token",
+    "uh",
+}
 _SENSITIVE_FIELD_RE = re.compile(
     r"((?:'|\")"
-    r"(?:k|at|g|fa|uh|mfa|sid|key|attr|api_key|apikey|APIKEY|privk|csid|tsid)"
+    r"(?:k|at|g|fa|uh|mfa|sid|key|attr|api_key|apikey|APIKEY|password|"
+    r"passphrase|token|cookie|session|privk|csid|tsid)"
     r"(?:'|\")\s*:\s*)(?:'|\")[^'\"]+(?:'|\")"
 )
+_context = {"run_id": "-", "command": "-"}
+_process_started_at = time.perf_counter()
+_shutdown_log_registered = False
+
+
+def _redact_url_query(url: str) -> str:
+    """Redact sensitive query keys in non-MEGA URLs that may still appear in logs."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    if not parts.query:
+        return url
+    query = []
+    changed = False
+    for key, value in parse_qsl(parts.query, keep_blank_values=True):
+        if key.lower() in _SENSITIVE_QUERY_KEYS:
+            query.append((key, "<redacted>"))
+            changed = True
+        else:
+            query.append((key, value))
+    if not changed:
+        return url
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
 def redact_log_text(text: str) -> str:
@@ -25,11 +72,28 @@ def redact_log_text(text: str) -> str:
         lowered = url.lower()
         if "mega.nz" in lowered or "mega.co.nz" in lowered or "userstorage.mega" in lowered:
             return "<redacted-url>"
-        return url
+        return _redact_url_query(url)
 
     redacted = _URL_RE.sub(redact_url, text)
     redacted = _MEGA_API_PATH_RE.sub("/cs?<redacted-query>", redacted)
     return _SENSITIVE_FIELD_RE.sub(r"\1'<redacted>'", redacted)
+
+
+def set_log_context(run_id: str | None = None, command: str | None = None) -> None:
+    """Set fields injected into every log record."""
+    if run_id:
+        _context["run_id"] = run_id
+    if command:
+        _context["command"] = command
+
+
+class ContextFilter(logging.Filter):
+    """Attach stable run context to every record."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.run_id = _context["run_id"]
+        record.command = _context["command"]
+        return True
 
 
 class RedactingFilter(logging.Filter):
@@ -48,12 +112,31 @@ class RedactingFormatter(logging.Formatter):
         return redact_log_text(super().format(record))
 
 
+def _register_shutdown_log() -> None:
+    global _shutdown_log_registered
+    if _shutdown_log_registered:
+        return
+    _shutdown_log_registered = True
+
+    import atexit
+
+    def _log_shutdown() -> None:
+        elapsed = time.perf_counter() - _process_started_at
+        logging.getLogger("megabasterd_cli.lifecycle").info(
+            "CLI process shutdown elapsed_seconds=%.3f", elapsed
+        )
+
+    atexit.register(_log_shutdown)
+
+
 def setup_logging(
     level: str | int = "WARNING",
     log_file: Path | None = None,
     quiet: bool = False,
     max_bytes: int = 5_000_000,
     backup_count: int = 5,
+    run_id: str | None = None,
+    command: str | None = None,
 ) -> None:
     """Configure root logger for the CLI.
 
@@ -61,11 +144,20 @@ def setup_logging(
     writes plain text without colors.
     """
     root = logging.getLogger()
-    root.handlers.clear()
+    for existing in list(root.handlers):
+        root.removeHandler(existing)
+        existing.close()
     root.setLevel(logging.DEBUG)
     root.filters.clear()
-    root.addFilter(RedactingFilter())
+    set_log_context(
+        run_id or os.environ.get("MEGABASTERD_RUN_ID") or uuid.uuid4().hex[:12], command or "-"
+    )
+    context_filter = ContextFilter()
+    redacting_filter = RedactingFilter()
+    root.addFilter(context_filter)
+    root.addFilter(redacting_filter)
     logging.captureWarnings(True)
+    _register_shutdown_log()
 
     if not quiet:
         try:
@@ -79,13 +171,20 @@ def setup_logging(
                 level=level if isinstance(level, str) else logging.getLevelName(level),
             )
             handler.setLevel(level)
+            handler.addFilter(context_filter)
+            handler.addFilter(redacting_filter)
             root.addHandler(handler)
         except ImportError:
             handler = logging.StreamHandler(sys.stderr)
             handler.setFormatter(
-                RedactingFormatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+                RedactingFormatter(
+                    "%(asctime)s [%(levelname)s] run=%(run_id)s cmd=%(command)s "
+                    "%(name)s: %(message)s"
+                )
             )
             handler.setLevel(level)
+            handler.addFilter(context_filter)
+            handler.addFilter(redacting_filter)
             root.addHandler(handler)
 
     if log_file:
@@ -97,10 +196,12 @@ def setup_logging(
             encoding="utf-8",
         )
         fh.setLevel(logging.DEBUG)
+        fh.addFilter(context_filter)
+        fh.addFilter(redacting_filter)
         fh.setFormatter(
             RedactingFormatter(
                 "%(asctime)s.%(msecs)03d [%(levelname)s] "
-                "pid=%(process)d thread=%(threadName)s "
+                "run=%(run_id)s cmd=%(command)s pid=%(process)d thread=%(threadName)s "
                 "%(name)s:%(funcName)s:%(lineno)d - %(message)s",
                 datefmt="%Y-%m-%d %H:%M:%S",
             )

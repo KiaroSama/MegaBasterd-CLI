@@ -189,8 +189,9 @@ This tool can affect real user data.
 - Proxy features route traffic through configured or fetched proxies. Use only
   proxy sources you trust.
 - Logs can contain local paths and operational details. Sensitive command
-  arguments and MEGA links are redacted where the logger handles them, but logs
-  should still be treated as private.
+  arguments, MEGA links, API-style query secrets, session-like fields, and
+  token-like payload values are redacted where the logger handles them, but
+  logs should still be treated as private.
 - Use this software only with content you are allowed to download, upload,
   import, stream, or share.
 
@@ -226,6 +227,10 @@ Typical generated files include:
 | `User/Data/sessions/` | Local session data. |
 | `Logs/*.log` | Launcher and CLI logs. |
 | `*.mbstate` | Resumable transfer state next to partial downloads. |
+
+CLI log records include a run id, command name, process id, thread name, module,
+function, line number, startup arguments after redaction, runtime paths, a
+non-secret configuration summary, and process shutdown timing.
 
 These paths are ignored by Git because they may contain private data or
 generated output.

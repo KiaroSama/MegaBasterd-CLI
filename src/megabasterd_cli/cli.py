@@ -34,7 +34,7 @@ from .commands.share_cmd import share_cmd
 from .commands.stream_cmd import stream
 from .commands.upload_cmd import upload
 from .commands.watch_cmd import watch_cmd
-from .config import ConfigStore, log_dir
+from .config import ConfigStore, config_file, data_dir, log_dir, user_dir
 from .ui.theme import make_console
 from .utils.logger import setup_logging
 
@@ -87,6 +87,48 @@ def _startup_args_for_log() -> list[str]:
     return []
 
 
+def _command_name_for_log(args: list[str]) -> str:
+    """Return the first non-global-option token as the command name."""
+    if not args:
+        return "menu/help"
+    for arg in args:
+        if arg.startswith("-"):
+            continue
+        return arg
+    return "global"
+
+
+def _config_summary_for_log(store: ConfigStore) -> dict[str, object]:
+    """Return non-secret config values that help debug user runs."""
+    cfg = store.config
+    return {
+        "config_file": str(store.path),
+        "user_dir": str(user_dir()),
+        "data_dir": str(data_dir()),
+        "log_dir": str(log_dir()),
+        "download_path": cfg.download_path,
+        "max_workers": cfg.max_workers,
+        "upload_workers": cfg.upload_workers,
+        "max_parallel_downloads": cfg.max_parallel_downloads,
+        "max_parallel_uploads": cfg.max_parallel_uploads,
+        "chunk_size_kb": cfg.chunk_size_kb,
+        "speed_limit_kbps": cfg.speed_limit_kbps,
+        "upload_speed_limit_kbps": cfg.upload_speed_limit_kbps,
+        "verify_integrity": cfg.verify_integrity,
+        "auto_resume": cfg.auto_resume,
+        "keep_state_files_on_error": cfg.keep_state_files_on_error,
+        "smart_proxy_enabled": cfg.smart_proxy_enabled,
+        "force_smart_proxy": cfg.force_smart_proxy,
+        "timeout_seconds": cfg.timeout_seconds,
+        "quota_wait_seconds": cfg.quota_wait_seconds,
+        "quota_max_wait_loops": cfg.quota_max_wait_loops,
+        "log_level": cfg.log_level,
+        "log_to_file": cfg.log_to_file,
+        "log_max_bytes": cfg.log_max_bytes,
+        "log_backups": cfg.log_backups,
+    }
+
+
 @click.group(
     context_settings={"help_option_names": ["-h", "--help"]},
     help="MegaBasterd CLI - command-line MEGA.nz transfers.",
@@ -136,21 +178,42 @@ def cli(ctx: click.Context, verbose: int, quiet: bool, log_file: bool | None) ->
         use_log_file = log_file if log_file is not None else store.config.log_to_file
         log_path = (log_dir() / "megabasterd-cli.log") if use_log_file else None
 
+    startup_args = _startup_args_for_log()
+    command_name = _command_name_for_log(startup_args)
     setup_logging(
         level=level,
         log_file=log_path,
         quiet=quiet,
         max_bytes=store.config.log_max_bytes,
         backup_count=store.config.log_backups,
+        command=command_name,
     )
-    logging.getLogger(__name__).info(
-        "CLI start version=%s cwd=%s python=%s platform=%s args=%s log_file=%s",
+    log = logging.getLogger(__name__)
+    log.info(
+        "CLI start version=%s cwd=%s executable=%s python=%s platform=%s args=%s "
+        "log_file=%s config_file=%s effective_level=%s quiet=%s verbose=%s",
         __version__,
         os.getcwd(),
+        sys.executable,
         sys.version.replace("\n", " "),
         platform.platform(),
-        _startup_args_for_log(),
+        startup_args,
         log_path,
+        config_file(),
+        level,
+        quiet,
+        verbose,
+    )
+    log.debug(
+        "Runtime paths project_root=%s user_dir=%s data_dir=%s log_dir=%s",
+        os.environ.get("MEGABASTERD_PROJECT_ROOT", "<auto>"),
+        user_dir(),
+        data_dir(),
+        log_dir(),
+    )
+    log.debug(
+        "Config summary: %s",
+        _config_summary_for_log(store),
     )
 
 

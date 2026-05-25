@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "megabasterd-cli"
-version = "1.1.0"
+version = "1.2.0"
 description = "A script-first MEGA.nz downloader/uploader inspired by MegaBasterd"
 readme = "README.md"
 license = "MIT"

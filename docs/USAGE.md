@@ -364,9 +364,12 @@ Logs/cli-<timestamp>.log
 
 The launcher log records dependency checks, selected Python, command dispatch,
 exit code, and any launcher exception. The transcript captures the visible
-PowerShell session. The CLI log records DEBUG-level Python details with
-process/thread/function/line metadata. Passwords, MFA codes, API keys, and
-MEGA/MegaCrypter links are redacted from startup argument logs.
+PowerShell session. The CLI log records DEBUG-level Python details with run id,
+command name, process/thread/function/line metadata, startup arguments after
+redaction, runtime paths, a non-secret configuration summary, and shutdown
+timing. Passwords, MFA codes, API keys, MEGA/MegaCrypter links, API-style query
+secrets, session-like fields, and token-like payload values are redacted where
+the logger handles them.
 
 Useful logging config keys:
 
