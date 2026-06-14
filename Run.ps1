@@ -20,7 +20,14 @@ $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $SourceRoot = Join-Path $ProjectRoot "src"
 $RequirementsPath = Join-Path $ProjectRoot "requirements.txt"
 $VenvDir = Join-Path $ProjectRoot ".venv"
-$LogDir = Join-Path $ProjectRoot "Logs"
+# Launcher logs normally live under <project>/Logs. A test-only override lets
+# the launcher integration tests redirect all launcher/transcript/CLI logs into
+# an isolated temporary directory instead of polluting the project tree.
+if (-not [string]::IsNullOrWhiteSpace($env:MEGABASTERD_LAUNCHER_LOG_DIR)) {
+    $LogDir = $env:MEGABASTERD_LAUNCHER_LOG_DIR
+} else {
+    $LogDir = Join-Path $ProjectRoot "Logs"
+}
 $UserDir = Join-Path $ProjectRoot "User"
 $RunId = Get-Date -Format "yyyyMMdd-HHmmss-fff"
 $LauncherLogPath = Join-Path $LogDir "launcher-$RunId.log"
@@ -645,7 +652,8 @@ function Get-RedactedArgsForLog {
         "--share-password",
         "--vault-passphrase",
         "--mfa-code",
-        "--elc-api-key"
+        "--elc-api-key",
+        "--token"
     )
     $redacted = [System.Collections.Generic.List[string]]::new()
     $redactNext = $false
@@ -660,7 +668,7 @@ function Get-RedactedArgsForLog {
             $redactNext = $true
             continue
         }
-        if ($arg -match "^(--password|--share-password|--vault-passphrase|--mfa-code|--elc-api-key)=") {
+        if ($arg -match "^(--password|--share-password|--vault-passphrase|--mfa-code|--elc-api-key|--token)=") {
             $redacted.Add(($arg -replace "=.*$", "=<redacted>"))
             continue
         }
@@ -671,6 +679,33 @@ function Get-RedactedArgsForLog {
         $redacted.Add($arg)
     }
     return @($redacted)
+}
+
+function Protect-TranscriptFile {
+    param([string] $Path)
+    # PowerShell's Start-Transcript writes a "Host Application:" header line
+    # containing the raw outer command line, which can include a stream --token
+    # value, a password, or a MEGA link. Scrub those out of the finished
+    # transcript so secrets passed on the launcher command line are not retained.
+    try {
+        if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+            return
+        }
+        $content = Get-Content -LiteralPath $Path -Raw
+        if ([string]::IsNullOrEmpty($content)) {
+            return
+        }
+        $sensitive = "--token|--password|--share-password|--vault-passphrase|--mfa-code|--elc-api-key"
+        # `--option value` and `--option=value`
+        $content = [regex]::Replace($content, "(?<opt>$sensitive)(?<sep>=|\s+)(?<val>\S+)", '${opt}${sep}<redacted>')
+        # `-p value` (short password option)
+        $content = [regex]::Replace($content, "(?<lead>\s)-p(?<sep>\s+)\S+", '${lead}-p${sep}<redacted>')
+        # MEGA-style links
+        $content = [regex]::Replace($content, "\S*(?:mega\.nz/|mega\.co\.nz/|mc://|mega://)\S*", "<redacted-link>")
+        Set-Content -LiteralPath $Path -Value $content -Encoding UTF8 -NoNewline
+    } catch {
+        Write-RunLog "WARN" "Transcript redaction failed: $($_.Exception.Message)"
+    }
 }
 
 function ConvertTo-NativeArgument {
@@ -1553,6 +1588,7 @@ try {
         } catch {
             Write-RunLog "WARN" "Stop-Transcript failed: $($_.Exception.Message)"
         }
+        Protect-TranscriptFile $LauncherTranscriptPath
     }
 }
 exit $exitCode

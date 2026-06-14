@@ -38,10 +38,10 @@ and is focused on CLI/source-script usage rather than a desktop GUI.
   with optional C helper source for building a native executable.
 - Optional thumbnail generation for supported image files when Pillow is installed.
 
-DLC container support uses JDownloader's public HTTP-only DLC service endpoint.
-The DLC master key is a known public constant, but resolve DLC files only on
-networks you trust because returned URLs could be substituted by a hostile
-network.
+DLC container support uses JDownloader's public DLC service endpoint over HTTPS.
+Redirects are followed only within that same trusted origin, and the DLC master
+key is a known public constant. Still resolve DLC files only on networks you
+trust, because the returned URLs are supplied by that third-party service.
 
 ## Requirements
 
