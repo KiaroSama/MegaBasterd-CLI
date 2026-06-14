@@ -104,8 +104,8 @@ class QueueSecretBox:
         if len(raw) < 12 + 16:
             raise ValueError("Queue secret blob too short")
         nonce, ct = raw[:12], raw[12:]
-        return AESGCM(self._load_or_create_key()).decrypt(nonce, ct, _QUEUE_SECRET_AAD).decode(
-            "utf-8"
+        return (
+            AESGCM(self._load_or_create_key()).decrypt(nonce, ct, _QUEUE_SECRET_AAD).decode("utf-8")
         )
 
 
