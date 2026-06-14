@@ -84,7 +84,13 @@ class QueueSecretBox:
         self.key_path = key_path
         self._key: bytes | None = None
 
-    def _load_or_create_key(self) -> bytes:
+    def load_key(self, create: bool) -> bytes | None:
+        """Return the queue key, or None when it is absent and create is False.
+
+        A non-empty key file of the wrong length is treated as corruption and
+        is never silently replaced (that would orphan existing secrets). An
+        empty/partial file is recreated only when ``create`` is True.
+        """
         if self._key is not None:
             return self._key
         empty_recover = False
@@ -94,15 +100,17 @@ class QueueSecretBox:
                 self._key = data
                 return data
             if len(data) == 0:
-                # Empty/partial file (e.g. interrupted write): recreate it.
+                if not create:
+                    return None
                 log.warning("Queue key file is empty; generating a new key")
                 empty_recover = True
             else:
-                # Non-empty but wrong length means corruption; do not silently
-                # replace it (that would orphan existing secrets without notice).
+                # Non-empty but wrong length means corruption; do not replace.
                 raise QueueKeyError(
                     f"Queue key file has unexpected length {len(data)}; refusing to use it"
                 )
+        if not create:
+            return None
         key = os.urandom(_QUEUE_KEY_LEN)
         self.key_path.parent.mkdir(parents=True, exist_ok=True)
         if empty_recover:
@@ -128,15 +136,27 @@ class QueueSecretBox:
         self._key = key
         return key
 
-    def encrypt(self, plaintext: str) -> str:
+    def encrypt(self, plaintext: str, allow_create: bool = True) -> str:
+        """Encrypt a queue secret. When ``allow_create`` is False and no valid
+        key exists, raise instead of creating one (used when other encrypted
+        secrets already exist, to avoid orphaning them)."""
+        key = self.load_key(create=allow_create)
+        if key is None:
+            raise QueueKeyError(
+                "No queue key is available to encrypt the secret and creating a new "
+                "one is refused because encrypted queue secrets already exist"
+            )
         nonce = os.urandom(12)
-        ct = AESGCM(self._load_or_create_key()).encrypt(
-            nonce, plaintext.encode("utf-8"), _QUEUE_SECRET_AAD
-        )
+        ct = AESGCM(key).encrypt(nonce, plaintext.encode("utf-8"), _QUEUE_SECRET_AAD)
         blob = bytes([_QUEUE_SECRET_VERSION]) + nonce + ct
         return base64.b64encode(blob).decode("ascii")
 
     def decrypt(self, token: str) -> str:
+        # Decryption never creates a key; a missing key means the secret is
+        # currently unrecoverable (the caller preserves the original blob).
+        key = self.load_key(create=False)
+        if key is None:
+            raise QueueKeyError("Queue key is missing; cannot decrypt the stored secret")
         raw = base64.b64decode(token)
         # Accept the versioned blob (v1) and, for forward safety, an unversioned
         # legacy blob (nonce||ct) produced by an earlier build of this branch.
@@ -146,9 +166,7 @@ class QueueSecretBox:
             nonce, ct = raw[:12], raw[12:]
         else:
             raise ValueError("Queue secret blob too short")
-        return (
-            AESGCM(self._load_or_create_key()).decrypt(nonce, ct, _QUEUE_SECRET_AAD).decode("utf-8")
-        )
+        return AESGCM(key).decrypt(nonce, ct, _QUEUE_SECRET_AAD).decode("utf-8")
 
 
 class QueueManager:
@@ -190,7 +208,11 @@ class QueueManager:
         data = asdict(item)
         data.pop("password", None)
         if item.password:
-            data["enc_password"] = self.secret_box.encrypt(item.password)
+            # Only allow creating a fresh key when no encrypted secrets already
+            # exist; otherwise creating a key would orphan those secrets.
+            data["enc_password"] = self.secret_box.encrypt(
+                item.password, allow_create=not self._had_encrypted_secrets
+            )
         else:
             # Pass through an unrecoverable token unchanged rather than losing it.
             data["enc_password"] = getattr(item, "_enc_password", None)
@@ -198,19 +220,39 @@ class QueueManager:
 
     def _load(self) -> None:
         self._needs_migration = False
+        # Conservative default: assume secrets may exist until we have parsed
+        # the file, so we never auto-create a key over a malformed queue.
+        self._had_encrypted_secrets = False
         if not self.path.exists():
             self.items = []
             return
         try:
             with open(self.path, encoding="utf-8") as f:
                 data = json.load(f)
-            self.items = [self._deserialize(i) for i in data]
         except (json.JSONDecodeError, OSError, TypeError):
+            # Malformed/unreadable queue: do not rewrite it and do not create a
+            # key. Treat as possibly holding secrets so key creation is refused.
+            self._had_encrypted_secrets = True
+            self.items = []
+            return
+        # Determine up front whether any encrypted secrets already exist; this
+        # governs whether a missing/empty key may be safely (re)created.
+        try:
+            self._had_encrypted_secrets = any(
+                isinstance(i, dict) and i.get("enc_password") for i in data
+            )
+            self.items = [self._deserialize(i) for i in data]
+        except (TypeError, AttributeError):
+            self._had_encrypted_secrets = True
             self.items = []
             return
         # Rewrite once to encrypt any legacy plaintext passwords found on load.
+        # If the key cannot be created safely, preserve the original file.
         if self._needs_migration:
-            self.save()
+            try:
+                self.save()
+            except QueueKeyError as exc:
+                log.warning("Could not migrate legacy queue secrets: %s", exc)
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
