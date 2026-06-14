@@ -184,6 +184,10 @@ def _decrypt_v2(
             blen = struct.unpack(">I", _read_exact(fin, 4, "missing length prefix"))[0]
             if blen < NONCE_LEN + TAG_LEN:
                 raise CrypterError("Corrupt chunk length")
+            # Bound the declared length to the header chunk size so a hostile
+            # header cannot force a huge read/allocation.
+            if blen > NONCE_LEN + chunk_size + TAG_LEN:
+                raise CrypterError("Declared chunk length exceeds header chunk size")
             block = _read_exact(fin, blen, "short read")
             nonce = block[:NONCE_LEN]
             ciphertext = block[NONCE_LEN:]

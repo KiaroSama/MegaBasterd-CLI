@@ -150,3 +150,33 @@ def test_no_files_created_outside_output_root(tmp_path: Path) -> None:
     MegaFolderDownloader._build_file_jobs(nodes, output, "root")
     siblings = [p for p in tmp_path.iterdir() if p != output]
     assert siblings == [], f"Unexpected files created outside output root: {siblings}"
+
+
+def test_symlink_escape_rejected(tmp_path: Path) -> None:
+    output = tmp_path / "out"
+    output.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = output / "link"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        import pytest as _pytest
+
+        _pytest.skip("symlink creation not permitted on this platform/account")
+    # A path traversing the symlink resolves outside the output root.
+    assert not is_within_directory(output, link / "escaped.bin")
+
+
+def test_unicode_name_preserved(tmp_path: Path) -> None:
+    name = "Película Año 2024 — épisode.mkv"
+    assert sanitize_filename(name) == name
+    nodes = [_folder("root", "", "Root"), _file("f", "root", name)]
+    jobs = MegaFolderDownloader._build_file_jobs(nodes, tmp_path, "root")
+    assert jobs[0][1] == tmp_path / "Root" / name
+
+
+def test_sibling_prefix_not_treated_as_inside(tmp_path: Path) -> None:
+    base = tmp_path / "out"
+    base.mkdir()
+    assert not is_within_directory(base, tmp_path / "output-evil" / "x")
