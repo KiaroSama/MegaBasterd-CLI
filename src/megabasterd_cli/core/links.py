@@ -595,6 +595,10 @@ def decrypt_dlc_container(
         proxies=proxies,
     )
     response.raise_for_status()
+    # Refuse a response that was redirected down to plaintext HTTP.
+    final_url = getattr(response, "url", "") or ""
+    if final_url.startswith("http://"):
+        raise ValueError("DLC service redirected to insecure HTTP; refusing")
     # Treat the third-party response as untrusted: bound its size before parsing.
     if len(response.text) > MAX_DLC_RESPONSE_BYTES:
         raise ValueError("DLC service response is unexpectedly large")

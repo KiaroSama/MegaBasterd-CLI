@@ -10,8 +10,9 @@ from megabasterd_cli.core.links import (
 
 
 class _Resp:
-    def __init__(self, text: str):
+    def __init__(self, text: str, url: str = "https://service.jdownloader.org/dlcrypt/service.php"):
         self.text = text
+        self.url = url
 
     def raise_for_status(self) -> None:
         return None
@@ -43,6 +44,16 @@ def test_oversized_response_rejected(monkeypatch) -> None:
 
     monkeypatch.setattr("requests.post", fake_post)
     with pytest.raises(ValueError, match="too short|large"):
+        decrypt_dlc_container("B" * 100)
+
+
+def test_redirect_to_http_rejected(monkeypatch) -> None:
+    def fake_post(url, data, headers, timeout, proxies):
+        # Simulate the library following a redirect that downgraded to HTTP.
+        return _Resp("<rc>x</rc>", url="http://evil.example/dlcrypt/service.php")
+
+    monkeypatch.setattr("requests.post", fake_post)
+    with pytest.raises(ValueError, match="insecure HTTP"):
         decrypt_dlc_container("B" * 100)
 
 
