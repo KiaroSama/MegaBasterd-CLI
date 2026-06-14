@@ -99,9 +99,7 @@ def stream(
         proxy_pool=proxy_pool,
         force_proxy=cfg.force_smart_proxy,
     )
-    server = StreamingServer(
-        api=api, host=host, port=port, proxies=proxies, auth_token=auth_token
-    )
+    server = StreamingServer(api=api, host=host, port=port, proxies=proxies, auth_token=auth_token)
     try:
         server.set_source(url, password=password)
     except Exception as exc:  # noqa: BLE001

@@ -13,15 +13,15 @@ from megabasterd_cli.core.state import TransferState
 
 
 def _state(dest: Path, **over) -> TransferState:
-    base = dict(
-        transfer_type="download",
-        source="src",
-        destination=str(dest),
-        total_size=1024,
-        completed_chunks=[0],
-        chunk_macs={0: "aa" * 16},
-        metadata={"aes_key": ("01" * 16), "nonce": ("02" * 8)},
-    )
+    base = {
+        "transfer_type": "download",
+        "source": "src",
+        "destination": str(dest),
+        "total_size": 1024,
+        "completed_chunks": [0],
+        "chunk_macs": {0: "aa" * 16},
+        "metadata": {"aes_key": ("01" * 16), "nonce": ("02" * 8)},
+    }
     base.update(over)
     return TransferState(**base)
 
@@ -65,6 +65,4 @@ def test_accepts_fully_matching_state(tmp_path: Path) -> None:
     dl = MegaDownloader(api=None)
     chunks = list(iter_chunks(1024))
     state = _state(dest)
-    assert dl._is_usable_download_state(
-        state, dest, "src", 1024, b"\x01" * 16, b"\x02" * 8, chunks
-    )
+    assert dl._is_usable_download_state(state, dest, "src", 1024, b"\x01" * 16, b"\x02" * 8, chunks)

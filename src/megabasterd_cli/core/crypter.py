@@ -96,8 +96,12 @@ def encrypt_file(
     aes = AESGCM(key)
 
     src_size = src.stat().st_size
-    header = MAGIC + bytes([VERSION]) + salt + struct.pack(">I", chunk_size) + struct.pack(
-        ">Q", src_size
+    header = (
+        MAGIC
+        + bytes([VERSION])
+        + salt
+        + struct.pack(">I", chunk_size)
+        + struct.pack(">Q", src_size)
     )
 
     written = 0

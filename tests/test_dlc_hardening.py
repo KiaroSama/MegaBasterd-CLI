@@ -22,6 +22,8 @@ def test_default_endpoint_is_https() -> None:
 
 
 def test_no_silent_http_downgrade(monkeypatch) -> None:
+    import contextlib
+
     used = {}
 
     def fake_post(url, data, headers, timeout, proxies):
@@ -29,8 +31,8 @@ def test_no_silent_http_downgrade(monkeypatch) -> None:
         return _Resp("<rc>x</rc>")
 
     monkeypatch.setattr("requests.post", fake_post)
-    # The key is invalid base64-> will raise later, but we only assert the URL used.
-    with pytest.raises(Exception):
+    # Downstream decode may fail; we only assert the transport URL is HTTPS.
+    with contextlib.suppress(Exception):
         decrypt_dlc_container("B" * 100)
     assert used["url"].startswith("https://")
 

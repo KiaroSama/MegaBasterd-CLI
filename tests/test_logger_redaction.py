@@ -24,9 +24,7 @@ def test_non_sensitive_text_preserved() -> None:
 def test_child_logger_file_handler_redacts_email(tmp_path) -> None:
     log_path = tmp_path / "cli.log"
     setup_logging(level="DEBUG", log_file=log_path, quiet=True, run_id="r", command="account")
-    logging.getLogger("megabasterd_cli.accounts.manager").info(
-        "Refreshing account bob@example.net"
-    )
+    logging.getLogger("megabasterd_cli.accounts.manager").info("Refreshing account bob@example.net")
     logging.shutdown()
     text = log_path.read_text(encoding="utf-8")
     assert "bob@example.net" not in text
