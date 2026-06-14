@@ -32,11 +32,12 @@ MegaCrypter (third-party host):
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 
 class LinkType(str, Enum):
@@ -560,6 +561,57 @@ DLC_MASTER_KEY = bytes.fromhex("447E787351E60E2C6A96B3964BE0C9BD")
 # Cap the DLC service response to avoid unbounded memory use on a hostile or
 # malfunctioning endpoint. Real responses are a few KB.
 MAX_DLC_RESPONSE_BYTES = 2_000_000
+# Maximum number of HTTPS redirects the DLC resolver will follow.
+MAX_DLC_REDIRECTS = 5
+
+
+def _dlc_post(
+    service_url: str,
+    body: str,
+    headers: dict[str, str],
+    timeout: int,
+    proxies: dict[str, str] | None,
+    max_redirects: int = MAX_DLC_REDIRECTS,
+):
+    """POST to the DLC service, following only HTTPS->HTTPS redirects.
+
+    Automatic redirect following is disabled. Each ``Location`` is resolved and
+    validated to be an absolute ``https://`` URL before another request is sent,
+    so an HTTPS->HTTP downgrade can never reach the insecure destination (no
+    request is issued to a rejected URL). TLS verification, timeout, and proxies
+    are preserved on every hop.
+    """
+    import requests
+
+    current = service_url
+    for _ in range(max_redirects + 1):
+        # Validate the scheme before connecting so a non-HTTPS target (including
+        # a caller-supplied service_url) is never contacted.
+        if urlparse(current).scheme != "https":
+            raise ValueError("Refusing to contact a non-HTTPS DLC URL")
+        resp = requests.post(
+            current,
+            data=body,
+            headers=headers,
+            timeout=timeout,
+            proxies=proxies,
+            allow_redirects=False,
+        )
+        status = getattr(resp, "status_code", 200)
+        if status in (301, 302, 303, 307, 308):
+            location = resp.headers.get("Location") if hasattr(resp, "headers") else None
+            with contextlib.suppress(Exception):
+                resp.close()
+            if not location:
+                raise ValueError("DLC redirect is missing a Location header")
+            nxt = urljoin(current, location.strip())
+            parts = urlparse(nxt)
+            if parts.scheme != "https" or not parts.netloc:
+                raise ValueError("Refusing DLC redirect to a non-HTTPS destination")
+            current = nxt
+            continue
+        return resp
+    raise ValueError("DLC service exceeded the maximum number of redirects")
 
 
 def decrypt_dlc_container(
@@ -569,7 +621,6 @@ def decrypt_dlc_container(
     proxies: dict[str, str] | None = None,
 ) -> list[str]:
     """Decrypt a JDownloader DLC container and return the contained URLs."""
-    import requests
     from Crypto.Cipher import AES
 
     text = data.decode("utf-8", errors="ignore") if isinstance(data, bytes) else data
@@ -579,10 +630,10 @@ def decrypt_dlc_container(
 
     dlc_id = text[-88:]
     enc_dlc_data = text[:-88].strip()
-    response = requests.post(
+    response = _dlc_post(
         service_url,
-        data=f"destType=jdtc6&b=JD&srcType=dlc&data={dlc_id}&v={DLC_REV}",
-        headers={
+        f"destType=jdtc6&b=JD&srcType=dlc&data={dlc_id}&v={DLC_REV}",
+        {
             "User-Agent": "Mozilla/5.0 (X11; U; Linux amd64; rv:44.0) Gecko/20100101 Firefox/44.0",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "de,en-gb;q=0.7, en;q=0.3",
@@ -591,14 +642,10 @@ def decrypt_dlc_container(
             "Cache-Control": "no-cache",
             "rev": DLC_REV,
         },
-        timeout=timeout,
-        proxies=proxies,
+        timeout,
+        proxies,
     )
     response.raise_for_status()
-    # Refuse a response that was redirected down to plaintext HTTP.
-    final_url = getattr(response, "url", "") or ""
-    if final_url.startswith("http://"):
-        raise ValueError("DLC service redirected to insecure HTTP; refusing")
     # Treat the third-party response as untrusted: bound its size before parsing.
     if len(response.text) > MAX_DLC_RESPONSE_BYTES:
         raise ValueError("DLC service response is unexpectedly large")
