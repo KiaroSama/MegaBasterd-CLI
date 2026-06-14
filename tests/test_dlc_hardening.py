@@ -4,6 +4,8 @@ The resolver must never follow an HTTPS->HTTP redirect, and must never send a
 request to a rejected insecure destination.
 """
 
+from __future__ import annotations
+
 import contextlib
 
 import pytest

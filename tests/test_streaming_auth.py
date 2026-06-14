@@ -3,6 +3,8 @@
 Non-loopback binds must require a token; loopback stays unauthenticated.
 """
 
+from __future__ import annotations
+
 import http.client
 import threading
 
