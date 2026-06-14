@@ -13,12 +13,14 @@ entire file first.
 
 from __future__ import annotations
 
+import hmac
+import ipaddress
 import logging
 import mimetypes
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 import requests
 
@@ -35,6 +37,24 @@ from ..utils.helpers import sanitize_filename
 log = logging.getLogger(__name__)
 
 URL_EXPIRY_STATUS = {403, 410, 509}
+
+
+def is_loopback_host(host: str) -> bool:
+    """Return True only for loopback binds (127.0.0.0/8, ::1, localhost).
+
+    Wildcard binds ("0.0.0.0", "::"), LAN addresses, and hostnames are treated
+    as non-loopback so the caller can require authentication for them.
+    """
+    if not host:
+        return False
+    candidate = host.strip().lower()
+    if candidate in ("localhost", "localhost.localdomain"):
+        return True
+    candidate = candidate.strip("[]")
+    try:
+        return ipaddress.ip_address(candidate).is_loopback
+    except ValueError:
+        return False
 
 
 def _content_disposition(filename: str) -> str:
@@ -191,7 +211,40 @@ class _StreamingRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:  # noqa: A002
         log.debug("HTTP: " + format, *args)
 
+    def _check_auth(self) -> bool:
+        """Validate the access token when the server requires one.
+
+        Accepts either an ``Authorization: Bearer <token>`` header or a
+        ``?token=`` / ``?access_token=`` query parameter. Comparison is
+        constant-time. Loopback servers run without a token (returns True).
+        """
+        token = self.server.auth_token
+        if not token:
+            return True
+        supplied: str | None = None
+        auth_header = self.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            supplied = auth_header[len("Bearer ") :].strip()
+        if supplied is None:
+            query = parse_qs(urlsplit(self.path).query)
+            values = query.get("token") or query.get("access_token")
+            if values:
+                supplied = values[0]
+        if supplied is None:
+            return False
+        return hmac.compare_digest(supplied, token)
+
+    def _reject_unauthorized(self) -> None:
+        # No file content is served; do not echo the expected token.
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Bearer realm="megabasterd-cli"')
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_HEAD(self) -> None:  # noqa: N802
+        if not self._check_auth():
+            self._reject_unauthorized()
+            return
         source = self.server.source
         if not source:
             self.send_error(503, "No source configured")
@@ -204,6 +257,9 @@ class _StreamingRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:  # noqa: N802
+        if not self._check_auth():
+            self._reject_unauthorized()
+            return
         source = self.server.source
         if not source:
             self.send_error(503, "No source configured")
@@ -336,11 +392,15 @@ class StreamingServer(ThreadingHTTPServer):
         host: str = "127.0.0.1",
         port: int = 8080,
         proxies: dict[str, str] | None = None,
+        auth_token: str | None = None,
     ):
         super().__init__((host, port), _StreamingRequestHandler)
         self.api = api
         self.source: _StreamSource | None = None
         self.proxies = proxies
+        # When set, every request (GET/HEAD, including Range) must present this
+        # token. Required for non-loopback binds; None means no authentication.
+        self.auth_token = auth_token
 
     def set_source(self, url: str, password: str | None = None) -> None:
         self.source = _StreamSource(url, self.api, password=password, proxies=self.proxies)
