@@ -1,11 +1,16 @@
 """Regression tests for queued password protection at rest (Priority 5)."""
 
+import base64
 import json
 from pathlib import Path
+
+import pytest
+from cryptography.exceptions import InvalidTag
 
 from megabasterd_cli.queue.manager import (
     JobType,
     QueueItem,
+    QueueKeyError,
     QueueManager,
     QueueSecretBox,
 )
@@ -124,3 +129,45 @@ def test_repr_does_not_leak_password(tmp_path: Path) -> None:
         password="leaky",
     )
     assert "leaky" not in repr(item)
+
+
+def test_versioned_self_identifying_blob(tmp_path: Path) -> None:
+    box = QueueSecretBox(tmp_path / "k.key")
+    token = box.encrypt("hello")
+    raw = base64.b64decode(token)
+    assert raw[0] == 1  # version byte
+    assert box.decrypt(token) == "hello"
+
+
+def test_corrupted_ciphertext_rejected(tmp_path: Path) -> None:
+    box = QueueSecretBox(tmp_path / "k.key")
+    token = bytearray(base64.b64decode(box.encrypt("hello")))
+    token[-1] ^= 0xFF
+    bad = base64.b64encode(bytes(token)).decode()
+    with pytest.raises(InvalidTag):
+        box.decrypt(bad)
+
+
+def test_corrupt_key_file_rejected(tmp_path: Path) -> None:
+    key_path = tmp_path / "k.key"
+    key_path.write_bytes(b"too-short")  # non-empty, wrong length
+    box = QueueSecretBox(key_path)
+    with pytest.raises(QueueKeyError):
+        box.encrypt("x")
+
+
+def test_empty_key_file_is_recreated(tmp_path: Path) -> None:
+    key_path = tmp_path / "k.key"
+    key_path.write_bytes(b"")  # empty/partial write
+    box = QueueSecretBox(key_path)
+    token = box.encrypt("v")
+    assert box.decrypt(token) == "v"
+    assert key_path.stat().st_size == 32
+
+
+def test_missing_key_is_created(tmp_path: Path) -> None:
+    key_path = tmp_path / "sub" / "k.key"
+    box = QueueSecretBox(key_path)
+    box.encrypt("v")
+    assert key_path.exists()
+    assert key_path.stat().st_size == 32

@@ -22,6 +22,12 @@ log = logging.getLogger(__name__)
 
 # Associated data tag so a queue secret blob cannot be reused in another context.
 _QUEUE_SECRET_AAD = b"megabasterd-cli/queue-secret"
+_QUEUE_KEY_LEN = 32
+_QUEUE_SECRET_VERSION = 1  # First byte of the decoded blob (self-identifying).
+
+
+class QueueKeyError(Exception):
+    """Raised when the local queue key file is present but corrupt."""
 
 
 class JobStatus(str, Enum):
@@ -62,11 +68,16 @@ class QueueSecretBox:
     """Encrypts queue item secrets at rest with a locally stored random key.
 
     A 32-byte key is generated once and stored next to the queue file with
-    restrictive permissions. Secrets are sealed with AES-256-GCM. This keeps
-    plaintext passwords out of ``queue.json`` (and any backup/sync of it) while
-    preserving non-interactive queue runs (no passphrase prompt). It does not
-    protect against an attacker who can also read the key file; for that, run
-    the queue with an unlocked credential vault instead.
+    restrictive permissions. Secrets are sealed with AES-256-GCM and stored as a
+    self-identifying, versioned blob. This keeps plaintext passwords out of
+    ``queue.json`` (and any backup/sync of it) while preserving non-interactive
+    queue runs (no passphrase prompt).
+
+    Threat model: this does NOT protect against an attacker who can read BOTH
+    ``queue.json`` and the key file; possession of both allows recovery of the
+    secret. On Windows the file is created with normal user permissions (no
+    POSIX mode bits). For stronger protection, run the queue with an unlocked
+    credential vault instead.
     """
 
     def __init__(self, key_path: Path):
@@ -76,17 +87,42 @@ class QueueSecretBox:
     def _load_or_create_key(self) -> bytes:
         if self._key is not None:
             return self._key
+        empty_recover = False
         if self.key_path.exists():
             data = self.key_path.read_bytes()
-            if len(data) == 32:
+            if len(data) == _QUEUE_KEY_LEN:
                 self._key = data
                 return data
-            log.warning("Queue key file is malformed; generating a new key")
-        key = os.urandom(32)
+            if len(data) == 0:
+                # Empty/partial file (e.g. interrupted write): recreate it.
+                log.warning("Queue key file is empty; generating a new key")
+                empty_recover = True
+            else:
+                # Non-empty but wrong length means corruption; do not silently
+                # replace it (that would orphan existing secrets without notice).
+                raise QueueKeyError(
+                    f"Queue key file has unexpected length {len(data)}; refusing to use it"
+                )
+        key = os.urandom(_QUEUE_KEY_LEN)
         self.key_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.key_path.with_suffix(self.key_path.suffix + ".tmp")
-        tmp.write_bytes(key)
-        os.replace(tmp, self.key_path)
+        if empty_recover:
+            # Overwrite the empty placeholder atomically.
+            tmp = self.key_path.with_suffix(self.key_path.suffix + ".tmp")
+            tmp.write_bytes(key)
+            os.replace(tmp, self.key_path)
+        else:
+            # Race-safe exclusive create: if another process created the key
+            # first, adopt the existing valid key instead of clobbering it.
+            try:
+                fd = os.open(str(self.key_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            except FileExistsError:
+                existing = self.key_path.read_bytes()
+                if len(existing) == _QUEUE_KEY_LEN:
+                    self._key = existing
+                    return existing
+                raise QueueKeyError("Queue key file appeared but is invalid") from None
+            with os.fdopen(fd, "wb") as f:
+                f.write(key)
         with contextlib.suppress(OSError, AttributeError):
             os.chmod(self.key_path, 0o600)
         self._key = key
@@ -97,13 +133,19 @@ class QueueSecretBox:
         ct = AESGCM(self._load_or_create_key()).encrypt(
             nonce, plaintext.encode("utf-8"), _QUEUE_SECRET_AAD
         )
-        return base64.b64encode(nonce + ct).decode("ascii")
+        blob = bytes([_QUEUE_SECRET_VERSION]) + nonce + ct
+        return base64.b64encode(blob).decode("ascii")
 
     def decrypt(self, token: str) -> str:
         raw = base64.b64decode(token)
-        if len(raw) < 12 + 16:
+        # Accept the versioned blob (v1) and, for forward safety, an unversioned
+        # legacy blob (nonce||ct) produced by an earlier build of this branch.
+        if raw and raw[0] == _QUEUE_SECRET_VERSION and len(raw) >= 1 + 12 + 16:
+            nonce, ct = raw[1:13], raw[13:]
+        elif len(raw) >= 12 + 16:
+            nonce, ct = raw[:12], raw[12:]
+        else:
             raise ValueError("Queue secret blob too short")
-        nonce, ct = raw[:12], raw[12:]
         return (
             AESGCM(self._load_or_create_key()).decrypt(nonce, ct, _QUEUE_SECRET_AAD).decode("utf-8")
         )
