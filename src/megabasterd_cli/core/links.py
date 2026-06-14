@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import ipaddress
 import json
 import re
 from dataclasses import dataclass, field
@@ -565,6 +566,38 @@ MAX_DLC_RESPONSE_BYTES = 2_000_000
 MAX_DLC_REDIRECTS = 5
 
 
+def _dlc_origin(url: str) -> tuple[str, int]:
+    """Return the (lowercased host, effective port) of a DLC URL (https => 443)."""
+    parts = urlparse(url)
+    return (parts.hostname or "").lower(), (parts.port or 443)
+
+
+def _validate_dlc_target(url: str, approved_host: str, approved_port: int) -> None:
+    """Reject any DLC URL that is not same-origin HTTPS with the approved host.
+
+    Enforces: https only; no embedded credentials; a real host; literal IPs must
+    be globally routable (blocks loopback/private/link-local/reserved/multicast/
+    unspecified); and the host+port must match the approved origin. This prevents
+    SSRF via cross-host redirects even when the redirect uses HTTPS.
+    """
+    parts = urlparse(url)
+    if parts.scheme != "https":
+        raise ValueError("Refusing to contact a non-HTTPS DLC URL")
+    if parts.username or parts.password:
+        raise ValueError("Refusing DLC URL with embedded credentials")
+    host = (parts.hostname or "").lower()
+    if not host:
+        raise ValueError("Refusing DLC URL without a host")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None and not ip.is_global:
+        raise ValueError("Refusing DLC URL to a non-global IP address")
+    if host != approved_host or (parts.port or 443) != approved_port:
+        raise ValueError("Refusing cross-origin DLC redirect")
+
+
 def _dlc_post(
     service_url: str,
     body: str,
@@ -573,22 +606,23 @@ def _dlc_post(
     proxies: dict[str, str] | None,
     max_redirects: int = MAX_DLC_REDIRECTS,
 ):
-    """POST to the DLC service, following only HTTPS->HTTPS redirects.
+    """POST to the DLC service, following only same-origin HTTPS redirects.
 
-    Automatic redirect following is disabled. Each ``Location`` is resolved and
-    validated to be an absolute ``https://`` URL before another request is sent,
-    so an HTTPS->HTTP downgrade can never reach the insecure destination (no
-    request is issued to a rejected URL). TLS verification, timeout, and proxies
-    are preserved on every hop.
+    Automatic redirect following is disabled. Before every request (including
+    each redirect hop) the target is validated to be the same HTTPS origin as
+    the approved service URL (same host and port, no credentials, globally
+    routable). An unsafe destination is rejected before any request is issued to
+    it, so the DLC payload is never sent to a cross-host or downgraded target.
+    TLS verification, timeout, proxies, and the response-size limit are
+    preserved on every hop.
     """
     import requests
 
+    approved_host, approved_port = _dlc_origin(service_url)
     current = service_url
     for _ in range(max_redirects + 1):
-        # Validate the scheme before connecting so a non-HTTPS target (including
-        # a caller-supplied service_url) is never contacted.
-        if urlparse(current).scheme != "https":
-            raise ValueError("Refusing to contact a non-HTTPS DLC URL")
+        # Validate before connecting: covers the initial URL and every redirect.
+        _validate_dlc_target(current, approved_host, approved_port)
         resp = requests.post(
             current,
             data=body,
@@ -604,11 +638,9 @@ def _dlc_post(
                 resp.close()
             if not location:
                 raise ValueError("DLC redirect is missing a Location header")
-            nxt = urljoin(current, location.strip())
-            parts = urlparse(nxt)
-            if parts.scheme != "https" or not parts.netloc:
-                raise ValueError("Refusing DLC redirect to a non-HTTPS destination")
-            current = nxt
+            # Resolve relative redirects against the current HTTPS URL; the next
+            # loop iteration validates it before any request is sent.
+            current = urljoin(current, location.strip())
             continue
         return resp
     raise ValueError("DLC service exceeded the maximum number of redirects")

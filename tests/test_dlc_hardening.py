@@ -58,17 +58,86 @@ def test_normal_https_response(monkeypatch) -> None:
     assert calls[0].startswith("https://")
 
 
-def test_https_to_https_redirect_followed(monkeypatch) -> None:
+def test_same_origin_absolute_https_redirect_followed(monkeypatch) -> None:
     calls = _install_posts(
         monkeypatch,
         [
-            _Resp(status_code=302, headers={"Location": "https://mirror.example/dlcrypt"}),
+            _Resp(
+                status_code=302,
+                headers={"Location": "https://service.jdownloader.org/mirror"},
+            ),
             _Resp("<rc>x</rc>"),
         ],
     )
     with contextlib.suppress(Exception):
         decrypt_dlc_container("B" * 100)
-    assert calls == [DLC_SERVICE_URL, "https://mirror.example/dlcrypt"]
+    assert calls == [DLC_SERVICE_URL, "https://service.jdownloader.org/mirror"]
+
+
+def test_cross_host_https_redirect_rejected_without_contact(monkeypatch) -> None:
+    calls = _install_posts(
+        monkeypatch,
+        [_Resp(status_code=302, headers={"Location": "https://evil.example/dlcrypt"})],
+    )
+    with pytest.raises(ValueError, match="cross-origin"):
+        decrypt_dlc_container("B" * 100)
+    # Critical: the foreign host is never contacted.
+    assert calls == [DLC_SERVICE_URL]
+
+
+def test_scheme_relative_cross_host_redirect_rejected(monkeypatch) -> None:
+    calls = _install_posts(
+        monkeypatch,
+        [_Resp(status_code=302, headers={"Location": "//evil.example/x"})],
+    )
+    with pytest.raises(ValueError, match="cross-origin"):
+        decrypt_dlc_container("B" * 100)
+    assert calls == [DLC_SERVICE_URL]
+
+
+def test_unexpected_port_redirect_rejected(monkeypatch) -> None:
+    calls = _install_posts(
+        monkeypatch,
+        [_Resp(status_code=302, headers={"Location": "https://service.jdownloader.org:8443/x"})],
+    )
+    with pytest.raises(ValueError, match="cross-origin"):
+        decrypt_dlc_container("B" * 100)
+    assert calls == [DLC_SERVICE_URL]
+
+
+def test_embedded_credentials_redirect_rejected(monkeypatch) -> None:
+    calls = _install_posts(
+        monkeypatch,
+        [
+            _Resp(
+                status_code=302,
+                headers={"Location": "https://user:pass@service.jdownloader.org/x"},
+            )
+        ],
+    )
+    with pytest.raises(ValueError, match="credentials"):
+        decrypt_dlc_container("B" * 100)
+    assert calls == [DLC_SERVICE_URL]
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "https://localhost/x",
+        "https://127.0.0.1/x",
+        "https://[::1]/x",
+        "https://10.0.0.1/x",
+        "https://192.168.1.5/x",
+        "https://169.254.0.1/x",
+        "https://[fd00::1]/x",
+        "https://[fe80::1]/x",
+    ],
+)
+def test_internal_host_redirects_rejected(monkeypatch, location: str) -> None:
+    calls = _install_posts(monkeypatch, [_Resp(status_code=302, headers={"Location": location})])
+    with pytest.raises(ValueError, match="non-global IP|cross-origin"):
+        decrypt_dlc_container("B" * 100)
+    assert calls == [DLC_SERVICE_URL]
 
 
 def test_https_to_http_redirect_rejected_without_contacting_http(monkeypatch) -> None:
@@ -94,6 +163,12 @@ def test_relative_https_redirect_resolved(monkeypatch) -> None:
     with contextlib.suppress(Exception):
         decrypt_dlc_container("B" * 100)
     assert calls[1] == "https://service.jdownloader.org/elsewhere/service.php"
+
+
+def test_caller_supplied_internal_ip_service_url_rejected(monkeypatch) -> None:
+    _install_posts(monkeypatch, [_Resp("<rc>x</rc>")])
+    with pytest.raises(ValueError, match="non-global IP"):
+        decrypt_dlc_container("B" * 100, service_url="https://127.0.0.1/dlcrypt")
 
 
 def test_redirect_without_location_rejected(monkeypatch) -> None:
