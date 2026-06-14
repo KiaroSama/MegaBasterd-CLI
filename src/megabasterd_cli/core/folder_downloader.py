@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from ..utils.helpers import sanitize_filename
+from ..utils.helpers import ensure_within_directory, sanitize_filename
 from .crypto import (
     a32_to_bytes,
     aes_key_wrap_decrypt,
@@ -236,6 +236,7 @@ class MegaFolderDownloader:
                     quota_wait_seconds=self.downloader.quota_wait_seconds,
                     quota_max_wait_loops=self.downloader.quota_max_wait_loops,
                     keep_state_files_on_error=self.downloader.keep_state_files_on_error,
+                    overwrite=self.downloader.overwrite,
                 )
                 worker_dl.limiter = self.downloader.limiter
                 sub_folder = MegaFolderDownloader(worker_dl)
@@ -343,6 +344,9 @@ class MegaFolderDownloader:
             parent_path = path_for_handle.get(node.parent, output_dir)
             parent_path.mkdir(parents=True, exist_ok=True)
             destination = parent_path / sanitize_filename(node.name)
+            # Defense in depth: never write outside the chosen output root,
+            # even if a symlink/reparse point inside it points elsewhere.
+            ensure_within_directory(output_dir, destination)
             file_jobs.append((node, destination))
         return file_jobs
 
@@ -359,11 +363,14 @@ class MegaFolderDownloader:
             root_path = output_dir
 
         path_for_handle: dict[str, Path] = {root_handle: root_path}
+        ensure_within_directory(output_dir, root_path)
         for node in cls._sort_by_depth(nodes, root_handle):
             if node.is_file or node.handle == root_handle:
                 continue
             parent_path = path_for_handle.get(node.parent, root_path)
-            path_for_handle[node.handle] = parent_path / sanitize_filename(node.name)
+            child_path = parent_path / sanitize_filename(node.name)
+            ensure_within_directory(output_dir, child_path)
+            path_for_handle[node.handle] = child_path
         return path_for_handle
 
     @classmethod
@@ -383,7 +390,9 @@ class MegaFolderDownloader:
             if current.handle == root_handle:
                 break
             current = by_handle.get(current.parent)
-        return output_dir.joinpath(*reversed(parts))
+        destination = output_dir.joinpath(*reversed(parts))
+        ensure_within_directory(output_dir, destination)
+        return destination
 
     @staticmethod
     def _sort_by_depth(nodes: list[FolderNode], root: str) -> list[FolderNode]:

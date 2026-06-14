@@ -52,6 +52,7 @@ def _redacted_argv(argv: list[str]) -> list[str]:
         "--vault-passphrase",
         "--mfa-code",
         "--elc-api-key",
+        "--token",
     }
     for arg in argv:
         if sensitive_next:
@@ -61,6 +62,10 @@ def _redacted_argv(argv: list[str]) -> list[str]:
         if arg in sensitive_options:
             redacted.append(arg)
             sensitive_next = True
+            continue
+        # Also redact inline `--option=value` forms of sensitive options.
+        if "=" in arg and arg.split("=", 1)[0] in sensitive_options:
+            redacted.append(arg.split("=", 1)[0] + "=<redacted>")
             continue
         if any(prefix in arg for prefix in ("mega.nz/", "mega.co.nz/", "mc://", "mega://")):
             redacted.append("<redacted-link>")

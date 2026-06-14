@@ -136,3 +136,12 @@ desktop.ini
 
 # Local assistant/tooling state
 .claude/
+
+# Private, local-only AI handoff document (never publish)
+explain-AI.md
+
+# Private, local-only directory (never publish), at any depth
+.ignoreme
+.ignoreme/
+**/.ignoreme
+**/.ignoreme/

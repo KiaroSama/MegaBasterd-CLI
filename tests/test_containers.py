@@ -84,7 +84,7 @@ def test_decrypt_dlc_container(monkeypatch):
     dlc_id = "A" * 88
     dlc_data = base64.b64encode(enc_data).decode() + dlc_id
 
-    def fake_post(url, data, headers, timeout, proxies):
+    def fake_post(url, data, headers, timeout, proxies, allow_redirects=None):
         assert "srcType=dlc" in data
         return DummyResponse({}, text=f"<rc>{base64.b64encode(enc_key).decode()}</rc>")
 

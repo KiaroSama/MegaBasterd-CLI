@@ -32,11 +32,13 @@ MegaCrypter (third-party host):
 from __future__ import annotations
 
 import base64
+import contextlib
+import ipaddress
 import json
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 
 class LinkType(str, Enum):
@@ -554,9 +556,125 @@ def resolve_elc_links(
     return links
 
 
-DLC_SERVICE_URL = "http://service.jdownloader.org/dlcrypt/service.php"
+DLC_SERVICE_URL = "https://service.jdownloader.org/dlcrypt/service.php"
 DLC_REV = "34065"
 DLC_MASTER_KEY = bytes.fromhex("447E787351E60E2C6A96B3964BE0C9BD")
+# Cap the DLC service response to avoid unbounded memory use on a hostile or
+# malfunctioning endpoint. Real responses are a few KB.
+MAX_DLC_RESPONSE_BYTES = 2_000_000
+# Maximum number of HTTPS redirects the DLC resolver will follow.
+MAX_DLC_REDIRECTS = 5
+# Exact approved DLC service origins as (normalized host, port). Only the
+# official JDownloader DLC service is allowed; any other initial endpoint is
+# refused to prevent SSRF, even if it uses HTTPS and resolves publicly.
+_APPROVED_DLC_ORIGINS = frozenset({("service.jdownloader.org", 443)})
+
+
+def _normalize_host(host: str) -> str:
+    """Normalize a hostname for exact origin comparison.
+
+    Lowercases, strips a single trailing dot, and converts to ASCII/IDNA so a
+    Unicode lookalike or trailing-dot variant cannot be mistaken for an approved
+    host. IP literals and un-encodable values are returned lowercased unchanged
+    (they simply will not match the domain allowlist).
+    """
+    host = (host or "").strip().lower().rstrip(".")
+    if not host:
+        return ""
+    try:
+        # idna encoding maps Unicode lookalikes to punycode; pure-ASCII hosts
+        # are returned unchanged.
+        return host.encode("idna").decode("ascii")
+    except (UnicodeError, ValueError):
+        return host
+
+
+def _dlc_origin(url: str) -> tuple[str, int]:
+    """Return the (normalized host, effective port) of a DLC URL (https => 443)."""
+    parts = urlparse(url)
+    return _normalize_host(parts.hostname or ""), (parts.port or 443)
+
+
+def _validate_dlc_target(url: str, approved_host: str, approved_port: int) -> None:
+    """Reject any DLC URL that is not same-origin HTTPS with the approved host.
+
+    Enforces: https only; no embedded credentials; a real host; literal IPs must
+    be globally routable (blocks loopback/private/link-local/reserved/multicast/
+    unspecified); and the normalized host+port must match the approved origin.
+    This prevents SSRF via cross-host redirects even when the redirect uses
+    HTTPS, and resists trailing-dot / IDN-lookalike bypasses.
+    """
+    parts = urlparse(url)
+    if parts.scheme != "https":
+        raise ValueError("Refusing to contact a non-HTTPS DLC URL")
+    if parts.username or parts.password:
+        raise ValueError("Refusing DLC URL with embedded credentials")
+    raw_host = parts.hostname or ""
+    host = _normalize_host(raw_host)
+    if not host:
+        raise ValueError("Refusing DLC URL without a host")
+    try:
+        ip = ipaddress.ip_address(raw_host)
+    except ValueError:
+        ip = None
+    if ip is not None and not ip.is_global:
+        raise ValueError("Refusing DLC URL to a non-global IP address")
+    if host != approved_host or (parts.port or 443) != approved_port:
+        raise ValueError("Refusing cross-origin DLC redirect")
+
+
+def _dlc_post(
+    service_url: str,
+    body: str,
+    headers: dict[str, str],
+    timeout: int,
+    proxies: dict[str, str] | None,
+    max_redirects: int = MAX_DLC_REDIRECTS,
+):
+    """POST to the DLC service, following only same-origin HTTPS redirects.
+
+    Automatic redirect following is disabled. Before every request (including
+    each redirect hop) the target is validated to be the same HTTPS origin as
+    the approved service URL (same host and port, no credentials, globally
+    routable). An unsafe destination is rejected before any request is issued to
+    it, so the DLC payload is never sent to a cross-host or downgraded target.
+    TLS verification, timeout, proxies, and the response-size limit are
+    preserved on every hop.
+    """
+    import requests
+
+    approved_host, approved_port = _dlc_origin(service_url)
+    # The initial endpoint must be an explicitly approved origin (anti-SSRF).
+    # Run per-target checks first so scheme/credential/IP problems get a precise
+    # error, then enforce the exact-origin allowlist.
+    _validate_dlc_target(service_url, approved_host, approved_port)
+    if (approved_host, approved_port) not in _APPROVED_DLC_ORIGINS:
+        raise ValueError("Refusing DLC request to an unapproved service endpoint")
+    current = service_url
+    for _ in range(max_redirects + 1):
+        # Validate before connecting: covers the initial URL and every redirect.
+        _validate_dlc_target(current, approved_host, approved_port)
+        resp = requests.post(
+            current,
+            data=body,
+            headers=headers,
+            timeout=timeout,
+            proxies=proxies,
+            allow_redirects=False,
+        )
+        status = getattr(resp, "status_code", 200)
+        if status in (301, 302, 303, 307, 308):
+            location = resp.headers.get("Location") if hasattr(resp, "headers") else None
+            with contextlib.suppress(Exception):
+                resp.close()
+            if not location:
+                raise ValueError("DLC redirect is missing a Location header")
+            # Resolve relative redirects against the current HTTPS URL; the next
+            # loop iteration validates it before any request is sent.
+            current = urljoin(current, location.strip())
+            continue
+        return resp
+    raise ValueError("DLC service exceeded the maximum number of redirects")
 
 
 def decrypt_dlc_container(
@@ -566,7 +684,6 @@ def decrypt_dlc_container(
     proxies: dict[str, str] | None = None,
 ) -> list[str]:
     """Decrypt a JDownloader DLC container and return the contained URLs."""
-    import requests
     from Crypto.Cipher import AES
 
     text = data.decode("utf-8", errors="ignore") if isinstance(data, bytes) else data
@@ -576,10 +693,10 @@ def decrypt_dlc_container(
 
     dlc_id = text[-88:]
     enc_dlc_data = text[:-88].strip()
-    response = requests.post(
+    response = _dlc_post(
         service_url,
-        data=f"destType=jdtc6&b=JD&srcType=dlc&data={dlc_id}&v={DLC_REV}",
-        headers={
+        f"destType=jdtc6&b=JD&srcType=dlc&data={dlc_id}&v={DLC_REV}",
+        {
             "User-Agent": "Mozilla/5.0 (X11; U; Linux amd64; rv:44.0) Gecko/20100101 Firefox/44.0",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "de,en-gb;q=0.7, en;q=0.3",
@@ -588,10 +705,13 @@ def decrypt_dlc_container(
             "Cache-Control": "no-cache",
             "rev": DLC_REV,
         },
-        timeout=timeout,
-        proxies=proxies,
+        timeout,
+        proxies,
     )
     response.raise_for_status()
+    # Treat the third-party response as untrusted: bound its size before parsing.
+    if len(response.text) > MAX_DLC_RESPONSE_BYTES:
+        raise ValueError("DLC service response is unexpectedly large")
     m = re.search(r"<\s*rc\s*>(.+?)<\s*/\s*rc\s*>", response.text, re.IGNORECASE | re.DOTALL)
     if not m:
         raise ValueError("DLC service did not return a key")
