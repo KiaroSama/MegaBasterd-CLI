@@ -10,10 +10,19 @@ _INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
 def sanitize_filename(name: str, replacement: str = "_") -> str:
-    """Replace characters that are invalid in filenames on Windows/Linux/macOS."""
+    """Replace characters that are invalid in filenames on Windows/Linux/macOS.
+
+    The result is always a safe *single* path component: it can never be empty,
+    ".", "..", or a name made only of dots/whitespace, and it never contains a
+    path separator. This stops attacker-controlled remote node names from being
+    used for directory traversal (e.g. a folder share whose node name is "..").
+    """
     cleaned = _INVALID_FILENAME_CHARS.sub(replacement, name).strip()
-    # Avoid empty names and reserved Windows names
-    if not cleaned:
+    # Windows ignores trailing dots and spaces; drop them so "evil." or "name "
+    # cannot silently collide with, or escape past, a real name.
+    cleaned = cleaned.rstrip(" .")
+    # Reject empty, dot-only, or whitespace-only components (".", "..", "...").
+    if not cleaned or set(cleaned) <= {".", " "}:
         cleaned = "unnamed"
     reserved = (
         {"CON", "PRN", "AUX", "NUL"}
@@ -82,6 +91,40 @@ def file_md5(path: Path, chunk: int = 65536) -> str:
         for block in iter(lambda: f.read(chunk), b""):
             h.update(block)
     return h.hexdigest()
+
+
+def is_within_directory(base: Path, target: Path) -> bool:
+    """Return True only when `target` resolves to a location inside `base`.
+
+    Resolves symlinks/`..` segments without requiring `target` to exist, then
+    compares using `os.path.commonpath` (not a string prefix, which would treat
+    `/out-evil` as inside `/out`). Case is normalized for Windows. Returns False
+    across different drives.
+    """
+    try:
+        base_resolved = base.resolve()
+        target_resolved = target.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    base_s = os.path.normcase(str(base_resolved))
+    target_s = os.path.normcase(str(target_resolved))
+    try:
+        return os.path.commonpath([base_s, target_s]) == base_s
+    except ValueError:
+        # Raised when the paths are on different drives/roots.
+        return False
+
+
+def ensure_within_directory(base: Path, target: Path) -> Path:
+    """Return `target` if it is inside `base`, otherwise raise ValueError.
+
+    Use this as a defense-in-depth guard before creating directories, opening
+    destination files, preallocating, resuming, or writing transfer state from
+    paths derived from untrusted remote names.
+    """
+    if not is_within_directory(base, target):
+        raise ValueError(f"Refusing path outside the output directory: {target}")
+    return target
 
 
 def available_disk_space(path: Path) -> int:

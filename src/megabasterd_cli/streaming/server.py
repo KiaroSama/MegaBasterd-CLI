@@ -13,12 +13,14 @@ entire file first.
 
 from __future__ import annotations
 
+import hmac
+import ipaddress
 import logging
 import mimetypes
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 import requests
 
@@ -35,6 +37,29 @@ from ..utils.helpers import sanitize_filename
 log = logging.getLogger(__name__)
 
 URL_EXPIRY_STATUS = {403, 410, 509}
+
+
+def is_loopback_host(host: str) -> bool:
+    """Return True only for loopback binds (127.0.0.0/8, ::1, localhost).
+
+    Wildcard binds ("0.0.0.0", "::"), LAN addresses, and hostnames are treated
+    as non-loopback so the caller can require authentication for them.
+    """
+    if not host:
+        return False
+    candidate = host.strip().lower()
+    if candidate in ("localhost", "localhost.localdomain"):
+        return True
+    candidate = candidate.strip("[]")
+    try:
+        return ipaddress.ip_address(candidate).is_loopback
+    except ValueError:
+        return False
+
+
+def _strip_query(value: str) -> str:
+    """Drop any query string from a request-line/path so tokens never reach logs."""
+    return value.split("?", 1)[0] if "?" in value else value
 
 
 def _content_disposition(filename: str) -> str:
@@ -189,9 +214,50 @@ class _StreamingRequestHandler(BaseHTTPRequestHandler):
     server: StreamingServer  # type: ignore[assignment]
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002
-        log.debug("HTTP: " + format, *args)
+        # Never log the raw request path: it may carry a ?token= access token.
+        # We log only method + path (query stripped) at debug level.
+        try:
+            safe_args = tuple(_strip_query(a) if isinstance(a, str) else a for a in args)
+        except Exception:  # noqa: BLE001
+            safe_args = args
+        log.debug("HTTP: " + format, *safe_args)
+
+    def _check_auth(self) -> bool:
+        """Validate the access token when the server requires one.
+
+        The primary method is ``Authorization: Bearer <token>``. A ``?token=``
+        query parameter is accepted ONLY when the server was started with
+        ``allow_query_token=True`` (off by default), because query strings leak
+        into logs, history, and referrers. Comparison is constant-time.
+        Loopback servers run without a token (returns True).
+        """
+        token = self.server.auth_token
+        if not token:
+            return True
+        supplied: str | None = None
+        auth_header = self.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            supplied = auth_header[len("Bearer ") :].strip()
+        if supplied is None and self.server.allow_query_token:
+            query = parse_qs(urlsplit(self.path).query)
+            values = query.get("token") or query.get("access_token")
+            if values:
+                supplied = values[0]
+        if supplied is None:
+            return False
+        return hmac.compare_digest(supplied, token)
+
+    def _reject_unauthorized(self) -> None:
+        # No file content is served; do not echo the expected token.
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Bearer realm="megabasterd-cli"')
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_HEAD(self) -> None:  # noqa: N802
+        if not self._check_auth():
+            self._reject_unauthorized()
+            return
         source = self.server.source
         if not source:
             self.send_error(503, "No source configured")
@@ -204,6 +270,9 @@ class _StreamingRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:  # noqa: N802
+        if not self._check_auth():
+            self._reject_unauthorized()
+            return
         source = self.server.source
         if not source:
             self.send_error(503, "No source configured")
@@ -336,11 +405,19 @@ class StreamingServer(ThreadingHTTPServer):
         host: str = "127.0.0.1",
         port: int = 8080,
         proxies: dict[str, str] | None = None,
+        auth_token: str | None = None,
+        allow_query_token: bool = False,
     ):
         super().__init__((host, port), _StreamingRequestHandler)
         self.api = api
         self.source: _StreamSource | None = None
         self.proxies = proxies
+        # When set, every request (GET/HEAD, including Range) must present this
+        # token. Required for non-loopback binds; None means no authentication.
+        self.auth_token = auth_token
+        # Bearer header is always accepted; query-string tokens only when this
+        # is explicitly enabled (they leak into logs/history).
+        self.allow_query_token = allow_query_token
 
     def set_source(self, url: str, password: str | None = None) -> None:
         self.source = _StreamSource(url, self.api, password=password, proxies=self.proxies)

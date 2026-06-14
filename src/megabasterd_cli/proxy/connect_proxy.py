@@ -40,6 +40,23 @@ HTTP_FORWARD_RE = re.compile(
 AUTH_RE = re.compile(r"^Proxy-Authorization:\s*Basic\s+(?P<creds>\S+)\s*$", re.IGNORECASE)
 
 
+def check_destination(host: str, port: int, is_connect: bool, allow_any_port: bool) -> str | None:
+    """Return None if the destination is allowed, else a short rejection reason.
+
+    The same host allow-list and port policy apply to every forwarding mode
+    (CONNECT tunnels and absolute-form HTTP requests). Unless `allow_any_port`
+    is set, CONNECT is limited to 443 (HTTPS) and plain-HTTP forwarding to
+    80/443, so an allowed MEGA host cannot be reached on an arbitrary port.
+    """
+    if not ALLOWED_HOST_RE.match(host):
+        return "Forbidden host"
+    if not allow_any_port:
+        allowed = {443} if is_connect else {80, 443}
+        if port not in allowed:
+            return "Forbidden port"
+    return None
+
+
 class _ProxyHandler:
     def __init__(self, password: str, allow_any_port: bool = False):
         self.password = password
@@ -65,11 +82,9 @@ class _ProxyHandler:
                 host = http_m.group("host")
                 port = int(http_m.group("port") or "80")
 
-            if not ALLOWED_HOST_RE.match(host):
-                self._reply(client_sock, 403, "Forbidden host")
-                return
-            if connect_m and port != 443 and not self.allow_any_port:
-                self._reply(client_sock, 403, "Forbidden port")
+            reason = check_destination(host, port, bool(connect_m), self.allow_any_port)
+            if reason:
+                self._reply(client_sock, 403, reason)
                 return
 
             # Authorization
