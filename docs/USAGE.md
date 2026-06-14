@@ -88,10 +88,11 @@ The parser and transfer layer support:
 | DLC file | `.\Run.ps1 download -i .\container.dlc` |
 | MegaCrypter | `mc://...` |
 
-DLC containers are resolved through JDownloader's public DLC service endpoint,
-which is HTTP-only upstream. The DLC master key is a known public constant, so
-this does not protect or expose a secret key, but a hostile network could still
-substitute the returned URLs. Resolve DLC files only on networks you trust.
+DLC containers are resolved through JDownloader's public DLC service endpoint
+over HTTPS, following redirects only within that same trusted origin. The DLC
+master key is a known public constant, so this does not protect or expose a
+secret key, but the returned URLs come from that third-party service. Resolve
+DLC files only on networks you trust.
 
 ## 4. Download Behavior
 
@@ -112,9 +113,10 @@ that contains `Root/Season 01/Episode 01.mkv` is saved as
 `Output/Root/Season 01/Episode 01.mkv`. File-in-folder links also keep their
 folder ancestry instead of being flattened into the output root.
 
-If a destination file already exists, the downloader uses that same path and
-overwrites or resumes it by default. Use a different output directory if you
-need to keep an existing file untouched.
+If a destination file already exists and is not a resumable partial of the same
+transfer, the download is written to a unique name (for example `name (1).ext`)
+so the existing file is preserved. Pass `--overwrite` (alias `--force`) to
+replace the existing file in place. A valid `.mbstate` partial still resumes.
 
 Important flags:
 
@@ -124,6 +126,7 @@ Important flags:
 | `-P`, `--parallel` | Number of files downloading at once. |
 | `-l`, `--limit` | Global download speed cap in KB/s for this command. |
 | `--no-verify` | Skip final MAC verification. |
+| `--overwrite`, `--force` | Replace an existing destination instead of using a unique name. |
 | `--proxy` | Proxy URL for this run. |
 | `--password` | Password for protected links. |
 | `--elc-user`, `--elc-api-key` | Credentials for ELC resolution. |
@@ -239,6 +242,12 @@ http://127.0.0.1:8080/
 
 The stream server supports HTTP Range requests, so seeking works without a full
 download.
+
+A loopback bind (the default `127.0.0.1`) runs without authentication. If you
+bind a non-loopback host, access requires a token sent as
+`Authorization: Bearer <token>`; when you do not pass `--token`, one is
+generated and printed once on the console (never written to logs). Query-string
+tokens (`?token=`) are disabled unless you add `--allow-query-token`.
 
 ## 9. Smart Proxy
 

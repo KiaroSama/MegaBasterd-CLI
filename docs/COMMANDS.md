@@ -48,6 +48,7 @@ directory.
 | `-l`, `--limit KBPS` | Global download speed cap for this command. `0` means unlimited. |
 | `-p`, `--password TEXT` | Password for protected links. |
 | `--no-verify` | Skip final MAC verification. |
+| `--overwrite`, `--force` | Replace an existing destination file. By default an unrelated existing file is preserved and a unique name (`name (1).ext`) is used instead; a valid resumable partial still resumes. |
 | `--rename NAME` | Local filename override for one-file downloads. |
 | `--proxy URL` | HTTP/SOCKS proxy for this run. |
 | `-i`, `--input-file PATH` | Read links from text, or decrypt a `.dlc` file. |
@@ -108,11 +109,17 @@ the fly, and serves media players through normal HTTP Range requests.
 | Option | Purpose |
 | --- | --- |
 | `-p`, `--port N` | Local HTTP port. |
-| `-H`, `--host HOST` | Bind address. |
+| `-H`, `--host HOST` | Bind address. Defaults to loopback. |
+| `--token TEXT` | Require this access token (sent as `Authorization: Bearer`). Auto-generated when binding a non-loopback host so the stream is never exposed unauthenticated. |
+| `--allow-query-token` | Also accept the token via `?token=` (insecure: it can leak into logs/history). Off by default. |
 | `--password TEXT` | Password for protected links. |
 | `--proxy URL` | Upstream MEGA proxy. |
 | `--elc-user TEXT` | ELC account user. |
 | `--elc-api-key TEXT` | ELC API key. |
+
+A loopback bind (`127.0.0.1`/`::1`/`localhost`) runs without authentication.
+Any non-loopback bind requires a token: if you do not pass `--token`, a strong
+one is generated and shown once on the console (never written to logs).
 
 ## Public Link Commands
 
@@ -221,9 +228,10 @@ imports public proxy lists into the local pool.
 `elc-resolve`, and `dlc-resolve` interoperate with supported container/link
 formats.
 
-`dlc-resolve` uses JDownloader's public DLC service endpoint, which is HTTP-only
-upstream. The DLC master key is a known public constant, but the returned URLs
-could be substituted by a hostile network.
+`dlc-resolve` uses JDownloader's public DLC service endpoint over HTTPS, and
+follows redirects only within that same trusted origin. The DLC master key is a
+known public constant, and the returned URLs are supplied by that third-party
+service, so resolve DLC files only on networks you trust.
 
 ## Local File Utility Commands
 
