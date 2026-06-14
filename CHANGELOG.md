@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Security
+- Fixed a folder-download path-traversal weakness: remote node names can no longer become `.`, `..`, empty, or contain path separators, and every download destination is verified to stay inside the chosen output directory.
+- Added MBCR v2 for the local file Crypter with authenticated chunk ordering, a final-chunk marker, original-length validation, and whole-file sequence integrity (detecting truncation, reordering, duplication, and tampering); legacy v1 files remain readable but do not provide whole-file sequence integrity.
+- Required authentication for non-loopback streaming and made `Authorization: Bearer` the default token method; the token is generated automatically for non-loopback binds and is never written to logs.
+- Prevented stream-token leakage from both the CLI startup argument log and the PowerShell launcher log and transcript.
+- Switched DLC container resolution to HTTPS-only transport with bounded, manually validated redirects, same-origin enforcement, approved-origin validation, and rejection of credentials, non-global IPs, and unexpected ports.
+- Encrypted persisted queue passwords at rest with AES-256-GCM under a locally stored key, and hardened queue-key creation, length validation, legacy migration, and recovery so existing encrypted secrets are never orphaned.
+- Unified the local CONNECT proxy and plain-HTTP forward destination policy (host allow-list and port policy applied to both).
+- Improved redaction of sensitive identifiers and command-line arguments (including account emails and stream tokens).
+
+### Changed
+- Downloads now preserve an existing unrelated file by default and write to a unique destination name (for example `name (1).ext`); a valid resumable partial still resumes.
+- Added an explicit `--overwrite` (alias `--force`) option to `download` for in-place replacement.
+- Stream query-string tokens (`?token=`) are disabled by default and require explicit opt-in via `--allow-query-token`.
+- Documentation updated (README, command reference, usage guide) to match the hardened download, streaming, and DLC behavior.
+
+### Testing
+- Expanded regression coverage for path containment, Crypter tamper resistance, streaming authentication, queue-secret recovery, DLC redirect/SSRF behavior, resume safety, proxy destination policy, and launcher token redaction.
+- Completed a live public-folder validation covering download, repeat-download/overwrite, resume, streaming with HTTP Range requests, and log redaction. Account login, upload, cloud mutations, MFA, DLC, ELC, and MegaCrypter end-to-end flows were not validated live.
+
 ## v1.2.0 - 2026-05-25
 
 ### Added
