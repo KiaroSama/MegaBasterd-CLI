@@ -47,7 +47,7 @@ from __future__ import annotations
 import os
 import struct
 from pathlib import Path
-from typing import Callable
+from typing import BinaryIO, Callable
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
@@ -140,7 +140,7 @@ def encrypt_file(
             prev = nxt
 
 
-def _read_exact(fin, n: int, what: str) -> bytes:
+def _read_exact(fin: BinaryIO, n: int, what: str) -> bytes:
     data = fin.read(n)
     if len(data) < n:
         raise CrypterError(f"Truncated file ({what})")
@@ -148,7 +148,7 @@ def _read_exact(fin, n: int, what: str) -> bytes:
 
 
 def _decrypt_v2(
-    fin,
+    fin: BinaryIO,
     dst: Path,
     passphrase: str,
     on_progress: Callable[[int, int], None] | None,
@@ -213,7 +213,7 @@ def _decrypt_v2(
 
 
 def _decrypt_v1(
-    fin,
+    fin: BinaryIO,
     dst: Path,
     passphrase: str,
     on_progress: Callable[[int, int], None] | None,
