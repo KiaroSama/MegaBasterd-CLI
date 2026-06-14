@@ -76,6 +76,14 @@ def _read_links_file(path: Path) -> list[str]:
     help="Skip file integrity check (faster but unsafe).",
 )
 @click.option(
+    "--overwrite",
+    "--force",
+    "overwrite",
+    is_flag=True,
+    help="Overwrite an existing destination file. By default an unrelated "
+    "existing file is preserved and a unique name is used instead.",
+)
+@click.option(
     "--rename",
     default=None,
     help="Override the filename (only for single-file links).",
@@ -112,6 +120,7 @@ def download(
     speed_limit_kbps: float | None,
     password: str | None,
     no_verify: bool,
+    overwrite: bool,
     rename: str | None,
     proxy: str | None,
     input_file: Path | None,
@@ -181,6 +190,7 @@ def download(
             quota_wait_seconds=cfg.quota_wait_seconds,
             quota_max_wait_loops=cfg.quota_max_wait_loops,
             keep_state_files_on_error=cfg.keep_state_files_on_error,
+            overwrite=overwrite,
         )
 
     # First pass: parse + filter URLs, collect actionable jobs

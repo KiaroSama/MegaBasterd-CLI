@@ -179,8 +179,10 @@ Use command-specific help for exact options:
 
 This tool can affect real user data.
 
-- Downloads write files to disk. If a destination file already exists, the
-  current behavior is to use the same path and overwrite or resume that file.
+- Downloads write files to disk. If a destination file already exists and is
+  not a resumable partial of the same transfer, the download is written to a
+  unique name (for example `name (1).ext`) so the existing file is preserved.
+  Use `--overwrite` (alias `--force`) to replace the existing file in place.
 - Upload, import, share, rename, move, trash, and remove commands affect the
   configured MEGA account.
 - `trash empty` permanently clears MEGA trash content.
@@ -309,8 +311,9 @@ download.
 
 ### A download overwrites an existing file
 
-That is the default behavior. Choose a different output directory or move the
-existing file before starting the download if you need to keep both copies.
+By default an unrelated existing file is preserved and the download is written
+to a unique name instead. Pass `--overwrite` (or `--force`) if you want the
+download to replace the existing file in place.
 
 ### MEGA quota is exceeded
 

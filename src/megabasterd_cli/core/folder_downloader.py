@@ -236,6 +236,7 @@ class MegaFolderDownloader:
                     quota_wait_seconds=self.downloader.quota_wait_seconds,
                     quota_max_wait_loops=self.downloader.quota_max_wait_loops,
                     keep_state_files_on_error=self.downloader.keep_state_files_on_error,
+                    overwrite=self.downloader.overwrite,
                 )
                 worker_dl.limiter = self.downloader.limiter
                 sub_folder = MegaFolderDownloader(worker_dl)
