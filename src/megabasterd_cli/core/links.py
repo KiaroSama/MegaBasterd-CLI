@@ -554,9 +554,12 @@ def resolve_elc_links(
     return links
 
 
-DLC_SERVICE_URL = "http://service.jdownloader.org/dlcrypt/service.php"
+DLC_SERVICE_URL = "https://service.jdownloader.org/dlcrypt/service.php"
 DLC_REV = "34065"
 DLC_MASTER_KEY = bytes.fromhex("447E787351E60E2C6A96B3964BE0C9BD")
+# Cap the DLC service response to avoid unbounded memory use on a hostile or
+# malfunctioning endpoint. Real responses are a few KB.
+MAX_DLC_RESPONSE_BYTES = 2_000_000
 
 
 def decrypt_dlc_container(
@@ -592,6 +595,9 @@ def decrypt_dlc_container(
         proxies=proxies,
     )
     response.raise_for_status()
+    # Treat the third-party response as untrusted: bound its size before parsing.
+    if len(response.text) > MAX_DLC_RESPONSE_BYTES:
+        raise ValueError("DLC service response is unexpectedly large")
     m = re.search(r"<\s*rc\s*>(.+?)<\s*/\s*rc\s*>", response.text, re.IGNORECASE | re.DOTALL)
     if not m:
         raise ValueError("DLC service did not return a key")
