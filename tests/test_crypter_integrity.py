@@ -229,3 +229,16 @@ def test_unsupported_version_rejected(tmp_path: Path) -> None:
     enc.write_bytes(MAGIC + bytes([99]) + b"\x00" * 40)
     with pytest.raises(CrypterError, match="version"):
         decrypt_file(enc, tmp_path / "out", PW)
+
+
+def test_oversized_declared_chunk_length_rejected(tmp_path: Path) -> None:
+    # Header: MAGIC + ver(2) + salt(16) + chunk_size(=16) + orig_len(=0)
+    header = (
+        MAGIC + bytes([2]) + (b"\x00" * SALT_LEN) + struct.pack(">I", 16) + struct.pack(">Q", 0)
+    )
+    # One chunk record claiming a 4 GiB block but providing only a few bytes.
+    blob = header + bytes([1]) + struct.pack(">I", 0xFFFFFFFF) + b"\x00" * 8
+    enc = tmp_path / "huge.enc"
+    enc.write_bytes(blob)
+    with pytest.raises(CrypterError, match="exceeds header chunk size"):
+        decrypt_file(enc, tmp_path / "out", PW)
