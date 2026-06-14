@@ -645,7 +645,8 @@ function Get-RedactedArgsForLog {
         "--share-password",
         "--vault-passphrase",
         "--mfa-code",
-        "--elc-api-key"
+        "--elc-api-key",
+        "--token"
     )
     $redacted = [System.Collections.Generic.List[string]]::new()
     $redactNext = $false
@@ -660,7 +661,7 @@ function Get-RedactedArgsForLog {
             $redactNext = $true
             continue
         }
-        if ($arg -match "^(--password|--share-password|--vault-passphrase|--mfa-code|--elc-api-key)=") {
+        if ($arg -match "^(--password|--share-password|--vault-passphrase|--mfa-code|--elc-api-key|--token)=") {
             $redacted.Add(($arg -replace "=.*$", "=<redacted>"))
             continue
         }
