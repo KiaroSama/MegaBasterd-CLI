@@ -55,7 +55,75 @@ def test_normal_https_response(monkeypatch) -> None:
     with contextlib.suppress(Exception):
         decrypt_dlc_container("B" * 100)
     assert len(calls) == 1
-    assert calls[0].startswith("https://")
+    # Production resolution always starts at the built-in trusted endpoint.
+    assert calls[0] == DLC_SERVICE_URL
+
+
+def test_production_resolution_uses_trusted_endpoint(monkeypatch) -> None:
+    # With no service_url override, the first (and only) request targets the
+    # approved JDownloader origin.
+    calls = _install_posts(monkeypatch, [_Resp("<rc>x</rc>")])
+    with contextlib.suppress(Exception):
+        decrypt_dlc_container("B" * 100)
+    assert calls == [DLC_SERVICE_URL]
+
+
+def test_unapproved_public_host_initial_rejected(monkeypatch) -> None:
+    calls = _install_posts(monkeypatch, [])  # no request should be issued
+    with pytest.raises(ValueError, match="unapproved service endpoint"):
+        decrypt_dlc_container("B" * 100, service_url="https://evil.example/dlcrypt")
+    assert calls == []
+
+
+def test_idn_lookalike_initial_rejected(monkeypatch) -> None:
+    # Cyrillic 'ѕ' (U+0455) lookalike for 's' must not pass as the approved host.
+    calls = _install_posts(monkeypatch, [])
+    with pytest.raises(ValueError, match="unapproved service endpoint"):
+        decrypt_dlc_container("B" * 100, service_url="https://\u0455ervice.jdownloader.org/dlcrypt")
+    assert calls == []
+
+
+def test_trailing_dot_evil_initial_rejected(monkeypatch) -> None:
+    calls = _install_posts(monkeypatch, [])
+    with pytest.raises(ValueError, match="unapproved service endpoint"):
+        decrypt_dlc_container("B" * 100, service_url="https://evil.example./dlcrypt")
+    assert calls == []
+
+
+def test_uppercase_approved_host_accepted(monkeypatch) -> None:
+    # Case differences in the approved host are normalized, not a bypass either way.
+    calls = _install_posts(monkeypatch, [_Resp("<rc>x</rc>")])
+    with contextlib.suppress(Exception):
+        decrypt_dlc_container(
+            "B" * 100, service_url="https://Service.JDownloader.ORG/dlcrypt/service.php"
+        )
+    assert len(calls) == 1
+    assert calls[0].startswith("https://Service")
+
+
+def test_trailing_dot_approved_redirect_followed(monkeypatch) -> None:
+    # A redirect to the approved host with a trailing dot normalizes to the same
+    # origin and is followed (trailing dot is not treated as a different host).
+    calls = _install_posts(
+        monkeypatch,
+        [
+            _Resp(
+                status_code=302,
+                headers={"Location": "https://service.jdownloader.org./mirror"},
+            ),
+            _Resp("<rc>x</rc>"),
+        ],
+    )
+    with contextlib.suppress(Exception):
+        decrypt_dlc_container("B" * 100)
+    assert calls == [DLC_SERVICE_URL, "https://service.jdownloader.org./mirror"]
+
+
+def test_alternate_port_initial_rejected(monkeypatch) -> None:
+    calls = _install_posts(monkeypatch, [])
+    with pytest.raises(ValueError, match="unapproved service endpoint"):
+        decrypt_dlc_container("B" * 100, service_url="https://service.jdownloader.org:8443/dlcrypt")
+    assert calls == []
 
 
 def test_same_origin_absolute_https_redirect_followed(monkeypatch) -> None:

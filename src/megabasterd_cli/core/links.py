@@ -564,12 +564,35 @@ DLC_MASTER_KEY = bytes.fromhex("447E787351E60E2C6A96B3964BE0C9BD")
 MAX_DLC_RESPONSE_BYTES = 2_000_000
 # Maximum number of HTTPS redirects the DLC resolver will follow.
 MAX_DLC_REDIRECTS = 5
+# Exact approved DLC service origins as (normalized host, port). Only the
+# official JDownloader DLC service is allowed; any other initial endpoint is
+# refused to prevent SSRF, even if it uses HTTPS and resolves publicly.
+_APPROVED_DLC_ORIGINS = frozenset({("service.jdownloader.org", 443)})
+
+
+def _normalize_host(host: str) -> str:
+    """Normalize a hostname for exact origin comparison.
+
+    Lowercases, strips a single trailing dot, and converts to ASCII/IDNA so a
+    Unicode lookalike or trailing-dot variant cannot be mistaken for an approved
+    host. IP literals and un-encodable values are returned lowercased unchanged
+    (they simply will not match the domain allowlist).
+    """
+    host = (host or "").strip().lower().rstrip(".")
+    if not host:
+        return ""
+    try:
+        # idna encoding maps Unicode lookalikes to punycode; pure-ASCII hosts
+        # are returned unchanged.
+        return host.encode("idna").decode("ascii")
+    except (UnicodeError, ValueError):
+        return host
 
 
 def _dlc_origin(url: str) -> tuple[str, int]:
-    """Return the (lowercased host, effective port) of a DLC URL (https => 443)."""
+    """Return the (normalized host, effective port) of a DLC URL (https => 443)."""
     parts = urlparse(url)
-    return (parts.hostname or "").lower(), (parts.port or 443)
+    return _normalize_host(parts.hostname or ""), (parts.port or 443)
 
 
 def _validate_dlc_target(url: str, approved_host: str, approved_port: int) -> None:
@@ -577,19 +600,21 @@ def _validate_dlc_target(url: str, approved_host: str, approved_port: int) -> No
 
     Enforces: https only; no embedded credentials; a real host; literal IPs must
     be globally routable (blocks loopback/private/link-local/reserved/multicast/
-    unspecified); and the host+port must match the approved origin. This prevents
-    SSRF via cross-host redirects even when the redirect uses HTTPS.
+    unspecified); and the normalized host+port must match the approved origin.
+    This prevents SSRF via cross-host redirects even when the redirect uses
+    HTTPS, and resists trailing-dot / IDN-lookalike bypasses.
     """
     parts = urlparse(url)
     if parts.scheme != "https":
         raise ValueError("Refusing to contact a non-HTTPS DLC URL")
     if parts.username or parts.password:
         raise ValueError("Refusing DLC URL with embedded credentials")
-    host = (parts.hostname or "").lower()
+    raw_host = parts.hostname or ""
+    host = _normalize_host(raw_host)
     if not host:
         raise ValueError("Refusing DLC URL without a host")
     try:
-        ip = ipaddress.ip_address(host)
+        ip = ipaddress.ip_address(raw_host)
     except ValueError:
         ip = None
     if ip is not None and not ip.is_global:
@@ -619,6 +644,12 @@ def _dlc_post(
     import requests
 
     approved_host, approved_port = _dlc_origin(service_url)
+    # The initial endpoint must be an explicitly approved origin (anti-SSRF).
+    # Run per-target checks first so scheme/credential/IP problems get a precise
+    # error, then enforce the exact-origin allowlist.
+    _validate_dlc_target(service_url, approved_host, approved_port)
+    if (approved_host, approved_port) not in _APPROVED_DLC_ORIGINS:
+        raise ValueError("Refusing DLC request to an unapproved service endpoint")
     current = service_url
     for _ in range(max_redirects + 1):
         # Validate before connecting: covers the initial URL and every redirect.
