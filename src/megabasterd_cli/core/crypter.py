@@ -65,6 +65,17 @@ SCRYPT_R = 8
 SCRYPT_P = 1
 KEY_LEN = 32
 
+# Defensive scrypt parameter bounds. The MBCR format does NOT embed KDF
+# parameters in the file (they are fixed constants below), so these values are
+# not attacker-controlled today. Validating them anyway guards against an unsafe
+# configuration and future format changes, and proves the parameters are sane
+# before the (memory/CPU-expensive) KDF runs.
+MIN_SCRYPT_N = 2**10
+MAX_SCRYPT_N = 2**20
+MAX_SCRYPT_R = 32
+MAX_SCRYPT_P = 16
+MAX_SCRYPT_MEMORY_BYTES = 256 * 1024 * 1024  # ~128 * N * r * p upper bound
+
 _V1_HEADER_LEN = len(MAGIC) + 1 + SALT_LEN + 4
 _V2_HEADER_LEN = len(MAGIC) + 1 + SALT_LEN + 4 + 8
 # Associated data appended per chunk: chunk index (u64) + final flag (u8).
@@ -75,7 +86,26 @@ class CrypterError(Exception):
     """Raised on any encrypt/decrypt failure."""
 
 
+def _validate_scrypt_params(n: int, r: int, p: int) -> None:
+    """Reject unsafe scrypt parameters before invoking the KDF."""
+    if not (isinstance(n, int) and isinstance(r, int) and isinstance(p, int)):
+        raise CrypterError("Invalid scrypt parameter types")
+    if n < MIN_SCRYPT_N or n > MAX_SCRYPT_N:
+        raise CrypterError(f"scrypt N out of range: {n}")
+    if n & (n - 1) != 0:
+        raise CrypterError("scrypt N must be a power of two")
+    if r < 1 or r > MAX_SCRYPT_R:
+        raise CrypterError(f"scrypt r out of range: {r}")
+    if p < 1 or p > MAX_SCRYPT_P:
+        raise CrypterError(f"scrypt p out of range: {p}")
+    # Approximate memory cost is 128 * N * r * p bytes (checked, no overflow risk
+    # in Python). Reject parameter sets that would demand excessive memory.
+    if 128 * n * r * p > MAX_SCRYPT_MEMORY_BYTES:
+        raise CrypterError("scrypt parameters exceed the memory budget")
+
+
 def _derive_key(passphrase: str, salt: bytes) -> bytes:
+    _validate_scrypt_params(SCRYPT_N, SCRYPT_R, SCRYPT_P)
     kdf = Scrypt(salt=salt, length=KEY_LEN, n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P)
     return kdf.derive(passphrase.encode("utf-8"))
 
@@ -163,6 +193,10 @@ def _decrypt_v2(
     original_length = struct.unpack(">Q", orig_len_bytes)[0]
     if chunk_size <= 0 or chunk_size > (1 << 24):
         raise CrypterError("Invalid chunk size in header")
+    # The plaintext can never exceed the encrypted file size; reject an absurd
+    # declared original length before deriving the key or reading chunks.
+    if original_length > src_size:
+        raise CrypterError("Declared original length exceeds the encrypted file size")
 
     header = header_prefix + salt + chunk_size_bytes + orig_len_bytes
     key = _derive_key(passphrase, salt)
