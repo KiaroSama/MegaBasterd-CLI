@@ -14,12 +14,15 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 _URL_RE = re.compile(r"https?://[^\s'\"\]\)>,]+", re.IGNORECASE)
 _MEGA_API_PATH_RE = re.compile(r"/cs\?[^\s'\"\]\)>,]+", re.IGNORECASE)
+# Email / account identifiers: redacted to avoid leaking who is logged in.
+_EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")
 _SENSITIVE_QUERY_KEYS = {
     "ak",
     "api_key",
     "apikey",
     "auth",
     "at",
+    "email",
     "fa",
     "g",
     "k",
@@ -31,11 +34,12 @@ _SENSITIVE_QUERY_KEYS = {
     "session",
     "token",
     "uh",
+    "user",
 }
 _SENSITIVE_FIELD_RE = re.compile(
     r"((?:'|\")"
     r"(?:k|at|g|fa|uh|mfa|sid|key|attr|api_key|apikey|APIKEY|password|"
-    r"passphrase|token|cookie|session|privk|csid|tsid)"
+    r"passphrase|token|cookie|session|privk|csid|tsid|user|email)"
     r"(?:'|\")\s*:\s*)(?:'|\")[^'\"]+(?:'|\")"
 )
 _context = {"run_id": "-", "command": "-"}
@@ -76,7 +80,8 @@ def redact_log_text(text: str) -> str:
 
     redacted = _URL_RE.sub(redact_url, text)
     redacted = _MEGA_API_PATH_RE.sub("/cs?<redacted-query>", redacted)
-    return _SENSITIVE_FIELD_RE.sub(r"\1'<redacted>'", redacted)
+    redacted = _SENSITIVE_FIELD_RE.sub(r"\1'<redacted>'", redacted)
+    return _EMAIL_RE.sub("<redacted-email>", redacted)
 
 
 def set_log_context(run_id: str | None = None, command: str | None = None) -> None:
