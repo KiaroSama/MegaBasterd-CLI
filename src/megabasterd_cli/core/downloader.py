@@ -28,7 +28,7 @@ from typing import Callable, cast
 import requests
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from ..utils.helpers import ensure_within_directory, sanitize_filename
+from ..utils.helpers import ensure_unique_path, ensure_within_directory, sanitize_filename
 from ..utils.speed import make_limiter
 from .chunks import Chunk, chunk_mac, combine_chunk_macs, condense_mac, iter_chunks
 from .crypto import (
@@ -106,6 +106,7 @@ class MegaDownloader:
         quota_wait_seconds: int = 0,
         quota_max_wait_loops: int = 0,
         keep_state_files_on_error: bool = True,
+        overwrite: bool = False,
     ):
         self.api = api
         self.max_workers = max(1, max_workers)
@@ -123,6 +124,10 @@ class MegaDownloader:
         self.quota_wait_seconds = quota_wait_seconds
         self.quota_max_wait_loops = quota_max_wait_loops
         self.keep_state_files_on_error = keep_state_files_on_error
+        # When False (default), an existing destination that is NOT a resumable
+        # continuation of this exact transfer is never truncated; a unique name
+        # is chosen instead. --overwrite forces in-place replacement.
+        self.overwrite = overwrite
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._url_refresh_lock = threading.Lock()
@@ -433,6 +438,15 @@ class MegaDownloader:
             nonce=nonce,
             all_chunks=all_chunks,
         ):
+            # This is not a resumable continuation of the same transfer. Do not
+            # clobber an unrelated existing file unless overwrite was requested;
+            # pick a unique name in the same (already-contained) directory.
+            if destination.exists() and not self.overwrite:
+                destination = ensure_unique_path(destination)
+                log.info(
+                    "Destination already exists; writing to unique path %s instead",
+                    destination.name,
+                )
             state = TransferState(
                 transfer_type="download",
                 source=source,
