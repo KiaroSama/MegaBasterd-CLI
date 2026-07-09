@@ -495,6 +495,8 @@ class MegaDownloader:
         progress_stop = threading.Event()
 
         def _emit_progress() -> None:
+            if on_progress is None:
+                return
             bytes_done, chunks_done = self._progress_snapshot()
             on_progress(
                 DownloadProgress(
@@ -515,9 +517,7 @@ class MegaDownloader:
 
         reporter: threading.Thread | None = None
         if on_progress:
-            reporter = threading.Thread(
-                target=_progress_loop, name="mega-progress", daemon=True
-            )
+            reporter = threading.Thread(target=_progress_loop, name="mega-progress", daemon=True)
             reporter.start()
 
         # Spawn workers
