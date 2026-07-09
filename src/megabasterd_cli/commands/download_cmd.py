@@ -21,8 +21,14 @@ from ..core.links import (
     resolve_password_link,
 )
 from ..ui.progress import MultiFileProgressView, ProgressFileState, build_progress
-from ..ui.prompts import print_error, print_success
+from ..ui.prompts import print_error, print_info, print_success
 from ..utils.helpers import format_bytes
+from ..utils.selection import (
+    SelectionCancelled,
+    build_folder_file_filter,
+    compose_file_filters,
+    parse_selection_tokens,
+)
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +117,28 @@ def _read_links_file(path: Path) -> list[str]:
     default=None,
     help="Number of files to download simultaneously (global limit).",
 )
+@click.option(
+    "-I",
+    "--include",
+    "include_patterns",
+    multiple=True,
+    help="Folder links: only download files matching this glob (repeatable; "
+    "matches the folder-relative path or filename, case-insensitive).",
+)
+@click.option(
+    "-X",
+    "--exclude",
+    "exclude_patterns",
+    multiple=True,
+    help="Folder links: skip files matching this glob (repeatable; wins over --include).",
+)
+@click.option(
+    "--select",
+    "select_files",
+    is_flag=True,
+    help="Folder links: list the files and interactively choose which to download "
+    "(e.g. 1,3-5 | all | none).",
+)
 @click.pass_context
 def download(
     ctx: click.Context,
@@ -127,6 +155,9 @@ def download(
     elc_user: str | None,
     elc_api_key: str | None,
     parallel_transfers: int | None,
+    include_patterns: tuple[str, ...],
+    exclude_patterns: tuple[str, ...],
+    select_files: bool,
 ) -> None:
     """Download one or more MEGA links."""
     cfg = ctx.obj["config"]
@@ -155,6 +186,12 @@ def download(
 
     output_dir = output_dir or Path(cfg.download_path)
     output_dir.mkdir(parents=True, exist_ok=True)
+    # Folder-link file selection (parity with MegaBasterd's FolderLinkDialog):
+    # glob filters first, then the interactive picker on whatever remains.
+    folder_file_filter = compose_file_filters(
+        build_folder_file_filter(include_patterns, exclude_patterns, output_dir),
+        _interactive_file_picker(output_dir) if select_files else None,
+    )
     workers = workers if workers is not None else cfg.max_workers
     speed_limit_kbps = speed_limit_kbps if speed_limit_kbps is not None else cfg.speed_limit_kbps
     verify = not no_verify and cfg.verify_integrity
@@ -323,13 +360,16 @@ def download(
                             log.error("Parallel download failed: %s", e)
 
         if folder_file_jobs:
-            if parallel == 1:
+            # Interactive selection must prompt from the main thread, so
+            # --select forces these jobs to run sequentially.
+            if parallel == 1 or select_files:
                 for url in folder_file_jobs:
                     _download_folder_file(
                         _new_downloader(),
                         url,
                         output_dir,
                         overall_progress,
+                        file_filter=folder_file_filter,
                     )
             else:
                 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -340,6 +380,7 @@ def download(
                         url,
                         output_dir,
                         overall_progress,
+                        file_filter=folder_file_filter,
                     )
 
                 with ThreadPoolExecutor(max_workers=parallel) as pool:
@@ -357,7 +398,41 @@ def download(
             url,
             output_dir,
             parallel_files=parallel,
+            file_filter=folder_file_filter,
         )
+
+
+def _interactive_file_picker(output_dir: Path):
+    """Build a file_filter that lists the folder's files and asks what to keep."""
+
+    def _pick(file_jobs):
+        click.echo(f"\nFolder contains {len(file_jobs)} file(s):")
+        total_size = 0
+        for index, (node, destination) in enumerate(file_jobs, 1):
+            size = int(node.size or 0)
+            total_size += size
+            try:
+                relative = destination.relative_to(output_dir).as_posix()
+            except ValueError:
+                relative = destination.name
+            click.echo(f"  {index:3d}. {format_bytes(size):>12}  {relative}")
+        click.echo(f"Total: {format_bytes(total_size)}")
+        while True:
+            answer = click.prompt(
+                "Files to download (e.g. 1,3-5 | all | none)",
+                default="all",
+                show_default=True,
+            )
+            try:
+                chosen = parse_selection_tokens(answer, len(file_jobs))
+            except ValueError as exc:
+                click.echo(f"Invalid selection: {exc}")
+                continue
+            if not chosen:
+                raise SelectionCancelled()
+            return [job for index, job in enumerate(file_jobs, 1) if index in chosen]
+
+    return _pick
 
 
 def _download_file(downloader, url, output_dir, overall_progress, password=None, rename_to=None):
@@ -396,7 +471,7 @@ def _download_file(downloader, url, output_dir, overall_progress, password=None,
         print_error(f"Unexpected error: {e}")
 
 
-def _download_folder(downloader, url, output_dir, parallel_files: int = 1):
+def _download_folder(downloader, url, output_dir, parallel_files: int = 1, file_filter=None):
     folder_dl = MegaFolderDownloader(downloader)
     import threading
 
@@ -494,12 +569,16 @@ def _download_folder(downloader, url, output_dir, parallel_files: int = 1):
             on_folder_manifest=on_manifest,
             on_file_progress=on_file_progress,
             parallel_files=parallel_files,
+            file_filter=file_filter,
         )
         total_bytes = sum(r.size for r in results)
         if view is not None:
             _refresh(force=True, status="Complete")
             view.close(success=True)
         print_success(f"Folder complete: {len(results)} files, {format_bytes(total_bytes)} total")
+    except SelectionCancelled:
+        # The picker runs before the manifest, so no live view exists yet.
+        print_info(f"Selection cancelled; skipped folder: {url}")
     except MegaError as e:
         if view is not None:
             _refresh(force=True, status="Failed")
@@ -513,7 +592,7 @@ def _download_folder(downloader, url, output_dir, parallel_files: int = 1):
         print_error(f"Unexpected error: {e}")
 
 
-def _download_folder_file(downloader, url, output_dir, overall_progress):
+def _download_folder_file(downloader, url, output_dir, overall_progress, file_filter=None):
     task_id = overall_progress.add_task(description="Resolving folder file...", total=1)
     folder_dl = MegaFolderDownloader(downloader)
 
@@ -525,6 +604,7 @@ def _download_folder_file(downloader, url, output_dir, overall_progress):
             url,
             output_dir,
             on_progress=on_progress,
+            file_filter=file_filter,
         )
         result = results[0] if results else None
         if result is None:
@@ -552,6 +632,9 @@ def _download_folder_file(downloader, url, output_dir, overall_progress):
         if cfg is not None:
             for item in results:
                 run_post_transfer_command(cfg.run_command, item.path)
+    except SelectionCancelled:
+        overall_progress.update(task_id, description="Selection cancelled", completed=1, total=1)
+        print_info(f"Selection cancelled; skipped folder node: {url}")
     except MegaError as e:
         overall_progress.update(task_id, description=f"Failed: {e}")
         print_error(f"Download failed: {e}")

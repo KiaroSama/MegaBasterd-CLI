@@ -64,11 +64,16 @@ class MegaFolderDownloader:
         on_folder_manifest: Callable[[list[tuple[FolderNode, Path]]], None] | None = None,
         on_file_progress: Callable[[Path, DownloadProgress], None] | None = None,
         parallel_files: int = 1,
+        file_filter: (
+            Callable[[list[tuple[FolderNode, Path]]], list[tuple[FolderNode, Path]]] | None
+        ) = None,
     ) -> list[DownloadResult]:
         """Download every file inside a public folder share.
 
         `parallel_files` controls how many files are pulled simultaneously
         (each one still spawns the downloader's per-chunk workers internally).
+        `file_filter` (CLI --include/--exclude/--select) narrows the prepared
+        file jobs before anything is reported or downloaded.
         """
         parsed = parse_link(url)
         if parsed.type not in (LinkType.FOLDER, LinkType.FOLDER_IN_FOLDER):
@@ -95,6 +100,7 @@ class MegaFolderDownloader:
             keep = self._subtree_handles(nodes, root_handle)
             nodes = [n for n in nodes if n.handle in keep]
         file_jobs = self._build_file_jobs(nodes, output_dir, root_handle)
+        file_jobs = self._apply_file_filter(file_jobs, file_filter)
         if on_folder_manifest:
             on_folder_manifest(file_jobs)
 
@@ -107,6 +113,27 @@ class MegaFolderDownloader:
             parallel_files=parallel_files,
         )
 
+    @staticmethod
+    def _apply_file_filter(
+        file_jobs: list[tuple[FolderNode, Path]],
+        file_filter: (
+            Callable[[list[tuple[FolderNode, Path]]], list[tuple[FolderNode, Path]]] | None
+        ),
+    ) -> list[tuple[FolderNode, Path]]:
+        """Narrow prepared jobs through the caller's selection filter."""
+        if file_filter is None:
+            return file_jobs
+        available = len(file_jobs)
+        selected = file_filter(file_jobs)
+        if not selected:
+            raise TransferError(
+                message=(
+                    "File selection matched no files in the folder share "
+                    f"({available} available)"
+                )
+            )
+        return selected
+
     def download_node_in_folder(
         self,
         url: str,
@@ -116,6 +143,9 @@ class MegaFolderDownloader:
         on_folder_manifest: Callable[[list[tuple[FolderNode, Path]]], None] | None = None,
         on_file_progress: Callable[[Path, DownloadProgress], None] | None = None,
         parallel_files: int = 1,
+        file_filter: (
+            Callable[[list[tuple[FolderNode, Path]]], list[tuple[FolderNode, Path]]] | None
+        ) = None,
     ) -> list[DownloadResult]:
         """Download a file or subfolder handle from a public folder share."""
         parsed = parse_link(url)
@@ -142,6 +172,7 @@ class MegaFolderDownloader:
             subtree = [n for n in nodes if n.handle in keep]
             file_jobs = self._build_file_jobs(subtree, output_dir, target.handle)
 
+        file_jobs = self._apply_file_filter(file_jobs, file_filter)
         if on_folder_manifest:
             on_folder_manifest(file_jobs)
 
