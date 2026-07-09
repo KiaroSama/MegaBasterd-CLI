@@ -28,7 +28,7 @@ import requests
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from ..utils.helpers import sanitize_filename
-from ..utils.speed import make_limiter
+from ..utils.speed import RollingSpeedMeter, make_limiter
 from .chunks import Chunk, chunk_mac, combine_chunk_macs, condense_mac, iter_chunks
 from .crypto import (
     a32_to_bytes,
@@ -97,6 +97,10 @@ class MegaUploader:
         self._bytes_done = 0
         self._chunks_done = 0
         self._start_time = 0.0
+        # Rolling window meter, mirroring the downloader: reports the CURRENT
+        # rate; the first sample is the resumed-bytes baseline, so resumed
+        # chunks never inflate the reported speed.
+        self._speed_meter = RollingSpeedMeter(window=5.0)
         self._completion_token: bytes | None = None
         self.last_directory_failures: list[str] = []
 
@@ -189,83 +193,123 @@ class MegaUploader:
             sum(1 for c in all_chunks if state.is_chunk_done(c.index)),
         )
 
-        while True:
-            pending = [c for c in all_chunks if not state.is_chunk_done(c.index)]
-            self._bytes_done = sum(c.size for c in all_chunks if state.is_chunk_done(c.index))
-            self._chunks_done = len(all_chunks) - len(pending)
-            self._start_time = time.monotonic()
-            self._stop_event.clear()
+        # Progress ticker, mirroring the downloader: report on a steady clock
+        # instead of once per completed future in submission order (which
+        # arrives in late bursts), with the rolling meter's CURRENT rate (the
+        # old ``bytes_done / total_elapsed`` was a lifetime average whose
+        # pre-seeded resumed bytes wildly overstated speed after resume).
+        progress_stop = threading.Event()
 
-            try:
-                # Spawn uploader workers
-                with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
-                    futures = []
-                    for chunk in pending:
-                        if self._stop_event.is_set():
-                            break
-                        fut = pool.submit(
-                            self._upload_chunk,
-                            upload_url,
-                            source,
-                            chunk,
-                            aes_key,
-                            nonce,
-                            state,
-                            len(all_chunks),
-                        )
-                        futures.append((chunk, fut))
+        def _emit_progress() -> None:
+            if on_progress is None:
+                return
+            with self._lock:
+                bytes_done, chunks_done = self._bytes_done, self._chunks_done
+            on_progress(
+                UploadProgress(
+                    bytes_done=bytes_done,
+                    total_bytes=file_size,
+                    chunks_done=chunks_done,
+                    total_chunks=len(all_chunks),
+                    speed_bps=self._speed_meter.current(),
+                )
+            )
 
-                    for chunk, fut in futures:
-                        try:
-                            fut.result()
-                        except UploadUrlExpiredError:
-                            self._stop_event.set()
-                            raise
-                        except Exception as e:
-                            self._stop_event.set()
-                            with self._lock:
-                                state_to_save = snapshot_state(state)
-                            save_state(state_to_save)
-                            raise TransferError(
-                                message=f"Upload chunk {chunk.index} failed: {e}"
-                            ) from e
-                        if on_progress:
-                            elapsed = time.monotonic() - self._start_time
-                            speed = self._bytes_done / elapsed if elapsed > 0 else 0
-                            on_progress(
-                                UploadProgress(
-                                    bytes_done=self._bytes_done,
-                                    total_bytes=file_size,
-                                    chunks_done=self._chunks_done,
-                                    total_chunks=len(all_chunks),
-                                    speed_bps=speed,
-                                )
+        def _progress_loop() -> None:
+            while not progress_stop.wait(0.5):
+                try:
+                    _emit_progress()
+                except Exception:
+                    log.debug("Upload progress callback raised", exc_info=True)
+
+        reporter: threading.Thread | None = None
+        if on_progress:
+            reporter = threading.Thread(
+                target=_progress_loop, name="mega-upload-progress", daemon=True
+            )
+            reporter.start()
+
+        try:
+            while True:
+                pending = [c for c in all_chunks if not state.is_chunk_done(c.index)]
+                self._bytes_done = sum(c.size for c in all_chunks if state.is_chunk_done(c.index))
+                self._chunks_done = len(all_chunks) - len(pending)
+                self._start_time = time.monotonic()
+                self._stop_event.clear()
+                # Fresh meter per attempt; the baseline sample is the resumed
+                # byte count, so speed measures only NEW bytes this session.
+                self._speed_meter = RollingSpeedMeter(window=5.0)
+                self._speed_meter.update(self._bytes_done)
+
+                try:
+                    # Spawn uploader workers
+                    with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+                        futures = []
+                        for chunk in pending:
+                            if self._stop_event.is_set():
+                                break
+                            fut = pool.submit(
+                                self._upload_chunk,
+                                upload_url,
+                                source,
+                                chunk,
+                                aes_key,
+                                nonce,
+                                state,
+                                len(all_chunks),
                             )
-                break
-            except UploadUrlExpiredError as exc:
-                if refreshed_upload_url:
+                            futures.append((chunk, fut))
+
+                        for chunk, fut in futures:
+                            try:
+                                fut.result()
+                            except UploadUrlExpiredError:
+                                self._stop_event.set()
+                                raise
+                            except Exception as e:
+                                self._stop_event.set()
+                                with self._lock:
+                                    state_to_save = snapshot_state(state)
+                                save_state(state_to_save)
+                                raise TransferError(
+                                    message=f"Upload chunk {chunk.index} failed: {e}"
+                                ) from e
+                    break
+                except UploadUrlExpiredError as exc:
+                    if refreshed_upload_url:
+                        with self._lock:
+                            state_to_save = snapshot_state(state)
+                        save_state(state_to_save)
+                        raise TransferError(
+                            message=(
+                                "Upload URL expired after refresh. Delete the upload state file "
+                                f"and retry if the problem repeats: {state_path}"
+                            )
+                        ) from exc
+                    refreshed_upload_url = True
+                    upload_info = self.api.request_upload(file_size)
+                    upload_url = upload_info["p"]
+                    state.metadata["upload_url"] = upload_url
+                    state.metadata.pop("completion_token", None)
+                    state.completed_chunks.clear()
+                    state.chunk_macs.clear()
+                    self._completion_token = None
                     with self._lock:
                         state_to_save = snapshot_state(state)
                     save_state(state_to_save)
-                    raise TransferError(
-                        message=(
-                            "Upload URL expired after refresh. Delete the upload state file "
-                            f"and retry if the problem repeats: {state_path}"
-                        )
-                    ) from exc
-                refreshed_upload_url = True
-                upload_info = self.api.request_upload(file_size)
-                upload_url = upload_info["p"]
-                state.metadata["upload_url"] = upload_url
-                state.metadata.pop("completion_token", None)
-                state.completed_chunks.clear()
-                state.chunk_macs.clear()
-                self._completion_token = None
-                with self._lock:
-                    state_to_save = snapshot_state(state)
-                save_state(state_to_save)
-                log.info("Upload URL expired; requested a fresh upload slot")
-                continue
+                    log.info("Upload URL expired; requested a fresh upload slot")
+                    continue
+        finally:
+            progress_stop.set()
+            if reporter is not None:
+                reporter.join(timeout=2.0)
+
+        if on_progress:
+            # Final synchronous report so the consumer sees 100% of the bytes.
+            try:
+                _emit_progress()
+            except Exception:
+                log.debug("Final upload progress callback raised", exc_info=True)
 
         if self._completion_token is None:
             raise TransferError(message="Upload finished without a completion token")
@@ -453,10 +497,13 @@ class MegaUploader:
             state.mark_chunk_done(chunk.index, mac)
             self._bytes_done += chunk.size
             self._chunks_done += 1
+            bytes_done_now = self._bytes_done
             if body:
                 self._completion_token = body
                 state.metadata["completion_token"] = body.hex()
             should_save = self._chunks_done % 8 == 0 or bool(body)
             state_to_save = snapshot_state(state) if should_save else None
+        # Feed the rolling meter outside the state lock (it has its own).
+        self._speed_meter.update(bytes_done_now)
         if should_save:
             save_state(state_to_save)
