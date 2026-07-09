@@ -90,13 +90,12 @@ class MultiFileProgressView:
         self.status = "Starting"
         self.file_states: list[ProgressFileState] = []
         self._lock = threading.RLock()
-        # View-owned speed measurement: one rolling meter per file row plus an
-        # aggregate meter over the monotonic overall byte count. Speeds/ETA are
-        # computed at RENDER time from these meters, so they decay to 0 during
-        # a stall instead of freezing at the last producer-supplied value.
+        # View-owned speed measurement: one rolling meter per file row. Speeds
+        # and ETA are computed at RENDER time from these meters, so they decay
+        # to 0 during a stall instead of freezing at the last producer-supplied
+        # value. The overall speed is the sum of the row meters (or a fresh
+        # producer-supplied hint), so there is no second meter to drift.
         self._row_meters: dict[str, RollingSpeedMeter] = {}
-        self._overall_meter = RollingSpeedMeter(window=5.0)
-        self._overall_monotonic = 0
         self._backend_speed: float | None = None
         self._backend_speed_at = 0.0
         self._console = make_console(color_system="truecolor")
@@ -140,31 +139,43 @@ class MultiFileProgressView:
             self.failed_items = max(0, int(failed_items or 0))
             self.status = status
             # Feed the view-owned meters with this frame's cumulative bytes.
+            # Queued rows are skipped: they carry no transfer data yet, and a
+            # 0-byte sample would turn a resumed file's FIRST report (which
+            # includes every previously-downloaded byte) into a huge fake
+            # speed spike. By feeding only reporting rows, the meter's first
+            # sample is the resume baseline and is excluded from the rate.
             live_keys = {state.key for state in self.file_states}
             for stale_key in [key for key in self._row_meters if key not in live_keys]:
                 self._row_meters.pop(stale_key, None)
             for state in self.file_states:
+                if state.status == "queued":
+                    continue
                 meter = self._row_meters.setdefault(state.key, RollingSpeedMeter(window=5.0))
                 meter.update(max(0, int(state.completed or 0)), now)
-            self._overall_monotonic = max(self._overall_monotonic, self.overall_completed)
-            self._overall_meter.update(self._overall_monotonic, now)
             # A producer-reported overall speed is authoritative while fresh;
-            # render falls back to the aggregate meter when it goes stale.
+            # render falls back to the summed row meters when it goes stale.
             if overall_speed is not None and overall_speed >= 0:
                 self._backend_speed = float(overall_speed)
                 self._backend_speed_at = now
-            if force or now - self.last_render >= self.min_interval:
-                self._live.refresh()
+            should_refresh = force or now - self.last_render >= self.min_interval
+            if should_refresh:
                 self.last_render = now
+        # Refresh OUTSIDE self._lock. Rich's auto-refresh thread renders while
+        # holding Live's internal lock and re-enters __rich_console__, which
+        # needs self._lock; calling refresh() (which takes Live's lock) while
+        # holding self._lock is an ABBA inversion that deadlocks the UI.
+        if should_refresh:
+            self._live.refresh()
 
     def close(self, success: bool = True) -> None:
         with self._lock:
             self.status = "Complete" if success else "Failed"
             if success and self.overall_total is not None:
                 self.overall_completed = max(self.overall_completed, self.overall_total)
-            self._live.refresh()
-            self._live.stop()
-            print()
+        # Outside self._lock for the same lock-ordering reason as update().
+        self._live.refresh()
+        self._live.stop()
+        print()
 
     def _render(self) -> Group:
         # Speeds are measured HERE, at render time, by the view's own meters:
@@ -178,7 +189,7 @@ class MultiFileProgressView:
         if self._backend_speed is not None and now - self._backend_speed_at <= 2.5:
             self.overall_speed = self._backend_speed
         else:
-            self.overall_speed = self._overall_meter.current(now)
+            self.overall_speed = sum(meter.current(now) for meter in self._row_meters.values())
         width = max(70, min(140, int(getattr(self._console, "width", 100) or 100)))
         title_style = "#ff5f94" if self.status != "Failed" else "bold red"
         lines: list[Text] = [Text(_shorten_middle(self.title, width), style=title_style), Text("")]
