@@ -29,7 +29,7 @@ import requests
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from ..utils.helpers import ensure_unique_path, ensure_within_directory, sanitize_filename
-from ..utils.speed import make_limiter
+from ..utils.speed import RollingSpeedMeter, make_limiter
 from .chunks import Chunk, chunk_mac, combine_chunk_macs, condense_mac, iter_chunks
 from .crypto import (
     b64_url_decode,
@@ -134,6 +134,10 @@ class MegaDownloader:
         self._bytes_done = 0
         self._chunks_done = 0
         self._start_time = 0.0
+        # Rolling window meter: reports the CURRENT transfer rate (recent
+        # bytes over a short window), not the lifetime average. Re-seeded at
+        # the start of every download so resumed bytes never inflate it.
+        self._speed_meter = RollingSpeedMeter(window=5.0)
 
         # CDN URL state (shared across workers; refreshed on expiry)
         self._cdn_url_lock = threading.Lock()
@@ -468,6 +472,10 @@ class MegaDownloader:
         self._chunks_done = len(all_chunks) - len(pending)
         self._start_time = time.monotonic()
         self._stop_event.clear()
+        # Fresh meter per download; the baseline sample is the resumed byte
+        # count, so the reported speed measures only NEW bytes this session.
+        self._speed_meter = RollingSpeedMeter(window=5.0)
+        self._speed_meter.update(self._bytes_done)
 
         log.info(
             "Downloading %s (%d bytes, %d chunks, %d already done)",
@@ -477,49 +485,82 @@ class MegaDownloader:
             self._chunks_done,
         )
 
-        # Spawn workers
-        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
-            futures = []
-            for chunk in pending:
-                if self._stop_event.is_set():
-                    break
-                fut = pool.submit(
-                    self._download_chunk,
-                    chunk,
-                    aes_key,
-                    nonce,
-                    destination,
-                    state,
+        # Progress ticker: report progress on a steady clock instead of once
+        # per completed future in submission order. fut.result() below blocks
+        # on the FIRST unfinished future, so submission-order callbacks arrive
+        # in late bursts; a timed reporter keeps bytes/speed/ETA flowing the
+        # moment chunks land, and the rolling meter reports the CURRENT rate
+        # (the old ``bytes_done / total_elapsed`` was a lifetime average that
+        # also counted resumed bytes, wildly overstating speed after resume).
+        progress_stop = threading.Event()
+
+        def _emit_progress() -> None:
+            bytes_done, chunks_done = self._progress_snapshot()
+            on_progress(
+                DownloadProgress(
+                    bytes_done=bytes_done,
+                    total_bytes=file_size,
+                    chunks_done=chunks_done,
+                    total_chunks=len(all_chunks),
+                    speed_bps=self._speed_meter.current(),
                 )
-                futures.append((chunk, fut))
+            )
 
-            for chunk, fut in futures:
+        def _progress_loop() -> None:
+            while not progress_stop.wait(0.5):
                 try:
-                    fut.result()
-                except Exception as e:
-                    self._stop_event.set()
-                    if self.keep_state_files_on_error:
-                        with self._lock:
-                            state_to_save = snapshot_state(state)
-                        save_state(state_to_save)
-                    else:
-                        clear_state(destination)
-                    log.error("Chunk %d failed: %s", chunk.index, e)
-                    raise TransferError(message=f"Chunk {chunk.index} failed: {e}") from e
+                    _emit_progress()
+                except Exception:
+                    log.debug("Progress callback raised", exc_info=True)
 
-                if on_progress:
-                    bytes_done, chunks_done = self._progress_snapshot()
-                    elapsed = time.monotonic() - self._start_time
-                    speed = bytes_done / elapsed if elapsed > 0 else 0
-                    on_progress(
-                        DownloadProgress(
-                            bytes_done=bytes_done,
-                            total_bytes=file_size,
-                            chunks_done=chunks_done,
-                            total_chunks=len(all_chunks),
-                            speed_bps=speed,
-                        )
+        reporter: threading.Thread | None = None
+        if on_progress:
+            reporter = threading.Thread(
+                target=_progress_loop, name="mega-progress", daemon=True
+            )
+            reporter.start()
+
+        # Spawn workers
+        try:
+            with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+                futures = []
+                for chunk in pending:
+                    if self._stop_event.is_set():
+                        break
+                    fut = pool.submit(
+                        self._download_chunk,
+                        chunk,
+                        aes_key,
+                        nonce,
+                        destination,
+                        state,
                     )
+                    futures.append((chunk, fut))
+
+                for chunk, fut in futures:
+                    try:
+                        fut.result()
+                    except Exception as e:
+                        self._stop_event.set()
+                        if self.keep_state_files_on_error:
+                            with self._lock:
+                                state_to_save = snapshot_state(state)
+                            save_state(state_to_save)
+                        else:
+                            clear_state(destination)
+                        log.error("Chunk %d failed: %s", chunk.index, e)
+                        raise TransferError(message=f"Chunk {chunk.index} failed: {e}") from e
+        finally:
+            progress_stop.set()
+            if reporter is not None:
+                reporter.join(timeout=2.0)
+
+        if on_progress:
+            # Final synchronous report so the consumer sees 100% of the bytes.
+            try:
+                _emit_progress()
+            except Exception:
+                log.debug("Final progress callback raised", exc_info=True)
 
         elapsed = time.monotonic() - self._start_time
         save_state(snapshot_state(state))
@@ -669,9 +710,12 @@ class MegaDownloader:
             state.mark_chunk_done(chunk.index, mac)
             self._bytes_done += chunk.size
             self._chunks_done += 1
+            bytes_done_now = self._bytes_done
             # Save state periodically (every ~16 chunks) to limit IO overhead
             should_save = self._chunks_done % 16 == 0
             state_to_save = snapshot_state(state) if should_save else None
+        # Feed the rolling meter outside the state lock (it has its own).
+        self._speed_meter.update(bytes_done_now)
         if should_save:
             save_state(state_to_save)
 

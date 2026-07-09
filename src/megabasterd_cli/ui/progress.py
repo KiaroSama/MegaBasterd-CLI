@@ -22,6 +22,7 @@ from rich.progress import (
 )
 from rich.text import Text
 
+from ..utils.speed import RollingSpeedMeter
 from .theme import make_console
 
 PROGRESS_SEPARATOR = "=" * 120
@@ -89,14 +90,31 @@ class MultiFileProgressView:
         self.status = "Starting"
         self.file_states: list[ProgressFileState] = []
         self._lock = threading.RLock()
+        # View-owned speed measurement: one rolling meter per file row plus an
+        # aggregate meter over the monotonic overall byte count. Speeds/ETA are
+        # computed at RENDER time from these meters, so they decay to 0 during
+        # a stall instead of freezing at the last producer-supplied value.
+        self._row_meters: dict[str, RollingSpeedMeter] = {}
+        self._overall_meter = RollingSpeedMeter(window=5.0)
+        self._overall_monotonic = 0
+        self._backend_speed: float | None = None
+        self._backend_speed_at = 0.0
         self._console = make_console(color_system="truecolor")
+        # Pass SELF as the renderable: Rich re-invokes __rich_console__ on
+        # every auto-refresh (4/s), so Elapsed / ETA / speed keep moving even
+        # while the producer is silent (Rich's Live runs its own refresh
+        # thread). A pre-built static Group would freeze between updates.
         self._live = Live(
-            self._render(),
+            self,
             console=self._console,
             refresh_per_second=4,
             transient=False,
         )
         self._live.start()
+
+    def __rich_console__(self, console, options):  # pragma: no cover - Rich hook
+        with self._lock:
+            yield self._render()
 
     def update(
         self,
@@ -121,14 +139,22 @@ class MultiFileProgressView:
             self.total_items = max(0, int(total_items or 0))
             self.failed_items = max(0, int(failed_items or 0))
             self.status = status
-            if overall_speed is not None:
-                self.overall_speed = max(0.0, float(overall_speed))
-            elif file_states:
-                self.overall_speed = sum(
-                    max(0.0, float(state.speed or 0.0)) for state in file_states
-                )
+            # Feed the view-owned meters with this frame's cumulative bytes.
+            live_keys = {state.key for state in self.file_states}
+            for stale_key in [key for key in self._row_meters if key not in live_keys]:
+                self._row_meters.pop(stale_key, None)
+            for state in self.file_states:
+                meter = self._row_meters.setdefault(state.key, RollingSpeedMeter(window=5.0))
+                meter.update(max(0, int(state.completed or 0)), now)
+            self._overall_monotonic = max(self._overall_monotonic, self.overall_completed)
+            self._overall_meter.update(self._overall_monotonic, now)
+            # A producer-reported overall speed is authoritative while fresh;
+            # render falls back to the aggregate meter when it goes stale.
+            if overall_speed is not None and overall_speed >= 0:
+                self._backend_speed = float(overall_speed)
+                self._backend_speed_at = now
             if force or now - self.last_render >= self.min_interval:
-                self._live.update(self._render(), refresh=True)
+                self._live.refresh()
                 self.last_render = now
 
     def close(self, success: bool = True) -> None:
@@ -136,11 +162,23 @@ class MultiFileProgressView:
             self.status = "Complete" if success else "Failed"
             if success and self.overall_total is not None:
                 self.overall_completed = max(self.overall_completed, self.overall_total)
-            self._live.update(self._render(), refresh=True)
+            self._live.refresh()
             self._live.stop()
             print()
 
     def _render(self) -> Group:
+        # Speeds are measured HERE, at render time, by the view's own meters:
+        # Rich's auto-refresh calls this ~4x/s, so between producer updates the
+        # elapsed clock ticks, speeds decay during stalls, and ETA follows.
+        now = time.perf_counter()
+        for state in self.file_states:
+            if state.status == "active":
+                meter = self._row_meters.get(state.key)
+                state.speed = meter.current(now) if meter is not None else 0.0
+        if self._backend_speed is not None and now - self._backend_speed_at <= 2.5:
+            self.overall_speed = self._backend_speed
+        else:
+            self.overall_speed = self._overall_meter.current(now)
         width = max(70, min(140, int(getattr(self._console, "width", 100) or 100)))
         title_style = "#ff5f94" if self.status != "Failed" else "bold red"
         lines: list[Text] = [Text(_shorten_middle(self.title, width), style=title_style), Text("")]

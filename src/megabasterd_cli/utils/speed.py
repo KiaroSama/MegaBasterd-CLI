@@ -1,9 +1,57 @@
-"""Bandwidth limiting via token bucket."""
+"""Bandwidth limiting via token bucket, plus rolling transfer-speed measurement."""
 
 from __future__ import annotations
 
 import threading
 import time
+from collections import deque
+
+
+class RollingSpeedMeter:
+    """Stable bytes/sec from cumulative byte samples over a sliding window.
+
+    Feed the latest *cumulative* byte count via :meth:`update` whenever bytes
+    land; read the display rate via :meth:`current`, which measures
+    ``delta_bytes / (now - oldest_sample)`` so the rate decays smoothly to 0
+    while no new bytes arrive (instead of freezing at the last value) and the
+    first sample acts as the baseline (resumed bytes never inflate the rate).
+    """
+
+    def __init__(self, window: float = 5.0) -> None:
+        self.window = max(1.0, float(window))
+        self.samples: deque[tuple[float, int]] = deque()
+        self.speed = 0.0
+        self._lock = threading.Lock()
+
+    def update(self, byte_count: int, now: float | None = None) -> float:
+        now = time.monotonic() if now is None else now
+        byte_count = max(0, int(byte_count or 0))
+        with self._lock:
+            if self.samples and byte_count < self.samples[-1][1]:
+                self.samples.clear()
+                self.speed = 0.0
+            self.samples.append((now, byte_count))
+            while len(self.samples) > 1 and now - self.samples[0][0] > self.window:
+                self.samples.popleft()
+            if len(self.samples) >= 2:
+                elapsed = self.samples[-1][0] - self.samples[0][0]
+                delta = self.samples[-1][1] - self.samples[0][1]
+                if elapsed >= 0.25 and delta >= 0:
+                    self.speed = delta / max(elapsed, 1e-6)
+            return self.speed
+
+    def current(self, now: float | None = None) -> float:
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            while len(self.samples) > 1 and now - self.samples[0][0] > self.window:
+                self.samples.popleft()
+            if len(self.samples) < 2:
+                return 0.0
+            elapsed = now - self.samples[0][0]
+            delta = self.samples[-1][1] - self.samples[0][1]
+            if elapsed < 0.25 or delta < 0:
+                return self.speed
+            return delta / max(elapsed, 1e-6)
 
 
 class TokenBucket:
