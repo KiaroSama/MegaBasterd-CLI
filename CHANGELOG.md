@@ -8,6 +8,7 @@
 ### Fixed
 - Fixed an intermittent deadlock between the folder-download live view and Rich's auto-refresh thread (lock-order inversion) that could freeze the progress UI and hang the CLI at completion.
 - Fixed inflated download speeds at the start of resumed folder downloads: the live view no longer counts previously-downloaded bytes as instantaneous speed, and the overall speed is derived from the per-file meters (or a fresh backend hint) instead of a duplicate aggregate meter.
+- Fixed the same lifetime-average speed bug on the upload side: upload progress now flows from a steady 0.5 s reporter thread with a rolling-window rate whose baseline excludes resumed chunks, instead of firing once per completed chunk future with `bytes_done / elapsed`.
 
 ### Security
 - Fixed a folder-download path-traversal weakness: remote node names can no longer become `.`, `..`, empty, or contain path separators, and every download destination is verified to stay inside the chosen output directory.
