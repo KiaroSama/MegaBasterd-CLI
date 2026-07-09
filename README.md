@@ -20,6 +20,8 @@ and is focused on CLI/source-script usage rather than a desktop GUI.
 - Interactive PowerShell launcher with colored menus and dependency checks.
 - Public MEGA file and folder downloads.
 - Folder downloads that preserve the MEGA folder hierarchy locally.
+- Selective folder downloads: `--include`/`--exclude` glob filters and an
+  interactive `--select` file picker for folder links.
 - Chunked, resumable transfers using `.mbstate` state files.
 - Live Rich-based transfer progress with colored bars, speed, ETA, and totals.
 - Multi-file parallel download support.
@@ -122,6 +124,8 @@ Run direct commands through the launcher:
 .\Run.ps1 info "https://mega.nz/folder/ID#KEY"
 .\Run.ps1 download "https://mega.nz/file/ID#KEY"
 .\Run.ps1 download "https://mega.nz/folder/ID#KEY" -o .\downloads
+.\Run.ps1 download "https://mega.nz/folder/ID#KEY" -I "*.mkv" -X "*sample*"
+.\Run.ps1 download "https://mega.nz/folder/ID#KEY" --select
 .\Run.ps1 upload .\archive.zip --account me@example.com
 .\Run.ps1 stream "https://mega.nz/file/ID#KEY" --port 8080
 ```
