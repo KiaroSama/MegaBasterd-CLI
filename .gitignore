@@ -136,9 +136,23 @@ desktop.ini
 
 # Local assistant/tooling state
 .claude/
+.kiro/
+.codex/
+.cursor/
+.cline/
+.agents/
+/.ai/
+/reference.md
+/lesson.md
+/CLAUDE.md
+/AGENTS.md
+/graphify-out/
 
 # Private, local-only AI handoff document (never publish)
 explain-AI.md
+
+# Private, local-only registry of real secrets (never publish)
+/secrets.md
 
 # Private, local-only directory (never publish), at any depth
 .ignoreme
