@@ -12,11 +12,18 @@ import json
 import logging
 import os
 import tempfile
+import threading
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 log = logging.getLogger(__name__)
 STATE_FORMAT_VERSION = 1
+
+# Serializes concurrent saves from parallel chunk workers; on Windows two
+# simultaneous os.replace() calls onto the same target (or a virus scanner
+# holding the fresh file) raise PermissionError.
+_save_lock = threading.Lock()
 
 
 @dataclass
@@ -105,13 +112,23 @@ def save_state(state: TransferState) -> None:
     # Convert int chunk_macs keys to strings for JSON
     data["chunk_macs"] = {str(k): v for k, v in state.chunk_macs.items()}
 
-    with tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=sp.parent, delete=False, suffix=".tmp"
-    ) as tf:
-        json.dump(data, tf, separators=(",", ":"))
-        temp_path = tf.name
+    with _save_lock:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=sp.parent, delete=False, suffix=".tmp"
+        ) as tf:
+            json.dump(data, tf, separators=(",", ":"))
+            temp_path = tf.name
 
-    os.replace(temp_path, sp)
+        # Windows: replace can transiently fail while the destination is held
+        # open (previous replace, antivirus scan). Retry briefly.
+        for attempt in range(5):
+            try:
+                os.replace(temp_path, sp)
+                return
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
 
 
 def clear_state(destination: str | Path) -> None:

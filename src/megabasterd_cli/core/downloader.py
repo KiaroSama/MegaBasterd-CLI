@@ -28,7 +28,12 @@ from typing import Callable, cast
 import requests
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from ..utils.helpers import ensure_unique_path, ensure_within_directory, sanitize_filename
+from ..utils.helpers import (
+    claim_destination,
+    ensure_within_directory,
+    release_destination,
+    sanitize_filename,
+)
 from ..utils.speed import RollingSpeedMeter, make_limiter
 from .chunks import Chunk, chunk_mac, combine_chunk_macs, condense_mac, iter_chunks
 from .crypto import (
@@ -107,7 +112,12 @@ class MegaDownloader:
         quota_max_wait_loops: int = 0,
         keep_state_files_on_error: bool = True,
         overwrite: bool = False,
+        limiter=None,  # Shared TokenBucket/NoOpLimiter for aggregate command caps
+        auto_resume: bool = True,
+        user_agent: str | None = None,
     ):
+        from .api import default_user_agent
+
         self.api = api
         self.max_workers = max(1, max_workers)
         self.verify_integrity = verify_integrity
@@ -118,7 +128,12 @@ class MegaDownloader:
         # back so the pool can cool down or promote entries.
         self.proxy_pool = proxy_pool
         self.force_proxy = force_proxy
-        self.limiter = make_limiter(speed_limit_kbps)
+        # When a shared limiter is supplied, all downloaders of one command
+        # drain the same bucket, so `speed_limit_kbps` acts as an aggregate
+        # cap instead of multiplying per parallel file.
+        self.limiter = limiter if limiter is not None else make_limiter(speed_limit_kbps)
+        self.auto_resume = auto_resume
+        self.user_agent = user_agent or default_user_agent()
         # Quota recovery: when the upstream returns -17/-24, the wrapper around
         # download_link sleeps up to quota_max_wait_loops × quota_wait_seconds.
         self.quota_wait_seconds = quota_wait_seconds
@@ -431,8 +446,59 @@ class MegaDownloader:
 
         all_chunks = list(iter_chunks(file_size))
 
+        # Atomically reserve the final destination before any worker starts:
+        # one reserved path (and therefore one state file) belongs to exactly
+        # one transfer, even when parallel links carry identical or
+        # sanitization/truncation-colliding names. An existing file is reused
+        # only when it is a resumable continuation of this exact transfer;
+        # otherwise a unique name inside the already-contained directory is
+        # claimed (or the file is replaced under --overwrite).
+        requested = destination
+        destination = claim_destination(
+            requested,
+            overwrite=self.overwrite,
+            is_resumable=lambda p: self._is_usable_download_state(
+                state=load_state(p),
+                destination=p,
+                source=source,
+                file_size=file_size,
+                aes_key=aes_key,
+                nonce=nonce,
+                all_chunks=all_chunks,
+            ),
+        )
+        if destination != requested:
+            log.info(
+                "Destination already exists or is in use; writing to unique path %s instead",
+                destination.name,
+            )
+        try:
+            return self._run_claimed_download(
+                file_size=file_size,
+                aes_key=aes_key,
+                nonce=nonce,
+                mac_iv_a32=mac_iv_a32,
+                destination=destination,
+                source=source,
+                on_progress=on_progress,
+                all_chunks=all_chunks,
+            )
+        finally:
+            release_destination(destination)
+
+    def _run_claimed_download(
+        self,
+        file_size: int,
+        aes_key: bytes,
+        nonce: bytes,
+        mac_iv_a32: list[int],
+        destination: Path,
+        source: str,
+        on_progress: Callable[[DownloadProgress], None] | None,
+        all_chunks: list[Chunk],
+    ) -> DownloadResult:
         # Load existing state for resume
-        state = load_state(destination)
+        state = load_state(destination) if self.auto_resume else None
         if not self._is_usable_download_state(
             state=state,
             destination=destination,
@@ -442,15 +508,6 @@ class MegaDownloader:
             nonce=nonce,
             all_chunks=all_chunks,
         ):
-            # This is not a resumable continuation of the same transfer. Do not
-            # clobber an unrelated existing file unless overwrite was requested;
-            # pick a unique name in the same (already-contained) directory.
-            if destination.exists() and not self.overwrite:
-                destination = ensure_unique_path(destination)
-                log.info(
-                    "Destination already exists; writing to unique path %s instead",
-                    destination.name,
-                )
             state = TransferState(
                 transfer_type="download",
                 source=source,
@@ -562,7 +619,6 @@ class MegaDownloader:
             except Exception:
                 log.debug("Final progress callback raised", exc_info=True)
 
-        elapsed = time.monotonic() - self._start_time
         save_state(snapshot_state(state))
 
         # Integrity check
@@ -582,6 +638,9 @@ class MegaDownloader:
                 raise IntegrityError(message=message)
 
         clear_state(destination)
+        # Elapsed covers the whole operation including integrity verification,
+        # matching the uploader's result semantics.
+        elapsed = time.monotonic() - self._start_time
         return DownloadResult(
             path=destination, size=file_size, elapsed_seconds=elapsed, integrity_ok=integrity_ok
         )
@@ -597,6 +656,8 @@ class MegaDownloader:
         all_chunks: list[Chunk],
     ) -> bool:
         """Return True only when a resume state matches this exact transfer."""
+        if not self.auto_resume:
+            return False
         if state is None:
             return False
         if state.transfer_type != "download":
@@ -647,7 +708,10 @@ class MegaDownloader:
             return
 
         cdn_url, generation = self._current_url()
-        headers = {"Range": f"bytes={chunk.offset}-{chunk.offset + chunk.size - 1}"}
+        headers = {
+            "Range": f"bytes={chunk.offset}-{chunk.offset + chunk.size - 1}",
+            "User-Agent": self.user_agent,
+        }
         request_proxies, picked_proxy = self._proxies_for_request()
         encrypted = bytearray()
         try:

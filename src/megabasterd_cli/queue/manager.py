@@ -36,6 +36,14 @@ class JobStatus(str, Enum):
     DONE = "done"
     FAILED = "failed"
     CANCELED = "canceled"
+    # A previous run crashed/was killed while this job was active. Interrupted
+    # jobs are re-run automatically; failed jobs need an explicit retry.
+    INTERRUPTED = "interrupted"
+
+
+# An active job whose owner has not heartbeated for this long is considered
+# abandoned (crash, reboot, kill) and is safely recovered on the next run.
+LEASE_SECONDS = 300
 
 
 class JobType(str, Enum):
@@ -58,6 +66,10 @@ class QueueItem:
     password: str | None = field(default=None, repr=False)
     created_iso: str = ""
     finished_iso: str | None = None
+    # Lease/ownership of an active job: which run owns it and when it last
+    # proved it was alive. Absent in legacy queue files (safe default None).
+    run_id: str | None = None
+    heartbeat_iso: str | None = None
 
     @staticmethod
     def new_id() -> str:
@@ -290,11 +302,92 @@ class QueueManager:
                     item.error = error
                 if status in (JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELED):
                     item.finished_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+                    item.run_id = None
+                    item.heartbeat_iso = None
                 break
         self.save()
 
+    def mark_active(self, item_id: str, run_id: str) -> None:
+        """Lease a job to this run: active + owner + fresh heartbeat."""
+        import datetime as dt
+
+        now = dt.datetime.now(dt.timezone.utc).isoformat()
+        for item in self.items:
+            if item.id == item_id:
+                item.status = JobStatus.ACTIVE.value
+                item.run_id = run_id
+                item.heartbeat_iso = now
+                break
+        self.save()
+
+    def touch(self, item_id: str, run_id: str) -> None:
+        """Refresh the heartbeat of a job this run owns."""
+        import datetime as dt
+
+        for item in self.items:
+            if item.id == item_id and item.run_id == run_id:
+                item.heartbeat_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+                self.save()
+                break
+
+    def recover_interrupted(self, lease_seconds: int = LEASE_SECONDS) -> list[QueueItem]:
+        """Mark abandoned active jobs (stale/missing heartbeat) as interrupted.
+
+        A live run keeps heartbeating its active job, so jobs inside the lease
+        window are never stolen. Jobs whose owner stopped heartbeating (crash,
+        reboot, kill) become INTERRUPTED and are re-run by `runnable()`.
+        Returns the recovered items.
+        """
+        import datetime as dt
+
+        now = dt.datetime.now(dt.timezone.utc)
+        recovered: list[QueueItem] = []
+        for item in self.items:
+            if item.status != JobStatus.ACTIVE.value:
+                continue
+            stale = True
+            if item.heartbeat_iso:
+                try:
+                    beat = dt.datetime.fromisoformat(item.heartbeat_iso)
+                    stale = (now - beat).total_seconds() > lease_seconds
+                except ValueError:
+                    stale = True
+            if stale:
+                item.status = JobStatus.INTERRUPTED.value
+                item.run_id = None
+                item.heartbeat_iso = None
+                recovered.append(item)
+        if recovered:
+            self.save()
+        return recovered
+
+    def retry(self, item_id: str) -> bool:
+        """Return a failed/interrupted/canceled job to pending."""
+        for item in self.items:
+            if item.id == item_id and item.status in (
+                JobStatus.FAILED.value,
+                JobStatus.INTERRUPTED.value,
+                JobStatus.CANCELED.value,
+            ):
+                item.status = JobStatus.PENDING.value
+                item.error = None
+                item.finished_iso = None
+                item.run_id = None
+                item.heartbeat_iso = None
+                self.save()
+                return True
+        return False
+
     def pending(self) -> list[QueueItem]:
         return [i for i in self.items if i.status == JobStatus.PENDING.value]
+
+    def runnable(self) -> list[QueueItem]:
+        """Jobs the next run should process: pending plus recovered interrupted."""
+        return [
+            i
+            for i in self.items
+            if i.status in (JobStatus.PENDING.value, JobStatus.INTERRUPTED.value)
+        ]
 
     def clear_done(self) -> int:
         before = len(self.items)

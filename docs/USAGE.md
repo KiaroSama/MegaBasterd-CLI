@@ -339,9 +339,9 @@ Common keys:
 | `max_parallel_downloads` | Files downloaded at once. |
 | `upload_workers` | Chunk workers per upload. |
 | `max_parallel_uploads` | Files uploaded at once. |
-| `speed_limit_kbps` | Download speed cap. |
-| `upload_speed_limit_kbps` | Upload speed cap. |
-| `default_account` | Account used when `--account` is omitted. |
+| `speed_limit_kbps` | Aggregate download cap for one command (shared by all parallel workers). |
+| `upload_speed_limit_kbps` | Aggregate upload cap for one command. |
+| `default_account` | Legacy fallback when `--account` is omitted and no vault default (`account default`) is set. |
 | `smart_proxy_enabled` | Enable proxy pool. |
 | `force_smart_proxy` | Refuse direct connections when no proxy is available. |
 | `quota_wait_seconds` | Wait after MEGA quota errors. |

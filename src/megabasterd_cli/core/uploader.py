@@ -46,6 +46,13 @@ log = logging.getLogger(__name__)
 
 UPLOAD_URL_EXPIRY_STATUS = {403, 404, 410, 509}
 
+# Versioned identity of the local source file stored in upload resume state.
+# Resume is allowed only when every recorded property still matches, so a
+# same-size replaced/modified file can never mix stale uploaded chunks with
+# new content. Legacy states without an identity are never resumed.
+SOURCE_IDENTITY_VERSION = 1
+_FINGERPRINT_SAMPLE = 64 * 1024  # Bytes hashed from the start/middle/end.
+
 
 @dataclass
 class UploadProgress:
@@ -81,7 +88,12 @@ class MegaUploader:
         proxies: dict[str, str] | None = None,
         proxy_pool=None,  # SmartProxyPool | None
         force_proxy: bool = False,
+        limiter=None,  # Shared TokenBucket/NoOpLimiter for aggregate command caps
+        auto_resume: bool = True,
+        user_agent: str | None = None,
     ):
+        from .api import default_user_agent
+
         if client.session is None:
             raise RuntimeError("Uploader requires an authenticated MegaClient")
         self.client = client
@@ -91,7 +103,11 @@ class MegaUploader:
         self.proxies = proxies
         self.proxy_pool = proxy_pool
         self.force_proxy = force_proxy
-        self.limiter = make_limiter(speed_limit_kbps)
+        # A supplied limiter is shared across every parallel upload of one
+        # command, making `speed_limit_kbps` an aggregate cap.
+        self.limiter = limiter if limiter is not None else make_limiter(speed_limit_kbps)
+        self.auto_resume = auto_resume
+        self.user_agent = user_agent or default_user_agent()
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._bytes_done = 0
@@ -136,6 +152,11 @@ class MegaUploader:
         """
         if not source.is_file():
             raise FileNotFoundError(f"Not a file: {source}")
+        # Operation clock starts here, once, and is never reset by upload-slot
+        # refreshes/retries; the result elapsed covers every phase including
+        # finalization.
+        op_start = time.monotonic()
+        self._start_time = op_start
         file_size = source.stat().st_size
         upload_name = sanitize_filename(rename_to or source.name)
         target = target_handle or self.client.find_root()
@@ -147,10 +168,31 @@ class MegaUploader:
         nonce = os.urandom(8)
         upload_url: str | None = None
 
+        if file_size == 0:
+            # Zero-byte files have no chunks and therefore no chunk-response
+            # completion token; MEGA's protocol uses a POST to `<url>/0` with
+            # an empty body instead.
+            return self._upload_empty_file(
+                source, upload_name, target, aes_key, nonce, on_progress, op_start
+            )
+
+        source_identity = self._source_identity(source)
+
         # State for resume
         state_path = self._upload_state_destination(source)
-        state = load_state(state_path)
-        if state is not None and state.total_size == file_size and state.source == str(source):
+        state = load_state(state_path) if self.auto_resume else None
+        if state is not None and not self._is_resumable_upload_state(
+            state, source, file_size, source_identity
+        ):
+            log.warning(
+                "The local file %s changed since the interrupted upload "
+                "(or the state predates source-identity tracking); the stale "
+                "upload state cannot be reused and the upload restarts fresh.",
+                source,
+            )
+            clear_state(state_path)
+            state = None
+        if state is not None:
             try:
                 aes_key = bytes.fromhex(state.metadata["aes_key"])
                 nonce = bytes.fromhex(state.metadata["nonce"])
@@ -162,8 +204,6 @@ class MegaUploader:
             except (KeyError, ValueError):
                 clear_state(state_path)
                 state = None
-        else:
-            state = None
 
         if state is None:
             # Request a fresh upload slot
@@ -179,6 +219,7 @@ class MegaUploader:
                     "upload_url": upload_url,
                     "aes_key": aes_key.hex(),
                     "nonce": nonce.hex(),
+                    "source_identity": source_identity,
                 },
             )
 
@@ -234,7 +275,6 @@ class MegaUploader:
                 pending = [c for c in all_chunks if not state.is_chunk_done(c.index)]
                 self._bytes_done = sum(c.size for c in all_chunks if state.is_chunk_done(c.index))
                 self._chunks_done = len(all_chunks) - len(pending)
-                self._start_time = time.monotonic()
                 self._stop_event.clear()
                 # Fresh meter per attempt; the baseline sample is the resumed
                 # byte count, so speed measures only NEW bytes this session.
@@ -314,12 +354,53 @@ class MegaUploader:
         if self._completion_token is None:
             raise TransferError(message="Upload finished without a completion token")
 
+        # Re-check the source identity before finalization: if the local file
+        # was modified/replaced during the transfer, the uploaded chunks are a
+        # mix of old and new content and must never be registered.
+        try:
+            current_identity = self._source_identity(source)
+        except OSError as exc:
+            clear_state(state_path)
+            raise TransferError(
+                message=f"Local file disappeared during upload: {source} ({exc})"
+            ) from exc
+        if not self._identities_match(source_identity, current_identity):
+            clear_state(state_path)
+            raise TransferError(
+                message=(
+                    f"The local file changed while it was being uploaded: {source}. "
+                    "The partial upload was discarded; retry to upload the new content."
+                )
+            )
+
         # Build file MAC and wrapped key
         chunk_macs = [state.get_chunk_mac(c.index) for c in all_chunks]
         if any(m is None for m in chunk_macs):
             raise TransferError(message="Missing chunk MAC after upload")
         file_mac = combine_chunk_macs(chunk_macs, aes_key)
         mac_iv = condense_mac(file_mac)
+        file_handle = self._register_node(
+            upload_name, target, aes_key, nonce, mac_iv, self._completion_token
+        )
+        clear_state(state_path)
+
+        return UploadResult(
+            file_handle=file_handle,
+            name=upload_name,
+            size=file_size,
+            elapsed_seconds=time.monotonic() - op_start,
+        )
+
+    def _register_node(
+        self,
+        upload_name: str,
+        target: str,
+        aes_key: bytes,
+        nonce: bytes,
+        mac_iv: list[int],
+        completion_token: bytes,
+    ) -> str:
+        """Encrypt attributes, wrap the file key, and register the new node."""
         file_key_a32 = pack_file_key(aes_key, nonce, mac_iv)
 
         # Encrypt attributes (filename, with AES-CBC) and wrap the 32-byte
@@ -330,25 +411,86 @@ class MegaUploader:
             self.client.session.master_key,
         )
 
-        # Register the new node
         result = self.api.complete_upload(
             target_handle=target,
-            upload_token=b64_url_encode(self._completion_token),
+            upload_token=b64_url_encode(completion_token),
             encrypted_attrs=b64_url_encode(encrypted_attrs),
             wrapped_key=b64_url_encode(wrapped_key),
         )
         self.client.invalidate_cache()
 
         nodes = result.get("f", []) if isinstance(result, dict) else []
-        file_handle = nodes[0]["h"] if nodes else self._completion_token.hex()
-        clear_state(state_path)
+        return nodes[0]["h"] if nodes else completion_token.hex()
 
-        elapsed = time.monotonic() - self._start_time
+    def _upload_empty_file(
+        self,
+        source: Path,
+        upload_name: str,
+        target: str,
+        aes_key: bytes,
+        nonce: bytes,
+        on_progress: Callable[[UploadProgress], None] | None,
+        op_start: float,
+    ) -> UploadResult:
+        """Upload a zero-byte file.
+
+        MEGA still requires an upload slot; the completion token comes from a
+        single POST of an empty body to `<upload_url>/0` (the same convention
+        mega.py and the SDKs use). The file MAC of an empty file condenses to
+        [0, 0] because there are no chunk MACs to combine.
+        """
+        upload_info = self.api.request_upload(0)
+        upload_url = upload_info["p"]
+        token: bytes | None = None
+        for attempt in range(2):
+            request_proxies, picked_proxy = self._proxies_for_request()
+            try:
+                resp = requests.post(
+                    f"{upload_url}/0",
+                    data=b"",
+                    timeout=self.timeout,
+                    proxies=request_proxies,
+                    headers={"User-Agent": self.user_agent},
+                )
+            except (requests.ConnectionError, requests.Timeout):
+                if picked_proxy and self.proxy_pool is not None:
+                    self.proxy_pool.report_failure(picked_proxy)
+                raise
+            status, body = resp.status_code, resp.content
+            resp.close()
+            if status in UPLOAD_URL_EXPIRY_STATUS and attempt == 0:
+                upload_info = self.api.request_upload(0)
+                upload_url = upload_info["p"]
+                continue
+            if status != 200:
+                if picked_proxy and self.proxy_pool is not None:
+                    self.proxy_pool.report_failure(picked_proxy)
+                raise TransferError(message=f"Zero-byte upload HTTP {status}")
+            if picked_proxy and self.proxy_pool is not None:
+                self.proxy_pool.report_success(picked_proxy)
+            token = body
+            break
+        if not token:
+            raise TransferError(message="Zero-byte upload returned no completion token")
+
+        mac_iv = condense_mac(combine_chunk_macs([], aes_key))
+        file_handle = self._register_node(upload_name, target, aes_key, nonce, mac_iv, token)
+
+        if on_progress:
+            try:
+                on_progress(
+                    UploadProgress(
+                        bytes_done=0, total_bytes=0, chunks_done=0, total_chunks=0, speed_bps=0.0
+                    )
+                )
+            except Exception:
+                log.debug("Zero-byte upload progress callback raised", exc_info=True)
+
         return UploadResult(
             file_handle=file_handle,
             name=upload_name,
-            size=file_size,
-            elapsed_seconds=elapsed,
+            size=0,
+            elapsed_seconds=time.monotonic() - op_start,
         )
 
     @staticmethod
@@ -359,6 +501,65 @@ class MegaUploader:
         digest = hashlib.sha256(identity).hexdigest()[:24]
         return data_dir() / "upload-state" / f"{sanitize_filename(source.name)}.{digest}.upload"
 
+    @staticmethod
+    def _sampled_fingerprint(source: Path, size: int) -> str:
+        """Content fingerprint: SHA-256 over sampled head/middle/tail regions.
+
+        Small files are hashed in full; larger files hash three 64 KiB regions
+        plus the size, which is strong enough to detect a same-size replacement
+        or in-place modification without reading multi-GB files end to end.
+        """
+        h = hashlib.sha256()
+        h.update(str(size).encode("ascii"))
+        with open(source, "rb") as f:
+            if size <= 3 * _FINGERPRINT_SAMPLE:
+                for block in iter(lambda: f.read(65536), b""):
+                    h.update(block)
+            else:
+                for offset in (0, size // 2, size - _FINGERPRINT_SAMPLE):
+                    f.seek(offset)
+                    h.update(f.read(_FINGERPRINT_SAMPLE))
+        return h.hexdigest()
+
+    @classmethod
+    def _source_identity(cls, source: Path) -> dict:
+        """Snapshot the properties that must be unchanged to resume/finalize."""
+        st = source.stat()
+        identity: dict = {
+            "v": SOURCE_IDENTITY_VERSION,
+            "path": str(source.resolve()),
+            "size": st.st_size,
+            "mtime_ns": st.st_mtime_ns,
+            "fingerprint": cls._sampled_fingerprint(source, st.st_size),
+        }
+        # Platform file identity (inode / NTFS file index) when available.
+        if getattr(st, "st_ino", 0):
+            identity["file_id"] = f"{getattr(st, 'st_dev', 0)}:{st.st_ino}"
+        return identity
+
+    @staticmethod
+    def _identities_match(recorded: dict | None, current: dict) -> bool:
+        if not isinstance(recorded, dict):
+            return False
+        if recorded.get("v") != SOURCE_IDENTITY_VERSION:
+            return False
+        for field in ("path", "size", "mtime_ns", "fingerprint"):
+            if recorded.get(field) != current.get(field):
+                return False
+        # Compare the platform file id only when both sides recorded one.
+        recorded_id, current_id = recorded.get("file_id"), current.get("file_id")
+        return not (recorded_id and current_id and recorded_id != current_id)
+
+    def _is_resumable_upload_state(
+        self, state: TransferState, source: Path, file_size: int, identity: dict
+    ) -> bool:
+        """Resume only when the state provably belongs to this exact file."""
+        if state.transfer_type != "upload":
+            return False
+        if state.total_size != file_size or state.source != str(source):
+            return False
+        return self._identities_match((state.metadata or {}).get("source_identity"), identity)
+
     def upload_directory(
         self,
         source_dir: Path,
@@ -366,14 +567,26 @@ class MegaUploader:
         on_progress: Callable[[UploadProgress], None] | None = None,
         on_file_done: Callable[[UploadResult, Path], None] | None = None,
         keep_going: bool = False,
+        on_manifest: Callable[[list[tuple[Path, int]]], None] | None = None,
+        on_file_progress: Callable[[Path, UploadProgress], None] | None = None,
     ) -> list[UploadResult]:
         """Upload an entire local directory tree, preserving structure.
 
         Creates remote folders as needed and uploads each file in place.
+        `on_manifest` receives the complete `(path, size)` file list before any
+        byte is uploaded; `on_file_progress` identifies which file a progress
+        report belongs to. Remote directory creation is not part of the byte
+        totals.
         """
         self.last_directory_failures = []
         if not source_dir.is_dir():
             raise FileNotFoundError(f"Not a directory: {source_dir}")
+
+        # Complete file manifest first: total files and bytes are known before
+        # any upload starts.
+        entries = sorted(source_dir.rglob("*"))
+        if on_manifest:
+            on_manifest([(p, p.stat().st_size) for p in entries if p.is_file()])
 
         base_parent = target_handle or self.client.find_root()
         if not base_parent:
@@ -388,7 +601,7 @@ class MegaUploader:
         results: list[UploadResult] = []
         failures: list[str] = []
         failed_dirs: set[Path] = set()
-        for local_path in sorted(source_dir.rglob("*")):
+        for local_path in entries:
             if any(parent in failed_dirs for parent in local_path.parents):
                 failures.append(f"{local_path}: parent folder creation failed")
                 continue
@@ -400,10 +613,17 @@ class MegaUploader:
                     )
                 elif local_path.is_file():
                     parent_remote = handle_for.get(local_path.parent, root_handle)
+
+                    def _file_progress(p: UploadProgress, fp: Path = local_path) -> None:
+                        if on_file_progress:
+                            on_file_progress(fp, p)
+                        if on_progress:
+                            on_progress(p)
+
                     result = self.upload_file(
                         local_path,
                         target_handle=parent_remote,
-                        on_progress=on_progress,
+                        on_progress=(_file_progress if (on_file_progress or on_progress) else None),
                     )
                     results.append(result)
                     if on_file_done:
@@ -469,6 +689,7 @@ class MegaUploader:
                 data=encrypted,
                 timeout=self.timeout,
                 proxies=request_proxies,
+                headers={"User-Agent": self.user_agent},
             )
         except (requests.ConnectionError, requests.Timeout):
             if picked_proxy and self.proxy_pool is not None:

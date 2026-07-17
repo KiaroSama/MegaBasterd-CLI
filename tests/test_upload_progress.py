@@ -72,13 +72,15 @@ def test_resumed_upload_speed_excludes_resumed_bytes(tmp_path, monkeypatch):
             "aes_key": aes_key.hex(),
             "nonce": nonce.hex(),
             "completion_token": b"TOKEN".hex(),
+            # Resume now requires a matching versioned source identity.
+            "source_identity": MegaUploader._source_identity(source),
         },
     )
     for chunk in chunks[1:]:
         state.mark_chunk_done(chunk.index, b"\x00" * 16)
     save_state(state)
 
-    def fake_post(url, data=b"", timeout=None, proxies=None):
+    def fake_post(url, data=b"", timeout=None, proxies=None, headers=None):
         time.sleep(0.35)  # deterministic transfer duration for the rate check
         return _FakeResponse(b"")
 

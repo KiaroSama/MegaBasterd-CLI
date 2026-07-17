@@ -116,7 +116,6 @@ def _config_summary_for_log(store: ConfigStore) -> dict[str, object]:
         "upload_workers": cfg.upload_workers,
         "max_parallel_downloads": cfg.max_parallel_downloads,
         "max_parallel_uploads": cfg.max_parallel_uploads,
-        "chunk_size_kb": cfg.chunk_size_kb,
         "speed_limit_kbps": cfg.speed_limit_kbps,
         "upload_speed_limit_kbps": cfg.upload_speed_limit_kbps,
         "verify_integrity": cfg.verify_integrity,
@@ -164,6 +163,7 @@ def cli(ctx: click.Context, verbose: int, quiet: bool, log_file: bool | None) ->
     ctx.obj["config_store"] = store
     ctx.obj["config"] = store.config
     ctx.obj["console"] = console
+    ctx.obj["quiet"] = quiet
 
     if verbose >= 2:
         level = "DEBUG"

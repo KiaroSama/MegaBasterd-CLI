@@ -45,7 +45,7 @@ directory.
 | `-o`, `--output DIR` | Destination directory. |
 | `-w`, `--workers N` | Parallel chunk workers per file. |
 | `-P`, `--parallel N` | Number of files to download at once. |
-| `-l`, `--limit KBPS` | Global download speed cap for this command. `0` means unlimited. |
+| `-l`, `--limit KBPS` | Aggregate download speed cap shared by all parallel transfers of this command. `0` means unlimited. |
 | `-p`, `--password TEXT` | Password for protected links. |
 | `--no-verify` | Skip final MAC verification. |
 | `--overwrite`, `--force` | Replace an existing destination file. By default an unrelated existing file is preserved and a unique name (`name (1).ext`) is used instead; a valid resumable partial still resumes. |
@@ -78,16 +78,22 @@ vault.
 | `-a`, `--account ID` | Account email or label. |
 | `-w`, `--workers N` | Parallel chunk workers per file. |
 | `-P`, `--parallel N` | Number of files to upload at once. |
-| `-l`, `--limit KBPS` | Global upload speed cap for this command. `0` means unlimited. |
+| `-l`, `--limit KBPS` | Aggregate upload speed cap shared by all parallel workers of this command. `0` means unlimited. |
 | `--rename NAME` | Remote filename override for a single file. |
 | `--target HANDLE_OR_PATH` | Destination folder handle or path. |
 | `--keep-structure` | Preserve local directory structure. |
-| `--keep-going` | Continue directory uploads after item failures and print a warning summary. |
-| `--auto-account` | Pick an account by available quota. |
-| `--share` | Print a public link after upload. |
+| `--keep-going` | Continue directory uploads after item failures and print a warning summary (the exit code still reports the failures). |
+| `--auto-account` | Pick the stored account with the most known free space per file (whole tree with `--keep-structure`); requires cached quotas from `account refresh-all`. |
+| `--share` | Print a public link after each upload (directories: one link per uploaded file). |
 | `--share-password TEXT` | Create password-protected share links. |
 | `--mfa-code CODE` | Two-factor code if required. |
 | `--vault-passphrase TEXT` | Non-interactive vault unlock. |
+
+The account used when `-a/--account` is omitted resolves as: vault default
+(`account default` / `account add --default`) first, then the legacy
+`config default_account`. The command exits non-zero when any item fails;
+a failed `--share` link or post-transfer hook is reported separately and does
+not fail the upload.
 
 Examples:
 
@@ -192,11 +198,20 @@ prompted interactively unless `--vault-passphrase` is provided.
 .\Run.ps1 queue add-download URL [-o DIR] [-p PASSWORD]
 .\Run.ps1 queue add-upload PATH [-a ACCOUNT]
 .\Run.ps1 queue remove ID
+.\Run.ps1 queue retry ID|all
 .\Run.ps1 queue clear
 .\Run.ps1 queue run [--vault-passphrase TEXT]
 ```
 
 The queue is persisted as JSON under `<project>/User/Data/queue.json`.
+
+`queue run` leases each job to the current run (run id + heartbeat). Jobs a
+crashed or killed run left `active` are recovered as `interrupted` on the
+next run and re-run automatically; a job whose owner is still heartbeating is
+never stolen. `failed` jobs are not retried automatically — use
+`queue retry <id>` (or `queue retry all`) to return failed/interrupted/
+canceled jobs to `pending`; encrypted link passwords survive the retry.
+`queue run` exits non-zero when any job fails; per-job statuses are kept.
 
 ## Proxy Commands
 

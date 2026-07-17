@@ -93,6 +93,32 @@ This keeps commands easy to test and avoids duplicating MEGA protocol logic.
 consoles with `make_console()` and use the `mb.*` styles already registered in
 the theme. This keeps tables, prompts, and progress bars visually consistent.
 
+## Progress Architecture
+
+All transfer modes (single/parallel/file-in-folder downloads, folder
+downloads, single/parallel/directory uploads, queue runs) share one system:
+
+- **Producers** (`core/downloader.py`, `core/uploader.py`) emit structured
+  byte snapshots from a steady 0.5 s reporter thread; they know nothing about
+  layout.
+- **Controller** (`ui/transfer_progress.py`, `TransferProgress`) owns item
+  registration, aggregation, the operation clock, and the lifecycle: every
+  item ends in exactly one terminal state (`complete`/`failed`/`canceled`/
+  `skipped`) and `close()` finalizes leftovers for every outcome (errors,
+  cancellation, empty selections).
+- **Renderer** (`ui/progress.py`, `MultiFileProgressView`) only paints
+  controller state. Rich's auto-refresh re-invokes `__rich_console__` ~4×/s,
+  so `Elapsed`, ETA, and speeds keep moving while producers are silent;
+  speeds come from view-owned rolling meters that decay during stalls and
+  treat the first (resume) sample as a baseline. `Elapsed` is wall-clock from
+  one monotonic clock, frozen at terminal state, and never hidden (narrow
+  terminals shrink the bar instead). Huge folders paint a bounded row set
+  (active rows first) without losing overall totals.
+
+Command modules must not duplicate layout logic; they only talk to
+`TransferProgress`. Speed limits are aggregate per command: the command
+builds one `TokenBucket` and every worker shares it.
+
 ## Transfer Invariants
 
 ### Crypto is deterministic

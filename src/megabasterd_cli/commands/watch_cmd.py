@@ -18,13 +18,17 @@ log = logging.getLogger(__name__)
 
 def _read_clipboard() -> str:
     """Read clipboard text, falling back gracefully across OSes."""
-    # Try pyperclip first
+    # Try pyperclip first. It can import fine yet have no usable backend
+    # (PyperclipException at call time, e.g. headless Linux without
+    # xclip/xsel); fall through to the platform tools in that case too.
     try:
         import pyperclip  # type: ignore
 
         return pyperclip.paste() or ""
     except ImportError:
         pass
+    except Exception as exc:  # noqa: BLE001 - PyperclipException has no stable import path
+        log.debug("pyperclip backend unavailable: %s", exc)
 
     import platform
     import subprocess

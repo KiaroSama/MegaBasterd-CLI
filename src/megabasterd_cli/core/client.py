@@ -219,6 +219,16 @@ class MegaClient:
             raise AuthError(message="Malformed encrypted session ID in login response")
         return b64_url_encode(decrypted_bytes[:43])
 
+    def close(self) -> None:
+        """Release this client's HTTP resources WITHOUT invalidating the session.
+
+        Used by parallel upload workers that share one server-side session:
+        `logout()` would kill the sid for every other worker.
+        """
+        self.api.close()
+        self.session = None
+        self.invalidate_cache()
+
     def logout(self) -> None:
         """Invalidate the current session."""
         if self.session:

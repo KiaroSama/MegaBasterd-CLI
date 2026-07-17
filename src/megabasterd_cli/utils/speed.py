@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from collections import deque
+from typing import Callable
 
 
 class RollingSpeedMeter:
@@ -58,37 +59,57 @@ class TokenBucket:
     """Thread-safe token-bucket rate limiter (bytes/sec).
 
     Call `consume(n_bytes)` before reading/writing; it blocks until enough
-    tokens are available. Setting `rate=0` disables limiting.
+    tokens are available. Setting `rate=0` disables limiting. Requests larger
+    than the burst capacity are drained incrementally in bucket-sized pieces,
+    so every positive amount makes forward progress (a request can never wait
+    for more tokens than the bucket can physically hold). `clock` and
+    `sleeper` exist for deterministic tests.
     """
 
-    def __init__(self, rate: float = 0, burst: float | None = None):
+    def __init__(
+        self,
+        rate: float = 0,
+        burst: float | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        sleeper: Callable[[float], None] = time.sleep,
+    ):
         self.rate = float(rate)
         self.burst = float(burst) if burst is not None else max(self.rate, 1.0)
+        self._clock = clock
+        self._sleep = sleeper
         self._tokens = self.burst
-        self._last = time.monotonic()
+        self._last = self._clock()
         self._lock = threading.Lock()
 
     def set_rate(self, rate: float) -> None:
         with self._lock:
             self.rate = float(rate)
             self.burst = max(self.burst, self.rate)
+            # Never leave more tokens than the bucket can hold.
+            self._tokens = min(self._tokens, self.burst)
 
     def consume(self, amount: int) -> None:
-        """Block until `amount` tokens (bytes) are available."""
-        if self.rate <= 0:
-            return  # Unlimited
+        """Block until `amount` tokens (bytes) have been drained."""
+        remaining = float(amount or 0)
+        if remaining <= 0:
+            return
         while True:
             with self._lock:
-                now = time.monotonic()
-                elapsed = now - self._last
+                if self.rate <= 0:
+                    return  # Unlimited (covers rates changed at runtime too)
+                now = self._clock()
+                elapsed = max(0.0, now - self._last)
                 self._last = now
                 self._tokens = min(self.burst, self._tokens + elapsed * self.rate)
-                if self._tokens >= amount:
-                    self._tokens -= amount
+                take = min(remaining, self._tokens)
+                self._tokens -= take
+                remaining -= take
+                if remaining <= 0:
                     return
-                deficit = amount - self._tokens
-                wait = deficit / self.rate
-            time.sleep(min(wait, 1.0))
+                # Wait for at most one bucket's worth of the outstanding bytes;
+                # larger requests drain over multiple rounds.
+                wait = min(remaining, self.burst) / self.rate
+            self._sleep(min(wait, 1.0))
 
 
 class NoOpLimiter:

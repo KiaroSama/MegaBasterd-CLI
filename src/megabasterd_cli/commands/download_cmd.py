@@ -20,15 +20,17 @@ from ..core.links import (
     resolve_megacrypter_link,
     resolve_password_link,
 )
-from ..ui.progress import MultiFileProgressView, ProgressFileState, build_progress
 from ..ui.prompts import print_error, print_info, print_success
+from ..ui.transfer_progress import TransferProgress, redact_link
 from ..utils.helpers import format_bytes
+from ..utils.hooks import run_post_transfer_command
 from ..utils.selection import (
     SelectionCancelled,
     build_folder_file_filter,
     compose_file_filters,
     parse_selection_tokens,
 )
+from ..utils.speed import make_limiter
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +70,7 @@ def _read_links_file(path: Path) -> list[str]:
     "speed_limit_kbps",
     type=float,
     default=None,
-    help="Per-transfer speed limit in KB/s (0 = unlimited).",
+    help="Aggregate download speed limit for this command in KB/s (0 = unlimited).",
 )
 @click.option(
     "-p",
@@ -159,9 +161,15 @@ def download(
     exclude_patterns: tuple[str, ...],
     select_files: bool,
 ) -> None:
-    """Download one or more MEGA links."""
+    """Download one or more MEGA links.
+
+    Exit status is non-zero when any link fails; an interactive selection
+    answered with "none" is a user skip, not a failure.
+    """
     cfg = ctx.obj["config"]
+    quiet = bool(ctx.obj.get("quiet"))
     proxies = {"http": proxy, "https": proxy} if proxy else None
+    failures = 0
 
     # Collect URLs from args and/or file
     url_list: list[str] = list(urls)
@@ -177,12 +185,12 @@ def download(
                 )
             except Exception as exc:  # noqa: BLE001
                 print_error(f"DLC decrypt failed: {exc}")
-                return
+                ctx.exit(1)
         else:
             url_list.extend(_read_links_file(input_file))
     if not url_list:
         print_error("No URLs given. Pass URLs as arguments or use -i <file>.")
-        return
+        ctx.exit(2)
 
     output_dir = output_dir or Path(cfg.download_path)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -210,7 +218,12 @@ def download(
         proxies=proxies,
         proxy_pool=proxy_pool,
         force_proxy=cfg.force_smart_proxy,
+        user_agent=cfg.user_agent,
     )
+
+    # ONE limiter per command: `speed_limit_kbps` (or --limit) is an aggregate
+    # cap shared by every parallel transfer, not a per-file value.
+    shared_limiter = make_limiter(speed_limit_kbps)
 
     # Each parallel slot gets its own MegaDownloader because the downloader
     # holds per-transfer state (CDN URL, generation counter).
@@ -228,6 +241,9 @@ def download(
             quota_max_wait_loops=cfg.quota_max_wait_loops,
             keep_state_files_on_error=cfg.keep_state_files_on_error,
             overwrite=overwrite,
+            limiter=shared_limiter,
+            auto_resume=cfg.auto_resume,
+            user_agent=cfg.user_agent,
         )
 
     # First pass: parse + filter URLs, collect actionable jobs
@@ -240,6 +256,7 @@ def download(
             parsed = parse_link(url)
         except ValueError as e:
             print_error(str(e))
+            failures += 1
             continue
         if parsed.type == LinkType.ELC_CONTAINER:
             try:
@@ -255,6 +272,7 @@ def download(
                 )
             except Exception as exc:  # noqa: BLE001
                 print_error(f"ELC resolution failed: {exc}")
+                failures += 1
             continue
         expanded_urls.append(url)
 
@@ -263,23 +281,27 @@ def download(
             parsed = parse_link(url)
         except ValueError as e:
             print_error(str(e))
+            failures += 1
             continue
 
         # Unwrap container formats before classifying as file vs folder.
         if parsed.type == LinkType.PASSWORD_PROTECTED:
             if not password:
                 print_error(f"Link is password-protected; supply -p PASSWORD: {url}")
+                failures += 1
                 continue
             try:
                 parsed = resolve_password_link(parsed, password)
             except ValueError as exc:
                 print_error(f"Wrong password: {exc}")
+                failures += 1
                 continue
         elif parsed.type == LinkType.ENCRYPTED_CONTAINER:
             try:
                 parsed = resolve_encrypted_container_link(parsed)
             except ValueError as exc:
                 print_error(f"Encrypted container decode failed: {exc}")
+                failures += 1
                 continue
         elif parsed.type == LinkType.MEGACRYPTER:
             try:
@@ -312,6 +334,7 @@ def download(
         elif parsed.type == LinkType.FILE_IN_FOLDER:
             if not parsed.subpath:
                 print_error("File-in-folder link is missing the file handle.")
+                failures += 1
                 continue
             resolved_url = (
                 f"https://mega.nz/folder/{parsed.public_id}#{parsed.key}" f"/file/{parsed.subpath}"
@@ -322,84 +345,114 @@ def download(
             file_jobs.append((resolved_url, rename if len(expanded_urls) == 1 else None))
         else:
             print_error(f"Unsupported link type: {parsed.type}")
+            failures += 1
 
-    overall_progress = build_progress()
-    with overall_progress:
-        # Process file jobs in parallel slots
-        if file_jobs:
-            if parallel == 1:
-                for url, rename_to in file_jobs:
-                    _download_file(
-                        _new_downloader(),
-                        url,
-                        output_dir,
-                        overall_progress,
-                        password=password,
-                        rename_to=rename_to,
-                    )
-            else:
-                from concurrent.futures import ThreadPoolExecutor, as_completed
+    # One shared progress system for every download mode: single files,
+    # parallel files, and file-in-folder links share this controller; each
+    # full folder link gets its own controller (its manifest defines it).
+    if file_jobs or folder_file_jobs:
+        progress = TransferProgress(
+            title="MEGA Download",
+            direction="download",
+            details=[
+                f"Source: {len(file_jobs) + len(folder_file_jobs)} link(s)",
+                f"Output: {output_dir}",
+                "",
+                "Backend: MegaBasterd-CLI",
+            ],
+            quiet=quiet,
+        )
+        with progress:
+            # Process file jobs in parallel slots
+            if file_jobs:
+                if parallel == 1 or len(file_jobs) == 1:
+                    for url, rename_to in file_jobs:
+                        failures += (
+                            0
+                            if _download_file(
+                                _new_downloader(),
+                                url,
+                                output_dir,
+                                progress,
+                                password=password,
+                                rename_to=rename_to,
+                            )
+                            else 1
+                        )
+                else:
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-                def _run(job):
-                    url, rename_to = job
-                    return _download_file(
-                        _new_downloader(),
-                        url,
-                        output_dir,
-                        overall_progress,
-                        password=password,
-                        rename_to=rename_to,
-                    )
+                    def _run(job):
+                        url, rename_to = job
+                        return _download_file(
+                            _new_downloader(),
+                            url,
+                            output_dir,
+                            progress,
+                            password=password,
+                            rename_to=rename_to,
+                        )
 
-                with ThreadPoolExecutor(max_workers=parallel) as pool:
-                    futs = [pool.submit(_run, job) for job in file_jobs]
-                    for f in as_completed(futs):
-                        try:
-                            f.result()
-                        except Exception as e:  # noqa: BLE001
-                            log.error("Parallel download failed: %s", e)
+                    with ThreadPoolExecutor(max_workers=parallel) as pool:
+                        futs = [pool.submit(_run, job) for job in file_jobs]
+                        for f in as_completed(futs):
+                            try:
+                                if not f.result():
+                                    failures += 1
+                            except Exception as e:  # noqa: BLE001
+                                log.error("Parallel download failed: %s", e)
+                                failures += 1
 
-        if folder_file_jobs:
-            # Interactive selection must prompt from the main thread, so
-            # --select forces these jobs to run sequentially.
-            if parallel == 1 or select_files:
-                for url in folder_file_jobs:
-                    _download_folder_file(
-                        _new_downloader(),
-                        url,
-                        output_dir,
-                        overall_progress,
-                        file_filter=folder_file_filter,
-                    )
-            else:
-                from concurrent.futures import ThreadPoolExecutor, as_completed
+            if folder_file_jobs:
+                # Interactive selection must prompt from the main thread, so
+                # --select forces these jobs to run sequentially.
+                if parallel == 1 or select_files or len(folder_file_jobs) == 1:
+                    for url in folder_file_jobs:
+                        outcome = _download_folder_file(
+                            _new_downloader(),
+                            url,
+                            output_dir,
+                            progress,
+                            file_filter=folder_file_filter,
+                        )
+                        failures += 0 if outcome else 1
+                else:
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-                def _run_folder_file(url):
-                    return _download_folder_file(
-                        _new_downloader(),
-                        url,
-                        output_dir,
-                        overall_progress,
-                        file_filter=folder_file_filter,
-                    )
+                    def _run_folder_file(url):
+                        return _download_folder_file(
+                            _new_downloader(),
+                            url,
+                            output_dir,
+                            progress,
+                            file_filter=folder_file_filter,
+                        )
 
-                with ThreadPoolExecutor(max_workers=parallel) as pool:
-                    futs = [pool.submit(_run_folder_file, url) for url in folder_file_jobs]
-                    for f in as_completed(futs):
-                        try:
-                            f.result()
-                        except Exception as e:  # noqa: BLE001
-                            log.error("Parallel folder-file download failed: %s", e)
+                    with ThreadPoolExecutor(max_workers=parallel) as pool:
+                        futs = [pool.submit(_run_folder_file, url) for url in folder_file_jobs]
+                        for f in as_completed(futs):
+                            try:
+                                if not f.result():
+                                    failures += 1
+                            except Exception as e:  # noqa: BLE001
+                                log.error("Parallel folder-file download failed: %s", e)
+                                failures += 1
 
-    # Folder jobs use their own EVdlc-style multi-file live view.
+    # Folder jobs get one controller each (their manifests define the rows).
     for url in folder_jobs:
-        _download_folder(
+        if not _download_folder(
             _new_downloader(),
             url,
             output_dir,
             parallel_files=parallel,
             file_filter=folder_file_filter,
-        )
+            quiet=quiet,
+        ):
+            failures += 1
+
+    if failures:
+        print_error(f"{failures} download item(s) failed.")
+        ctx.exit(1)
 
 
 def _interactive_file_picker(output_dir: Path):
@@ -435,11 +488,25 @@ def _interactive_file_picker(output_dir: Path):
     return _pick
 
 
-def _download_file(downloader, url, output_dir, overall_progress, password=None, rename_to=None):
-    task_id = overall_progress.add_task(description="Resolving...", total=1)
+def _run_hook_for(path: Path) -> None:
+    ctx = click.get_current_context(silent=True)
+    cfg = ctx.obj.get("config") if ctx and ctx.obj else None
+    if cfg is not None:
+        run_post_transfer_command(cfg.run_command, path)
+
+
+def _download_file(
+    downloader,
+    url,
+    output_dir,
+    progress: TransferProgress,
+    password=None,
+    rename_to=None,
+) -> bool:
+    item = progress.add_item(redact_link(url), status="active")
 
     def on_progress(p):
-        overall_progress.update(task_id, completed=p.bytes_done, total=p.total_bytes)
+        progress.update_item(item, p.bytes_done, p.total_bytes)
 
     try:
         result = downloader.download_link(
@@ -449,35 +516,41 @@ def _download_file(downloader, url, output_dir, overall_progress, password=None,
             rename_to=rename_to,
             on_progress=on_progress,
         )
-        overall_progress.update(
-            task_id,
-            description=f"Done: {result.path.name}",
-            completed=result.size,
-            total=result.size,
-        )
+        progress.set_item_name(item, result.path.name)
+        progress.update_item(item, result.size, result.size)
+        progress.finish_item(item, "complete")
         print_success(
             f"{result.path.name} ({format_bytes(result.size)}) " f"in {result.elapsed_seconds:.1f}s"
         )
-        from ..utils.hooks import run_post_transfer_command
-
-        cfg = click.get_current_context().obj.get("config") if click.get_current_context() else None
-        if cfg is not None:
-            run_post_transfer_command(cfg.run_command, result.path)
+        _run_hook_for(result.path)
+        return True
     except MegaError as e:
-        overall_progress.update(task_id, description=f"Failed: {e}")
+        progress.finish_item(item, "failed")
         print_error(f"Download failed: {e}")
+        return False
     except Exception as e:
         log.exception("Unexpected error during download")
+        progress.finish_item(item, "failed")
         print_error(f"Unexpected error: {e}")
+        return False
 
 
-def _download_folder(downloader, url, output_dir, parallel_files: int = 1, file_filter=None):
+def _download_folder(
+    downloader, url, output_dir, parallel_files: int = 1, file_filter=None, quiet: bool = False
+) -> bool:
     folder_dl = MegaFolderDownloader(downloader)
-    import threading
-
-    lock = threading.RLock()
-    states: dict[str, ProgressFileState] = {}
-    view: MultiFileProgressView | None = None
+    items: dict[str, str] = {}  # destination str -> progress item key
+    progress = TransferProgress(
+        title="MEGA Folder Download",
+        direction="download",
+        details=[
+            f"Source: {redact_link(url)}",
+            f"Output: {output_dir}",
+            "",
+            "Backend: MegaBasterd-CLI",
+        ],
+        quiet=quiet,
+    )
 
     def _relative_name(path: Path) -> str:
         try:
@@ -485,138 +558,92 @@ def _download_folder(downloader, url, output_dir, parallel_files: int = 1, file_
         except ValueError:
             return path.name
 
-    def _refresh(force: bool = False, status: str = "Downloading") -> None:
-        if view is None:
-            return
-        file_states = list(states.values())
-        total = sum((state.total or 0) for state in file_states) if file_states else None
-        completed = sum(max(0, state.completed) for state in file_states)
-        completed_items = sum(
-            1
-            for state in file_states
-            if state.status in {"complete", "downloaded", "resumed"}
-            or bool(state.total and state.completed >= state.total)
-        )
-        failed_items = sum(1 for state in file_states if state.status in {"failed", "error"})
-        view.update(
-            file_states,
-            overall_completed=completed,
-            overall_total=total,
-            completed_items=completed_items,
-            total_items=len(file_states),
-            failed_items=failed_items,
-            status=status,
-            force=force,
-        )
-
     def on_manifest(file_jobs):
-        nonlocal view
-        with lock:
-            states.clear()
-            for node, destination in file_jobs:
-                key = str(destination)
-                states[key] = ProgressFileState(
-                    key=key,
-                    name=_relative_name(destination),
-                    completed=0,
-                    total=int(node.size or 0),
-                    speed=0.0,
-                    status="queued",
-                )
-            view = MultiFileProgressView(
-                title="MEGA Folder Download",
-                details=[
-                    f"Source: {url}",
-                    f"Output: {output_dir}",
-                    "",
-                    "Backend: MegaBasterd-CLI",
-                ],
-                item_label="files",
+        for node, destination in file_jobs:
+            items[str(destination)] = progress.add_item(
+                _relative_name(destination), int(node.size or 0)
             )
-            _refresh(force=True, status="Starting")
+
+    def _item_for(path: Path) -> str:
+        key = str(path)
+        if key not in items:
+            items[key] = progress.add_item(_relative_name(path))
+        return items[key]
 
     def on_file_progress(path: Path, p):
-        with lock:
-            key = str(path)
-            state = states.get(key)
-            if state is None:
-                state = ProgressFileState(key=key, name=_relative_name(path))
-                states[key] = state
-            state.completed = p.bytes_done
-            state.total = p.total_bytes
-            state.speed = p.speed_bps
-            state.status = "active"
-            _refresh(status="Downloading")
+        progress.update_item(_item_for(path), p.bytes_done, p.total_bytes)
 
     def on_file_done(result):
-        with lock:
-            key = str(result.path)
-            state = states.get(key)
-            if state is None:
-                state = ProgressFileState(key=key, name=_relative_name(result.path))
-                states[key] = state
-            state.completed = result.size
-            state.total = result.size
-            state.speed = 0.0
-            state.status = "complete"
-            _refresh(force=True, status="Downloading")
+        progress.finish_item(_item_for(result.path), "complete")
+
+    def on_file_failed(path: Path, exc: Exception):
+        progress.finish_item(_item_for(path), "failed")
 
     try:
-        results = folder_dl.download_folder(
-            url,
-            output_dir,
-            on_file_done=on_file_done,
-            on_folder_manifest=on_manifest,
-            on_file_progress=on_file_progress,
-            parallel_files=parallel_files,
-            file_filter=file_filter,
-        )
+        with progress:
+            results = folder_dl.download_folder(
+                url,
+                output_dir,
+                on_file_done=on_file_done,
+                on_folder_manifest=on_manifest,
+                on_file_progress=on_file_progress,
+                parallel_files=parallel_files,
+                file_filter=file_filter,
+                on_file_failed=on_file_failed,
+            )
         total_bytes = sum(r.size for r in results)
-        if view is not None:
-            _refresh(force=True, status="Complete")
-            view.close(success=True)
         print_success(f"Folder complete: {len(results)} files, {format_bytes(total_bytes)} total")
+        for result in results:
+            _run_hook_for(result.path)
+        return True
     except SelectionCancelled:
-        # The picker runs before the manifest, so no live view exists yet.
-        print_info(f"Selection cancelled; skipped folder: {url}")
+        # Documented behavior: answering "none" skips the folder and is NOT a
+        # failure (exit stays zero if nothing else failed).
+        print_info(f"Selection cancelled; skipped folder: {redact_link(url)}")
+        return True
     except MegaError as e:
-        if view is not None:
-            _refresh(force=True, status="Failed")
-            view.close(success=False)
         print_error(f"Folder download failed: {e}")
+        return False
     except Exception as e:
         log.exception("Unexpected error during folder download")
-        if view is not None:
-            _refresh(force=True, status="Failed")
-            view.close(success=False)
         print_error(f"Unexpected error: {e}")
+        return False
 
 
-def _download_folder_file(downloader, url, output_dir, overall_progress, file_filter=None):
-    task_id = overall_progress.add_task(description="Resolving folder file...", total=1)
+def _download_folder_file(
+    downloader, url, output_dir, progress: TransferProgress, file_filter=None
+) -> bool:
     folder_dl = MegaFolderDownloader(downloader)
+    items: dict[str, str] = {}
 
-    def on_progress(p):
-        overall_progress.update(task_id, completed=p.bytes_done, total=p.total_bytes)
+    def _item_for(path: Path) -> str:
+        key = str(path)
+        if key not in items:
+            items[key] = progress.add_item(path.name)
+        return items[key]
+
+    def on_file_progress(path: Path, p):
+        progress.update_item(_item_for(path), p.bytes_done, p.total_bytes)
+
+    def on_file_done(result):
+        progress.finish_item(_item_for(result.path), "complete")
+
+    def on_file_failed(path: Path, exc: Exception):
+        progress.finish_item(_item_for(path), "failed")
 
     try:
         results = folder_dl.download_node_in_folder(
             url,
             output_dir,
-            on_progress=on_progress,
+            on_file_progress=on_file_progress,
+            on_file_done=on_file_done,
+            on_file_failed=on_file_failed,
             file_filter=file_filter,
         )
         result = results[0] if results else None
         if result is None:
-            overall_progress.update(task_id, description="Done: empty folder", completed=1, total=1)
             print_success("Folder complete: 0 files, 0 B total")
-            return
-        overall_progress.update(
-            task_id,
-            description=f"Done: {result.path.name}" if len(results) == 1 else "Folder complete",
-            completed=result.size,
-            total=result.size,
-        )
+            return True
         if len(results) == 1:
             print_success(
                 f"{result.path} ({format_bytes(result.size)}) " f"in {result.elapsed_seconds:.1f}s"
@@ -626,18 +653,16 @@ def _download_folder_file(downloader, url, output_dir, overall_progress, file_fi
             print_success(
                 f"Folder complete: {len(results)} files, {format_bytes(total_bytes)} total"
             )
-        from ..utils.hooks import run_post_transfer_command
-
-        cfg = click.get_current_context().obj.get("config") if click.get_current_context() else None
-        if cfg is not None:
-            for item in results:
-                run_post_transfer_command(cfg.run_command, item.path)
+        for item in results:
+            _run_hook_for(item.path)
+        return True
     except SelectionCancelled:
-        overall_progress.update(task_id, description="Selection cancelled", completed=1, total=1)
-        print_info(f"Selection cancelled; skipped folder node: {url}")
+        print_info(f"Selection cancelled; skipped folder node: {redact_link(url)}")
+        return True
     except MegaError as e:
-        overall_progress.update(task_id, description=f"Failed: {e}")
         print_error(f"Download failed: {e}")
+        return False
     except Exception as e:
         log.exception("Unexpected error during folder-file download")
         print_error(f"Unexpected error: {e}")
+        return False

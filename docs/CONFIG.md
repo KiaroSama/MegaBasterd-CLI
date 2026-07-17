@@ -19,6 +19,12 @@ The exact path can always be printed with:
 Values are cast to the field type defined by the application config dataclass.
 Booleans accept `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off`.
 
+Values are validated centrally: `config set` rejects out-of-range values
+(ports outside 1–65535, non-positive timeouts, worker counts outside 1–64,
+negative speed limits or quota waits, unknown log levels), and invalid values
+found in a hand-edited `config.json` produce a warning and fall back to the
+default instead of crashing at runtime.
+
 ## Transfer Settings
 
 | Key | Default | Purpose |
@@ -28,12 +34,11 @@ Booleans accept `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off`.
 | `upload_workers` | `4` | Parallel chunk workers per uploaded file. |
 | `max_parallel_downloads` | `6` | Number of files downloaded at once. |
 | `max_parallel_uploads` | `1` | Number of files uploaded at once. |
-| `chunk_size_kb` | `1024` | Maximum MEGA chunk size. |
-| `speed_limit_kbps` | `0` | Global download cap in KB/s for one command. `0` means unlimited. |
-| `upload_speed_limit_kbps` | `0` | Upload cap in KB/s. `0` means unlimited. |
+| `speed_limit_kbps` | `0` | Aggregate download cap in KB/s for the whole command; every parallel worker shares one limiter. `0` means unlimited. |
+| `upload_speed_limit_kbps` | `0` | Aggregate upload cap in KB/s for the whole command. `0` means unlimited. |
 | `verify_integrity` | `true` | Verify final MAC after download. |
 | `timeout_seconds` | `60` | HTTP timeout. |
-| `auto_resume` | `true` | Reuse `.mbstate` files. |
+| `auto_resume` | `true` | Reuse `.mbstate` files. When `false`, existing resume state is never reused for downloads or uploads (unrelated existing files are still preserved via unique names). |
 | `keep_state_files_on_error` | `true` | Keep state files after failed transfers. |
 | `quota_wait_seconds` | `3600` | Wait after quota errors. |
 | `quota_max_wait_loops` | `24` | Maximum quota wait loops. |
@@ -42,8 +47,8 @@ Booleans accept `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off`.
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `default_account` | `null` | Account used when `--account` is omitted. |
-| `streaming_port` | `8080` | Default port for `stream`. |
+| `default_account` | `null` | Legacy fallback account used when `--account` is omitted AND no vault default is set. Precedence everywhere (upload, queue, share, cloud): `--account` → `mb account default` (vault) → this key. |
+| `streaming_port` | `8080` | Default port for `stream` (1–65535). |
 | `streaming_host` | `127.0.0.1` | Default stream bind host. |
 
 ## Proxy Settings
@@ -53,9 +58,19 @@ Booleans accept `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off`.
 | `smart_proxy_enabled` | `false` | Enable rotating proxy pool. |
 | `smart_proxy_url` | `null` | One proxy URL or a comma-separated URL list. |
 | `force_smart_proxy` | `false` | Refuse direct connections. |
-| `smart_proxy_autorefresh_minutes` | `0` | Refetch proxy list every N minutes. |
-| `smart_proxy_timeout_seconds` | `10` | Timeout per proxy connection. |
-| `smart_proxy_random` | `true` | Random selection instead of round-robin. |
+
+### Deprecated keys
+
+These keys never had an effect and were removed; `config set` rejects them
+with an explanation and old config files that still contain them load fine
+(the keys are ignored with a warning):
+
+| Key | Reason |
+| --- | --- |
+| `chunk_size_kb` | MEGA chunk sizes are protocol-defined and cannot be configured. |
+| `smart_proxy_autorefresh_minutes` | Not implemented; the pool is reloaded on every command run. |
+| `smart_proxy_timeout_seconds` | Not implemented; use `mb proxy fetch --timeout`. |
+| `smart_proxy_random` | Not implemented; the pool always picks randomly, weighted by health. |
 
 ## CONNECT Proxy Settings
 
@@ -90,9 +105,9 @@ You can avoid storing ELC credentials by passing `--elc-user` and
 | `log_to_file` | `true` | Write debug logs to a file. |
 | `log_max_bytes` | `5000000` | Rotate Python logs after this many bytes. |
 | `log_backups` | `5` | Keep this many rotated Python log files. |
-| `user_agent` | `MegaBasterd-CLI/1.0` | HTTP user agent. |
-| `run_command` | `null` | Command run after each completed transfer. |
-| `upload_log_path` | `null` | JSON-lines upload log path. |
+| `user_agent` | `""` | HTTP user agent for API and transfer requests. Empty means `MegaBasterd-CLI/<installed version>`. |
+| `run_command` | `null` | Command run after each completed transfer. Parsed with Windows rules on Windows and POSIX rules elsewhere; the transferred path is appended as exactly one argument. Hook arguments are not written to logs. |
+| `upload_log_path` | `null` | JSON-lines upload log path (written by every upload mode, including queue and directory uploads). |
 
 ## Runtime Data
 
