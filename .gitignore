@@ -159,3 +159,18 @@ explain-AI.md
 .ignoreme/
 **/.ignoreme
 **/.ignoreme/
+
+# Hook Maker: local/private files (auto-managed)
+!/.env.dist
+!/.env.example
+!/.env.sample
+!/.env.template
+/.agents/
+/.claude/
+/.cline/
+/.codex/
+/.cursor/
+/.env
+/.env.*
+/.kiro/
+/explain-AI.md
