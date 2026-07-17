@@ -67,6 +67,7 @@ class MegaFolderDownloader:
         file_filter: (
             Callable[[list[tuple[FolderNode, Path]]], list[tuple[FolderNode, Path]]] | None
         ) = None,
+        on_file_failed: Callable[[Path, Exception], None] | None = None,
     ) -> list[DownloadResult]:
         """Download every file inside a public folder share.
 
@@ -111,6 +112,7 @@ class MegaFolderDownloader:
             on_file_done=on_file_done,
             on_file_progress=on_file_progress,
             parallel_files=parallel_files,
+            on_file_failed=on_file_failed,
         )
 
     @staticmethod
@@ -146,6 +148,7 @@ class MegaFolderDownloader:
         file_filter: (
             Callable[[list[tuple[FolderNode, Path]]], list[tuple[FolderNode, Path]]] | None
         ) = None,
+        on_file_failed: Callable[[Path, Exception], None] | None = None,
     ) -> list[DownloadResult]:
         """Download a file or subfolder handle from a public folder share."""
         parsed = parse_link(url)
@@ -183,6 +186,7 @@ class MegaFolderDownloader:
             on_file_done=on_file_done,
             on_file_progress=on_file_progress,
             parallel_files=parallel_files,
+            on_file_failed=on_file_failed,
         )
 
     def download_file_in_folder(
@@ -222,12 +226,21 @@ class MegaFolderDownloader:
         on_file_done: Callable[[DownloadResult], None] | None = None,
         on_file_progress: Callable[[Path, DownloadProgress], None] | None = None,
         parallel_files: int = 1,
+        on_file_failed: Callable[[Path, Exception], None] | None = None,
     ) -> list[DownloadResult]:
         """Download prepared folder-file jobs and fail if any file fails."""
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         results: list[DownloadResult] = []
         failures: list[str] = []
+
+        def _report_failure(destination: Path, exc: Exception) -> None:
+            if on_file_failed:
+                try:
+                    on_file_failed(destination, exc)
+                except Exception:  # noqa: BLE001 - UI callback must not mask the error
+                    log.debug("on_file_failed callback raised", exc_info=True)
+
         if parallel_files <= 1:
             for node, destination in file_jobs:
                 log.info("Downloading folder file: %s", destination)
@@ -248,6 +261,7 @@ class MegaFolderDownloader:
                 except Exception as e:  # noqa: BLE001
                     log.error("Failed to download %s: %s", node.name, e)
                     failures.append(f"{node.name}: {e}")
+                    _report_failure(destination, e)
         else:
             # Multiple files downloading in parallel: each needs its own downloader
             # instance because the downloader stores per-transfer state.
@@ -285,7 +299,7 @@ class MegaFolderDownloader:
             with ThreadPoolExecutor(max_workers=parallel_files) as pool:
                 futures = {pool.submit(_worker, job): job for job in file_jobs}
                 for fut in as_completed(futures):
-                    node, _ = futures[fut]
+                    node, destination = futures[fut]
                     try:
                         result = fut.result()
                         results.append(result)
@@ -294,6 +308,7 @@ class MegaFolderDownloader:
                     except Exception as e:  # noqa: BLE001
                         log.error("Failed to download %s: %s", node.name, e)
                         failures.append(f"{node.name}: {e}")
+                        _report_failure(destination, e)
 
         if failures:
             sample = "; ".join(failures[:3])

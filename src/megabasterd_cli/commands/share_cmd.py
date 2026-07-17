@@ -42,13 +42,15 @@ def share_cmd(
     mfa_code: str | None,
 ) -> None:
     """Make TARGET (handle or path) publicly accessible by URL."""
+    from ..accounts.manager import resolve_account_id
+
     cfg = ctx.obj["config"]
-    account_id = account or cfg.default_account
+    mgr = AccountManager(accounts_file())
+    account_id = resolve_account_id(mgr, cfg.default_account, account)
     if not account_id:
         print_error("No account specified.")
         return
 
-    mgr = AccountManager(accounts_file())
     passphrase = vault_passphrase or ask_password("Vault passphrase")
     mgr.unlock(passphrase)
     try:

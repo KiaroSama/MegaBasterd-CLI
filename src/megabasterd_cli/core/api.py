@@ -27,8 +27,18 @@ log = logging.getLogger(__name__)
 
 API_BASE_URL = "https://g.api.mega.co.nz"
 DEFAULT_TIMEOUT = 30
-USER_AGENT = "MegaBasterd-CLI/1.0"
 DEFAULT_APP_KEY = "BdARkQSQ"
+
+
+def default_user_agent() -> str:
+    """Default User-Agent derived from the package version (no drift)."""
+    from .. import __version__
+
+    return f"MegaBasterd-CLI/{__version__}"
+
+
+# Backward-compatible module constant (kept for imports; now version-accurate).
+USER_AGENT = default_user_agent()
 
 
 class MegaAPIClient:
@@ -45,13 +55,15 @@ class MegaAPIClient:
         api_base: str = API_BASE_URL,
         proxy_pool=None,  # SmartProxyPool | None
         force_proxy: bool = False,
+        user_agent: str | None = None,
     ):
         self.timeout = timeout
         self.api_base = api_base.rstrip("/")
+        self.user_agent = user_agent or default_user_agent()
         self._sid: str | None = None
         self._seq = random.randint(0, 0xFFFFFFFF)
         self._session = requests.Session()
-        self._session.headers.update({"User-Agent": USER_AGENT})
+        self._session.headers.update({"User-Agent": self.user_agent})
         if proxies:
             self._session.proxies.update(proxies)
         # Smart proxy pool: if set, each API request also picks a proxy and

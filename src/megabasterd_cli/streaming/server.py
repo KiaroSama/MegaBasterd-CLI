@@ -278,6 +278,23 @@ class _StreamingRequestHandler(BaseHTTPRequestHandler):
             self.send_error(503, "No source configured")
             return
 
+        if source.size == 0:
+            # Empty file: never issue an invalid upstream `bytes=0--1` fetch.
+            if self.headers.get("Range"):
+                self.send_response(416)
+                self.send_header("Content-Range", "bytes */0")
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", source.mimetype)
+            self.send_header("Content-Length", "0")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Disposition", _content_disposition(source.filename))
+            self.end_headers()
+            return
+
         try:
             start, end, is_partial = self._parse_range(source.size)
         except ValueError:

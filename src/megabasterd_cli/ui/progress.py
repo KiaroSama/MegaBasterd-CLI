@@ -27,6 +27,10 @@ from .theme import make_console
 
 PROGRESS_SEPARATOR = "=" * 120
 
+# Huge folders: cap the per-file rows painted each frame (totals still cover
+# every file); active rows win, then queued, then finished ones.
+MAX_VISIBLE_FILE_ROWS = 12
+
 
 @dataclass
 class ProgressFileState:
@@ -80,6 +84,8 @@ class MultiFileProgressView:
         self.item_label = item_label
         self.min_interval = min_interval
         self.started_at = time.perf_counter()
+        # Set exactly once at terminal state; freezes the Elapsed display.
+        self.finished_at: float | None = None
         self.last_render = 0.0
         self.overall_completed = 0
         self.overall_total: int | None = None
@@ -169,6 +175,8 @@ class MultiFileProgressView:
 
     def close(self, success: bool = True) -> None:
         with self._lock:
+            if self.finished_at is None:
+                self.finished_at = time.perf_counter()
             self.status = "Complete" if success else "Failed"
             if success and self.overall_total is not None:
                 self.overall_completed = max(self.overall_completed, self.overall_total)
@@ -212,11 +220,12 @@ class MultiFileProgressView:
                 include_elapsed=True,
             )
         )
-        if self.file_states:
+        visible, hidden = self._visible_rows()
+        if visible:
             lines.append(Text(""))
-        for index, state in enumerate(self.file_states, 1):
+        for index, (row_number, state) in enumerate(visible, 1):
             name_style = self._state_style(state.status)
-            prefix = f"File {index:02d}: "
+            prefix = f"File {row_number:02d}: "
             lines.append(
                 Text(
                     prefix + _shorten_middle(state.name, max(10, width - len(prefix))),
@@ -233,9 +242,21 @@ class MultiFileProgressView:
                     status=state.status,
                 )
             )
-            if index < len(self.file_states):
+            if index < len(visible):
                 lines.append(Text(""))
+        if hidden:
+            lines.append(Text(f"(+{hidden} more {self.item_label})", style="yellow"))
         return Group(*lines)
+
+    def _visible_rows(self) -> tuple[list[tuple[int, ProgressFileState]], int]:
+        """Bound the painted rows for huge folders without losing totals."""
+        numbered = list(enumerate(self.file_states, 1))
+        if len(numbered) <= MAX_VISIBLE_FILE_ROWS:
+            return numbered, 0
+        rank = {"active": 0, "queued": 1}
+        ordered = sorted(numbered, key=lambda pair: (rank.get(pair[1].status, 2), pair[0]))
+        visible = sorted(ordered[:MAX_VISIBLE_FILE_ROWS], key=lambda pair: pair[0])
+        return visible, len(numbered) - MAX_VISIBLE_FILE_ROWS
 
     def _stats_text(
         self,
@@ -248,22 +269,29 @@ class MultiFileProgressView:
     ) -> Text:
         percent = (completed / total * 100.0) if total else 0.0
         percent = max(0.0, min(100.0, percent))
-        bar_width = max(18, min(32, width - 80))
+        # Elapsed is never hidden; on narrow terminals the bar shrinks instead.
+        bar_width = max(12, min(32, width - 96))
         remaining = (total - completed) if total else 0
         done = status in {"complete", "downloaded", "resumed"} or bool(total and completed >= total)
         failed = status in {"failed", "error"}
-        eta = (
-            "Done"
+        stopped = status in {"canceled", "skipped"}
+        if done:
+            eta = speed_label = "Done"
+        elif failed:
+            eta = speed_label = "Failed"
+        elif stopped:
+            eta = speed_label = status.capitalize()
+        else:
+            eta = _format_eta(remaining / speed) if total and speed and speed > 1 else "--:--"
+            speed_label = _format_speed(speed)
+        speed_style = (
+            "bold green"
             if done
-            else (
-                "Failed"
-                if failed
-                else (_format_eta(remaining / speed) if total and speed and speed > 1 else "--:--")
-            )
+            else "bold red" if failed else "yellow" if stopped else "bold #39ff6a"
         )
-        speed_label = "Done" if done else "Failed" if failed else _format_speed(speed)
-        speed_style = "bold green" if done else "bold red" if failed else "bold #39ff6a"
-        eta_style = "bold green" if done else "bold red" if failed else "#ff8a1f"
+        eta_style = (
+            "bold green" if done else "bold red" if failed else "yellow" if stopped else "#ff8a1f"
+        )
         text = Text()
         text.append_text(_rich_bar(percent, bar_width, status))
         text.append(f" {percent:5.1f}% | ", style="bold #0fd139")
@@ -277,11 +305,11 @@ class MultiFileProgressView:
         text.append("ETA ", style="#ffd04a")
         text.append(eta, style=eta_style)
         if include_elapsed:
-            if width >= 96:
-                text.append(" | Elapsed ", style="white")
-                text.append(
-                    _format_eta(time.perf_counter() - self.started_at), style="bold #d99145"
-                )
+            # Wall-clock operation time from one monotonic clock owned by the
+            # view; frozen exactly at terminal state by close().
+            elapsed_ref = self.finished_at if self.finished_at is not None else time.perf_counter()
+            text.append(" | Elapsed ", style="white")
+            text.append(_format_eta(elapsed_ref - self.started_at), style="bold #d99145")
             if width >= 124:
                 item_text = f" | {self.completed_items}/{self.total_items} {self.item_label}"
                 if self.failed_items:
@@ -295,7 +323,7 @@ class MultiFileProgressView:
             return "bold green"
         if status in {"failed", "error"}:
             return "bold red"
-        if status in {"queued", "skipped"}:
+        if status in {"queued", "skipped", "canceled"}:
             return "yellow"
         return "bold white"
 

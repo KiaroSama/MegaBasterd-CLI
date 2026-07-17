@@ -32,12 +32,40 @@ jobs:
       - name: Lint with Ruff
         run: ruff check src tests
 
-      - name: Type check with mypy
+      - name: Type check (required, stable checked set)
+        # These modules are mypy-clean and must stay clean. The legacy core
+        # modules still carry a known error baseline and are covered by the
+        # advisory full-tree run below.
+        run: >
+          mypy --ignore-missing-imports
+          src/megabasterd_cli/cli.py
+          src/megabasterd_cli/config.py
+          src/megabasterd_cli/commands/download_cmd.py
+          src/megabasterd_cli/commands/upload_cmd.py
+          src/megabasterd_cli/commands/queue_cmd.py
+          src/megabasterd_cli/commands/account_cmd.py
+          src/megabasterd_cli/commands/cloud_cmd.py
+          src/megabasterd_cli/commands/share_cmd.py
+          src/megabasterd_cli/commands/config_cmd.py
+          src/megabasterd_cli/commands/watch_cmd.py
+          src/megabasterd_cli/core/state.py
+          src/megabasterd_cli/core/chunks.py
+          src/megabasterd_cli/core/errors.py
+          src/megabasterd_cli/queue
+          src/megabasterd_cli/accounts
+          src/megabasterd_cli/ui
+          src/megabasterd_cli/utils/speed.py
+          src/megabasterd_cli/utils/hooks.py
+          src/megabasterd_cli/utils/selection.py
+
+      - name: Type check with mypy (advisory, full tree)
         run: mypy src/megabasterd_cli --ignore-missing-imports
         continue-on-error: true
 
       - name: Run tests
-        run: pytest --cov=megabasterd_cli --cov-report=xml
+        # Coverage baseline is ~61%; fail the build if local coverage regresses
+        # below 55% (Codecov upload stays non-fatal for network failures).
+        run: pytest --cov=megabasterd_cli --cov-report=xml --cov-fail-under=55
 
       - name: Smoke-test script launcher
         shell: pwsh

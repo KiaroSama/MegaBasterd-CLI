@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import os
 import re
+import threading
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Callable
 
 _INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -69,17 +72,67 @@ def format_eta(seconds: float) -> str:
 
 
 def ensure_unique_path(path: Path) -> Path:
-    """If `path` exists, append (1), (2), etc. until a free name is found."""
+    """If `path` exists, append (1), (2), etc. until a free name is found.
+
+    NOTE: this check is not atomic; concurrent transfers must go through
+    `claim_destination` instead, which combines the uniqueness walk with a
+    process-wide reservation.
+    """
     if not path.exists():
         return path
-    stem, suffix = path.stem, path.suffix
-    parent = path.parent
-    i = 1
-    while True:
-        candidate = parent / f"{stem} ({i}){suffix}"
+    for candidate in _numbered_candidates(path):
         if not candidate.exists():
             return candidate
+    raise AssertionError("unreachable")  # pragma: no cover - generator is infinite
+
+
+def _numbered_candidates(path: Path) -> Iterator[Path]:
+    """Yield `path`, then `path (1)`, `path (2)`, ..."""
+    yield path
+    stem, suffix = path.stem, path.suffix
+    i = 1
+    while True:
+        yield path.parent / f"{stem} ({i}){suffix}"
         i += 1
+
+
+# Process-wide destination reservations. One claimed path belongs to exactly
+# one in-flight transfer, so parallel downloads with identical (or
+# sanitization/truncation-colliding) names can never write to the same file
+# or share a state file.
+_claimed_destinations: set[str] = set()
+_claim_lock = threading.Lock()
+
+
+def claim_destination(
+    path: Path,
+    overwrite: bool = False,
+    is_resumable: Callable[[Path], bool] | None = None,
+) -> Path:
+    """Atomically reserve a destination for exactly one transfer.
+
+    Walks `path`, `path (1)`, ... and claims the first candidate that is not
+    reserved by another in-process transfer and either does not exist on disk,
+    may be overwritten, or is a resumable continuation of this exact transfer
+    (as decided by `is_resumable`). Call `release_destination` when done.
+    """
+    with _claim_lock:
+        for candidate in _numbered_candidates(path):
+            key = os.path.normcase(str(candidate))
+            if key in _claimed_destinations:
+                continue
+            blocked = candidate.exists() and not overwrite
+            if blocked and (is_resumable is None or not is_resumable(candidate)):
+                continue
+            _claimed_destinations.add(key)
+            return candidate
+    raise AssertionError("unreachable")  # pragma: no cover - generator is infinite
+
+
+def release_destination(path: Path) -> None:
+    """Release a reservation made by `claim_destination`."""
+    with _claim_lock:
+        _claimed_destinations.discard(os.path.normcase(str(path)))
 
 
 def file_md5(path: Path, chunk: int = 65536) -> str:

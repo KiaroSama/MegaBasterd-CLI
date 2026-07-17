@@ -32,14 +32,16 @@ def _client(
     mfa_code: str | None = None,
 ) -> MegaClient:
     """Helper: unlock vault, resolve account, log in, return a ready MegaClient."""
+    from ..accounts.manager import resolve_account_id
+
     cfg = ctx.obj["config"]
-    account_id = account or cfg.default_account
+    mgr = AccountManager(accounts_file())
+    account_id = resolve_account_id(mgr, cfg.default_account, account)
     if not account_id:
         raise click.UsageError(
             "No account specified and no default set. Use --account or set config."
         )
 
-    mgr = AccountManager(accounts_file())
     passphrase = vault_passphrase or ask_password("Vault passphrase")
     mgr.unlock(passphrase)
     try:

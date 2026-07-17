@@ -3,13 +3,54 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from pathlib import Path
 
 from .storage import Account, AccountStorage, AccountStore, CredentialVault
 
+log = logging.getLogger(__name__)
+
 
 class AccountNotFound(Exception):  # noqa: N818 - public CLI API name
     pass
+
+
+_default_conflict_warned = False
+
+
+def resolve_account_id(
+    mgr: AccountManager,
+    config_default: str | None,
+    explicit: str | None = None,
+) -> str | None:
+    """One shared default-account resolution for upload/queue/share/cloud.
+
+    Precedence:
+      1. an explicit ``--account`` value;
+      2. the account-vault default (``mb account default`` / ``add --default``);
+      3. the legacy ``config.default_account`` fallback.
+
+    When both writable defaults exist and disagree, the vault default wins and
+    a warning is emitted once per process.
+    """
+    global _default_conflict_warned
+    if explicit:
+        return explicit
+    vault_default = mgr.store.default_email
+    if (
+        vault_default
+        and config_default
+        and vault_default.lower() != config_default.lower()
+        and not _default_conflict_warned
+    ):
+        log.warning(
+            "Account-vault default (%s) and config default_account (%s) disagree; "
+            "using the vault default. Clear one of them to silence this warning.",
+            vault_default,
+            config_default,
+        )
+        _default_conflict_warned = True
+    return vault_default or config_default
 
 
 class AccountManager:

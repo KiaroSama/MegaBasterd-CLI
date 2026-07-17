@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import logging
+import os
 import shlex
 import subprocess
 from pathlib import Path
@@ -12,17 +13,34 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 
+def parse_hook_command(command: str) -> list[str]:
+    """Split a configured hook command into argv, per-platform.
+
+    Windows paths need non-POSIX splitting (backslashes are not escapes);
+    POSIX systems need real POSIX quoting rules. Never uses shell=True.
+    """
+    return shlex.split(command, posix=(os.name != "nt"))
+
+
 def run_post_transfer_command(command: str | None, path: Path) -> None:
     """Spawn `command path` after a successful transfer.
 
-    The command runs detached; its stdout/stderr go to the log. Errors are
-    swallowed because hook failures must never break the transfer.
+    The transferred path is appended as exactly one argv item. The command
+    runs detached; its stdout/stderr are discarded. Errors are swallowed
+    because hook failures must never break the transfer. Only the executable
+    name is logged: configured hook arguments may carry secrets (tokens,
+    passwords) and must not reach the log.
     """
     if not command:
         return
     try:
-        argv = shlex.split(command, posix=False) + [str(path)]
-        log.info("Running post-transfer command: %s", argv)
+        argv = parse_hook_command(command) + [str(path)]
+        log.info(
+            "Running post-transfer command: %s (%d args) %s",
+            argv[0] if argv else "?",
+            max(0, len(argv) - 2),
+            path,
+        )
         subprocess.Popen(
             argv,
             stdout=subprocess.DEVNULL,
