@@ -44,7 +44,7 @@ from .crypto import (
     str_to_a32,
     unpack_file_key,
 )
-from .errors import IntegrityError, QuotaError, TransferError
+from .errors import IntegrityError, QuotaError, TransferCancelled, TransferError
 from .link_services import (
     get_megacrypter_download_url,
     get_megacrypter_info,
@@ -257,6 +257,7 @@ class MegaDownloader:
                     parsed,
                     timeout=self.timeout,
                     password=password,
+                    selector=self._selector,
                 )
             except ValueError as exc:
                 mc_info = get_megacrypter_info(
@@ -602,7 +603,34 @@ class MegaDownloader:
             except Exception:
                 log.debug("Final progress callback raised", exc_info=True)
 
-        save_state(snapshot_state(state))
+        committed = snapshot_state(state)
+        save_state(committed)
+
+        # Completion is proven by CHUNK COVERAGE, not by reaching this line.
+        # Cancellation breaks out of the submission loop above, so without this
+        # check a cancelled transfer fell through to clear_state() and returned
+        # a successful DownloadResult - and with verify_integrity=False nothing
+        # else would ever have noticed. The snapshot gives one consistent view
+        # of what workers actually committed.
+        missing = [c.index for c in all_chunks if not committed.is_chunk_done(c.index)]
+        if missing:
+            if self.keep_state_files_on_error:
+                save_state(committed)  # keep what was committed
+            else:
+                clear_state(destination)
+            if self._stop_event.is_set():
+                raise TransferCancelled(
+                    message=(
+                        f"Download cancelled with {len(missing)} of {len(all_chunks)} "
+                        "chunks still missing; resume state was kept."
+                    )
+                )
+            raise TransferError(
+                message=(
+                    f"Download is incomplete: {len(missing)} of {len(all_chunks)} chunks "
+                    "were never committed."
+                )
+            )
 
         # Integrity check
         integrity_ok = True

@@ -16,6 +16,7 @@ from megabasterd_cli.core.link_services import (
     resolve_megacrypter_link,
 )
 from megabasterd_cli.core.links import parse_link
+from megabasterd_cli.proxy.selector import ProxySelector
 
 
 class DummyResponse:
@@ -38,7 +39,7 @@ def test_resolve_megacrypter_inline_url(monkeypatch):
         return DummyResponse({"mega_url": "https://mega.nz/file/ABC#KEY"})
 
     monkeypatch.setattr("requests.post", fake_post)
-    resolved = resolve_megacrypter_link(parsed)
+    resolved = resolve_megacrypter_link(parsed, selector=ProxySelector(force=False))
     assert resolved.public_id == "ABC"
     assert resolved.key == "KEY"
 
@@ -95,12 +96,15 @@ def test_megacrypter_password_metadata_and_url(monkeypatch):
         raise AssertionError(json)
 
     monkeypatch.setattr("requests.post", fake_post)
-    info = get_megacrypter_info(parsed, password=password)
+    info = get_megacrypter_info(parsed, password=password, selector=ProxySelector(force=False))
     assert info.name == "movie.mkv"
     assert info.size == 1234
     assert b64_url_decode(info.key) == raw_file_key
     assert info.noexpire_token == "token-1"
-    assert get_megacrypter_download_url(parsed, info=info) == cdn_url
+    assert (
+        get_megacrypter_download_url(parsed, info=info, selector=ProxySelector(force=False))
+        == cdn_url
+    )
 
 
 def test_megacrypter_rejects_unbounded_password_iterations():

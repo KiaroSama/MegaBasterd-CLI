@@ -133,6 +133,13 @@ def _config_summary_for_log(store: ConfigStore) -> dict[str, object]:
     }
 
 
+# The ONLY command group allowed to run against a corrupt config: it is the
+# surface that inspects and repairs one. Its own mutating subcommands still
+# refuse individually (ConfigCorruptionError), so nothing here can overwrite
+# the preserved file except the explicit `config recover --reset`.
+_CORRUPT_CONFIG_ALLOWLIST = frozenset({"config"})
+
+
 @click.group(
     context_settings={"help_option_names": ["-h", "--help"]},
     help="MegaBasterd CLI - command-line MEGA.nz transfers.",
@@ -164,6 +171,23 @@ def cli(ctx: click.Context, verbose: int, quiet: bool, log_file: bool | None) ->
     ctx.obj["config"] = store.config
     ctx.obj["console"] = console
     ctx.obj["quiet"] = quiet
+
+    # Fail CLOSED on a corrupt config. `load()` returns defaults so the CLI can
+    # still start and be repaired, but those defaults are NOT the user's
+    # policy: a file that said `force_smart_proxy = true` would load as false
+    # and the next command would open a direct socket. Everything except the
+    # recovery/inspection surface therefore stops here, before any request,
+    # destination reservation, or stored-state mutation.
+    if store.is_corrupt and ctx.invoked_subcommand not in _CORRUPT_CONFIG_ALLOWLIST:
+        click.echo(store.corruption_reason, err=True)
+        click.echo(
+            f"Refusing to run `{ctx.invoked_subcommand}` with an unusable configuration: "
+            "your saved settings (proxy policy, integrity, paths, limits) cannot be "
+            "applied. Inspect it with `mb config show`, or start over with "
+            "`mb config recover --reset`.",
+            err=True,
+        )
+        ctx.exit(1)
 
     if verbose >= 2:
         level = "DEBUG"
