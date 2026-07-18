@@ -189,8 +189,10 @@ def test_without_force_link_resolution_may_go_direct(monkeypatch):
     monkeypatch.setattr(requests, "post", transport)
     parsed = _elc_parsed(monkeypatch)
     with pytest.raises(Exception):  # noqa: B017
-        links.resolve_elc_links(parsed, user="u", api_key="k")
-    assert seen == [None], "non-force mode keeps its documented direct behavior"
+        # The policy must be stated EXPLICITLY: omitting it is now an error, so
+        # a forgetful caller can no longer inherit direct access by accident.
+        links.resolve_elc_links(parsed, user="u", api_key="k", selector=ProxySelector(force=False))
+    assert seen == [None], "an explicit non-force policy keeps direct behavior"
 
 
 def test_static_proxy_is_used_when_no_pool_exists(monkeypatch):

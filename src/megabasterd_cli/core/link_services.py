@@ -32,6 +32,23 @@ from .links import (
 )
 
 
+def _require_selector(selector, caller: str):
+    """Refuse to guess a proxy policy.
+
+    Defaulting to `ProxySelector()` here made force_smart_proxy depend on every
+    caller remembering to pass it: one omission (MegaDownloader's MegaCrypter
+    hop) silently opened a direct socket. A missing policy is now a programming
+    error, caught before any request is built.
+    """
+    if selector is None:
+        raise ValueError(
+            f"{caller}() requires an explicit selector: omitting it would silently "
+            "disable force_smart_proxy for this request. Pass "
+            "ProxySelector.from_config(cfg), or ProxySelector(force=False) to opt out."
+        )
+    return selector
+
+
 def decode_elc_payload(parsed: ParsedLink) -> ElcPayload:
     """Decode the local envelope of a `mega://elc?...` link.
 
@@ -92,6 +109,8 @@ def resolve_elc_links(
     """
     import requests
 
+    selector = _require_selector(selector, "resolve_elc_links")
+
     payload = decode_elc_payload(parsed)
     host = urlparse(payload.service_url).netloc.lower()
     account = (accounts or {}).get(host) or (accounts or {}).get(host.split(":")[0]) or {}
@@ -100,9 +119,6 @@ def resolve_elc_links(
     if not user or not api_key:
         raise ValueError(f"No ELC credentials configured for host {host!r}")
 
-    from ..proxy.selector import ProxySelector
-
-    selector = selector if selector is not None else ProxySelector()
     request_proxies, picked = selector.select()
 
     response = requests.post(
@@ -240,12 +256,10 @@ def _dlc_post(
     # The initial endpoint must be an explicitly approved origin (anti-SSRF).
     # Run per-target checks first so scheme/credential/IP problems get a precise
     # error, then enforce the exact-origin allowlist.
+    selector = _require_selector(selector, "_dlc_post")
     _validate_dlc_target(service_url, approved_host, approved_port)
     if (approved_host, approved_port) not in _APPROVED_DLC_ORIGINS:
         raise ValueError("Refusing DLC request to an unapproved service endpoint")
-    from ..proxy.selector import ProxySelector
-
-    selector = selector if selector is not None else ProxySelector()
     current = service_url
     for _ in range(max_redirects + 1):
         # Validate before connecting: covers the initial URL and every redirect.
@@ -283,6 +297,8 @@ def decrypt_dlc_container(
 ) -> list[str]:
     """Decrypt a JDownloader DLC container and return the contained URLs."""
     from Crypto.Cipher import AES
+
+    selector = _require_selector(selector, "decrypt_dlc_container")
 
     text = data.decode("utf-8", errors="ignore") if isinstance(data, bytes) else data
     text = "".join(text.split())
@@ -348,9 +364,8 @@ def _post_megacrypter(
 ) -> dict:
     import requests
 
-    from ..proxy.selector import ProxySelector
+    selector = _require_selector(selector, "_post_megacrypter")
 
-    selector = selector if selector is not None else ProxySelector()
     request_proxies, picked = selector.select()
 
     response = requests.post(
@@ -452,6 +467,7 @@ def get_megacrypter_info(
     selector=None,  # ProxySelector | None
 ) -> MegaCrypterInfo:
     """Fetch and decrypt MegaCrypter metadata."""
+    selector = _require_selector(selector, "get_megacrypter_info")
     link = _megacrypter_link(parsed)
     payload: dict[str, object] = {"m": "info", "link": link}
     if reverse:
@@ -499,6 +515,7 @@ def get_megacrypter_download_url(
     selector=None,  # ProxySelector | None
 ) -> str:
     """Ask MegaCrypter for the temporary CDN URL, decrypting it if needed."""
+    selector = _require_selector(selector, "get_megacrypter_download_url")
     if info is None:
         info = get_megacrypter_info(
             parsed, timeout=timeout, password=password, reverse=reverse, selector=selector
@@ -538,6 +555,7 @@ def resolve_megacrypter_link(
     """Resolve a MegaCrypter link when the server exposes an underlying MEGA URL."""
     from ..proxy.selector import ProxyRequiredError
 
+    selector = _require_selector(selector, "resolve_megacrypter_link")
     if parsed.type != LinkType.MEGACRYPTER:
         raise ValueError("Not a MegaCrypter link")
 

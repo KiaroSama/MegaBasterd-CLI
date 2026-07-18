@@ -8,6 +8,7 @@ from Crypto.Cipher import AES
 from megabasterd_cli.core.crypto import b64_url_encode
 from megabasterd_cli.core.link_services import decrypt_dlc_container, resolve_elc_links
 from megabasterd_cli.core.links import LinkType, parse_link
+from megabasterd_cli.proxy.selector import ProxySelector
 
 
 class DummyResponse:
@@ -57,6 +58,7 @@ def test_resolve_elc_links(monkeypatch):
     links = resolve_elc_links(
         parsed,
         accounts={"elc.example": {"user": "alice", "api_key": "secret"}},
+        selector=ProxySelector(force=False),
     )
 
     assert links == [
@@ -85,7 +87,7 @@ def test_decrypt_dlc_container(monkeypatch):
         return DummyResponse({}, text=f"<rc>{base64.b64encode(enc_key).decode()}</rc>")
 
     monkeypatch.setattr("requests.post", fake_post)
-    assert decrypt_dlc_container(dlc_data) == [url]
+    assert decrypt_dlc_container(dlc_data, selector=ProxySelector(force=False)) == [url]
 
 
 def test_elc_without_credentials_fails():
@@ -101,4 +103,4 @@ def test_elc_without_credentials_fails():
     parsed = parse_link("mega://elc?" + b64_url_encode(payload))
     assert parsed.type == LinkType.ELC_CONTAINER
     with pytest.raises(ValueError, match="No ELC credentials"):
-        resolve_elc_links(parsed)
+        resolve_elc_links(parsed, selector=ProxySelector(force=False))

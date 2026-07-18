@@ -22,6 +22,7 @@ _ERROR_CODES = {
     "AuthError": "auth_failed",
     "IntegrityError": "integrity_failed",
     "RateLimitError": "rate_limited",
+    "TransferCancelled": "cancelled",
     "TransferError": "transfer_failed",
     "MegaError": "mega_error",
     "FileNotFoundError": "local_file_missing",

@@ -50,6 +50,14 @@ class TransferError(MegaError):
     """Error during a download or upload."""
 
 
+class TransferCancelled(TransferError):  # noqa: N818 - a decision, not a fault
+    """The user (or the caller) stopped the transfer before it completed.
+
+    A distinct type because cancellation must never be reported as success and
+    must never be retried: it is a deliberate decision, not a fault.
+    """
+
+
 class AuthError(MegaError):
     """Authentication / session-related error."""
 
