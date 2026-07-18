@@ -126,6 +126,7 @@ def stream(
     except Exception as exc:  # noqa: BLE001
         print_error(f"Stream setup failed: {exc}")
         server.server_close()
+        api.close()
         return
 
     bound_host, bound_port = server.server_address
@@ -143,3 +144,8 @@ def stream(
     except KeyboardInterrupt:
         print_info("Stopping...")
         server.shutdown()
+    finally:
+        # Release the listening socket and the upstream HTTP session; the
+        # command exits straight after this.
+        server.server_close()
+        api.close()

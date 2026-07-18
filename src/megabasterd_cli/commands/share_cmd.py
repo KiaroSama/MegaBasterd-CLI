@@ -73,6 +73,8 @@ def share_cmd(
         client.login(acc.email, pwd, mfa_code=mfa_code, mfa_prompt=_mfa_prompt)
     except MegaError as exc:
         print_error(f"Login failed: {exc}")
+        # This return skips the finally below, so release the session here.
+        api.close()
         return
 
     try:
