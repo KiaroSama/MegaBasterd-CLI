@@ -194,7 +194,9 @@ def test_recovered_config_is_valid_json_after_two_episodes(tmp_path):
 
 
 def test_backup_permissions_are_not_widened(tmp_path):
-    """The backup may hold secrets; it must not be world-readable on POSIX."""
+    """A preserved config/queue can still contain secrets (connect_proxy_password,
+    sealed enc_password blobs), so the copy must be owner-only - the same rule
+    the queue key file already follows."""
     if os.name == "nt":
         pytest.skip("POSIX mode bits only")
     path = tmp_path / "queue.json"
@@ -203,3 +205,5 @@ def test_backup_permissions_are_not_widened(tmp_path):
     assert backup is not None
     mode = stat.S_IMODE(backup.stat().st_mode)
     assert not mode & stat.S_IROTH, f"backup is world-readable: {oct(mode)}"
+    assert not mode & stat.S_IRGRP, f"backup is group-readable: {oct(mode)}"
+    assert mode == 0o600, f"expected owner-only 0o600, got {oct(mode)}"
