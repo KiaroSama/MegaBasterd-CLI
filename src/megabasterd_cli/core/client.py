@@ -230,11 +230,21 @@ class MegaClient:
         self.invalidate_cache()
 
     def logout(self) -> None:
-        """Invalidate the current session."""
+        """Invalidate the session AND release this client's HTTP resources.
+
+        `logout()` is the end-of-life call: every caller discards the client
+        immediately afterwards. It therefore closes the underlying
+        `requests.Session` too, so the connection pool's sockets and TLS
+        state are released rather than left to the garbage collector.
+
+        Use `close()` instead when the server-side session must survive -
+        parallel workers sharing one sid.
+        """
         if self.session:
             with contextlib.suppress(MegaError):
                 self.api.request({"a": "sml"})
         self.api.clear_session()
+        self.api.close()
         self.session = None
         self.invalidate_cache()
 

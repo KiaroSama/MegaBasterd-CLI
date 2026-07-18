@@ -59,7 +59,13 @@ def _client(
         force_proxy=cfg.force_smart_proxy,
     )
     client = MegaClient(api=api)
-    client.login(acc.email, password, mfa_code=mfa_code, mfa_prompt=_mfa_prompt)
+    try:
+        client.login(acc.email, password, mfa_code=mfa_code, mfa_prompt=_mfa_prompt)
+    except BaseException:
+        # The caller only gets a client it can close if login succeeded, so
+        # a failure here has to release the session it just opened.
+        api.close()
+        raise
     return client
 
 

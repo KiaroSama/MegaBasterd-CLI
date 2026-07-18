@@ -238,5 +238,9 @@ def info_cmd(
     except MegaError as exc:
         print_error(f"Lookup failed: {exc}")
         return
+    finally:
+        # Every branch above returns early; the client is only ever used
+        # inside this block, so release its sockets on all of them.
+        api.close()
 
     _console.print(table)
