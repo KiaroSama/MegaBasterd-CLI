@@ -409,6 +409,7 @@ def download(
                                 password=password,
                                 rename_to=rename_to,
                                 machine=machine,
+                                run_command=cfg.run_command,
                             )
                             else 1
                         )
@@ -425,6 +426,7 @@ def download(
                             password=password,
                             rename_to=rename_to,
                             machine=machine,
+                            run_command=cfg.run_command,
                         )
 
                     with ThreadPoolExecutor(max_workers=parallel) as pool:
@@ -449,6 +451,7 @@ def download(
                             progress,
                             file_filter=folder_file_filter,
                             machine=machine,
+                            run_command=cfg.run_command,
                         )
                         failures += 0 if outcome else 1
                 else:
@@ -462,6 +465,7 @@ def download(
                             progress,
                             file_filter=folder_file_filter,
                             machine=machine,
+                            run_command=cfg.run_command,
                         )
 
                     with ThreadPoolExecutor(max_workers=parallel) as pool:
@@ -484,6 +488,7 @@ def download(
             file_filter=folder_file_filter,
             quiet=quiet,
             machine=machine,
+            run_command=cfg.run_command,
         ):
             failures += 1
 

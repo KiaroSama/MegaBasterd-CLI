@@ -58,11 +58,16 @@ def _interactive_file_picker(output_dir: Path):
     return _pick
 
 
-def _run_hook_for(path: Path) -> None:
-    ctx = click.get_current_context(silent=True)
-    cfg = ctx.obj.get("config") if ctx and ctx.obj else None
-    if cfg is not None:
-        run_post_transfer_command(cfg.run_command, path)
+def _run_hook_for(path: Path, run_command: str | None) -> None:
+    """Run the post-transfer hook for a finished file.
+
+    `run_command` is passed in DELIBERATELY. This used to read
+    `click.get_current_context()`, which is thread-local: in a parallel
+    download (`-P N`) every transfer runs on a worker thread, the context was
+    None there, and the user's configured hook silently never ran.
+    """
+    if run_command:
+        run_post_transfer_command(run_command, path)
 
 
 def _download_file(
@@ -73,6 +78,7 @@ def _download_file(
     password=None,
     rename_to=None,
     machine: MachineOutput | None = None,
+    run_command: str | None = None,
 ) -> bool:
     machine = machine or MachineOutput(False)
     item = progress.add_item(redact_link(url), status="active")
@@ -104,7 +110,7 @@ def _download_file(
             elapsed_seconds=round(result.elapsed_seconds, 2),
             integrity_ok=result.integrity_ok,
         )
-        _run_hook_for(result.path)
+        _run_hook_for(result.path, run_command)
         return True
     except MegaError as e:
         progress.finish_item(item, "failed")
@@ -144,6 +150,7 @@ def _download_folder(
     file_filter=None,
     quiet: bool = False,
     machine: MachineOutput | None = None,
+    run_command: str | None = None,
 ) -> bool:
     machine = machine or MachineOutput(False)
     folder_dl = MegaFolderDownloader(downloader)
@@ -229,7 +236,7 @@ def _download_folder(
             total_bytes=total_bytes,
         )
         for result in results:
-            _run_hook_for(result.path)
+            _run_hook_for(result.path, run_command)
         return True
     except SelectionCancelled:
         # Documented behavior: answering "none" skips the folder and is NOT a
@@ -272,6 +279,7 @@ def _download_folder_file(
     progress: TransferProgress,
     file_filter=None,
     machine: MachineOutput | None = None,
+    run_command: str | None = None,
 ) -> bool:
     machine = machine or MachineOutput(False)
     folder_dl = MegaFolderDownloader(downloader)
@@ -334,7 +342,7 @@ def _download_folder_file(
                 f"Folder complete: {len(results)} files, {format_bytes(total_bytes)} total"
             )
         for item in results:
-            _run_hook_for(item.path)
+            _run_hook_for(item.path, run_command)
         return True
     except SelectionCancelled:
         print_info(f"Selection cancelled; skipped folder node: {redact_link(url)}")
