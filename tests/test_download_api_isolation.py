@@ -44,21 +44,25 @@ def test_clone_isolates_session_and_sequence_but_carries_sid():
 
 
 def test_parallel_downloads_use_distinct_api_objects_and_all_close(cli_env, monkeypatch):
-    seen: list[tuple[int, int]] = []
-    closed: list[int] = []
+    # Hold OBJECT references so a closed+GC'd client cannot get its id() reused
+    # by a later one (id()-based identity is otherwise flaky under GC).
+    apis: list = []
+    sessions: list = []
+    closed: list = []
 
     def record(self, url, output_dir, **kwargs):
-        seen.append((id(self.api), id(self.api._session)))
+        apis.append(self.api)
+        sessions.append(self.api._session)
         if "def456" in url:
             raise TransferError(message="one worker fails")
-        path = Path(output_dir) / f"{len(seen)}.bin"
+        path = Path(output_dir) / f"{len(apis)}.bin"
         path.write_bytes(b"x")
         return DownloadResult(path=path, size=1, elapsed_seconds=0.1, integrity_ok=True)
 
     original_close = MegaAPIClient.close
 
     def counting_close(self):
-        closed.append(id(self))
+        closed.append(self)
         original_close(self)
 
     monkeypatch.setattr(MegaDownloader, "download_link", record)
@@ -69,12 +73,10 @@ def test_parallel_downloads_use_distinct_api_objects_and_all_close(cli_env, monk
     )
     # One worker failed -> exit 1; the OTHER worker was not poisoned.
     assert result.exit_code == 1
-    assert len(seen) == 2
-    api_ids = {pair[0] for pair in seen}
-    session_ids = {pair[1] for pair in seen}
-    assert len(api_ids) == 2, "each parallel transfer needs its own MegaAPIClient"
-    assert len(session_ids) == 2, "each parallel transfer needs its own requests.Session"
-    assert api_ids <= set(closed), "every created API client must be closed"
+    assert len(apis) == 2
+    assert len({id(a) for a in apis}) == 2, "each parallel transfer needs its own MegaAPIClient"
+    assert len({id(s) for s in sessions}) == 2, "each transfer needs its own requests.Session"
+    assert {id(a) for a in apis} <= {id(c) for c in closed}, "every API client must be closed"
 
 
 def test_folder_parallel_workers_clone_and_close_apis(monkeypatch):
@@ -82,17 +84,19 @@ def test_folder_parallel_workers_clone_and_close_apis(monkeypatch):
     parent = MegaDownloader(api=base_api, max_workers=2)
     folder = MegaFolderDownloader(parent)
 
-    worker_api_ids: list[int] = []
-    closed_ids: list[int] = []
+    # Keep OBJECT references (not id()s): a closed worker API would be GC'd and
+    # its memory address reused, making id()-based identity flaky under GC.
+    worker_apis: list = []
+    closed: list = []
 
     def fake_owned(self, folder_public_id, node, destination, on_progress):
-        worker_api_ids.append(id(self.downloader.api))
+        worker_apis.append(self.downloader.api)
         return DownloadResult(path=destination, size=1, elapsed_seconds=0.1, integrity_ok=True)
 
     original_close = MegaAPIClient.close
 
     def counting_close(self):
-        closed_ids.append(id(self))
+        closed.append(self)
         original_close(self)
 
     monkeypatch.setattr(MegaFolderDownloader, "_download_owned_file", fake_owned)
@@ -103,9 +107,10 @@ def test_folder_parallel_workers_clone_and_close_apis(monkeypatch):
     results = folder._download_file_jobs("PUBID", jobs, parallel_files=2)
 
     assert len(results) == 2
-    assert len(set(worker_api_ids)) == 2, "each folder worker needs its own API clone"
-    assert id(base_api) not in worker_api_ids, "workers must not reuse the parent API"
-    assert set(worker_api_ids) <= set(closed_ids), "worker API clones must be closed"
+    worker_ids = {id(a) for a in worker_apis}
+    assert len(worker_ids) == 2, "each folder worker needs its own API clone"
+    assert id(base_api) not in worker_ids, "workers must not reuse the parent API"
+    assert worker_ids <= {id(c) for c in closed}, "worker API clones must be closed"
 
 
 def test_worker_downloaders_share_the_command_limiter(cli_env, monkeypatch):
