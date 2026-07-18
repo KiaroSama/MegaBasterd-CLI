@@ -12,6 +12,7 @@ import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
+from .utils.corruption import existing_backup_for, preserve_corrupt_file
 from .utils.filelock import FileLock, FileLockError
 
 APP_NAME = "megabasterd-cli"
@@ -335,6 +336,7 @@ class ConfigStore:
         # Set by `load()` when the on-disk config is malformed/invalid-root.
         self._corrupt = False
         self._corrupt_reason = ""
+        self._corrupt_backup: Path | None = None
 
     @contextlib.contextmanager
     def _locked(self):
@@ -380,10 +382,15 @@ class ConfigStore:
         cfg.download_path = str(default_download_dir())
         return cfg
 
+    @property
     def corrupt_backup(self) -> Path | None:
-        """Newest preserved copy of a corrupt config, when one exists."""
-        backups = sorted(self.path.parent.glob(self.path.name + ".corrupt.*"))
-        return backups[-1] if backups else None
+        """The backup for the CURRENT corruption episode, when one exists.
+
+        Deliberately not "the newest .corrupt.* file": after a previous
+        recovery an older, unrelated backup would otherwise be reported as if
+        it held the bytes just preserved.
+        """
+        return self._corrupt_backup
 
     def _mark_corrupt(self, reason: str, data: bytes | None) -> None:
         """Flag the on-disk config as corrupt, preserve it, and back it up once.
@@ -396,30 +403,43 @@ class ConfigStore:
         from .utils.redaction import redact_text
 
         self._corrupt = True
+        self._corrupt_backup = None
         self._corrupt_reason = redact_text(
             f"The config file is corrupt and was preserved untouched: {reason}. "
             f"A backup was saved next to {self.path.name}; run "
             "`mb config recover --reset` to start from defaults, or restore a good copy."
         )
-        log.warning("%s", self._corrupt_reason)
         if data is None:
+            self._corrupt_backup = None
+            log.warning("%s", self._corrupt_reason)
             return
         try:
             with self._locked():
-                if self.corrupt_backup() is not None:
-                    return  # back up once, not on every read
-                stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
-                backup = self.path.parent / f"{self.path.name}.corrupt.{stamp}.json"
-                with contextlib.suppress(OSError):
-                    backup.write_bytes(data)  # byte-for-byte
-                    log.warning("Preserved corrupt config as %s", backup.name)
+                # Under the same lock used for recovery, so a concurrent
+                # detector cannot duplicate or lose this episode's backup.
+                self._corrupt_backup = preserve_corrupt_file(self.path, data)
         except ConfigLockError:
-            # Another process holds the lock; it is making the same backup.
+            self._corrupt_backup = existing_backup_for(self.path, data)
             log.warning("Could not lock the config file to back up the corrupt copy.")
+        if self._corrupt_backup is not None:
+            self._corrupt_reason = redact_text(
+                f"The config file is corrupt and was preserved untouched: {reason}. "
+                f"A backup was saved as {self._corrupt_backup.name}; run "
+                "`mb config recover --reset` to start from defaults, or restore a good copy."
+            )
+        else:
+            # Never claim a backup that was not written.
+            self._corrupt_reason = redact_text(
+                f"The config file is corrupt and was preserved untouched: {reason}. "
+                "A backup could NOT be written; fix the permissions or move the file "
+                "aside, then run `mb config recover --reset`."
+            )
+        log.warning("%s", self._corrupt_reason)
 
     def load(self) -> Config:
         self._corrupt = False
         self._corrupt_reason = ""
+        self._corrupt_backup = None
         if not self.path.exists():
             return self._defaults()
 
@@ -460,34 +480,54 @@ class ConfigStore:
         return cfg
 
     def save(self) -> None:
+        """Persist the in-memory config, refusing to clobber a corrupt file.
+
+        The on-disk file is re-read HERE, under the lock, before the writable
+        guard. A freshly constructed store has never loaded, so `_corrupt`
+        would still be False and reading `self.config` would lazily produce
+        defaults that then overwrote the corrupt original. Re-reading inside
+        the same lock hold that performs the replace also closes the window
+        where another process corrupts or updates the file after validation.
+
+        `load()` deliberately does not touch `self._config`, so a pending
+        mutation from set/unset/reset survives this refresh.
+        """
         with self._locked():
-            # Never overwrite a corrupt config: every mutation funnels through
-            # save(), so this one guard blocks set/unset/migrate/reset too.
+            self.load()
             self._ensure_writable()
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            # Serialize BEFORE touching the filesystem so a serialization
-            # failure leaves the original file untouched.
-            payload = json.dumps(asdict(self.config), indent=2)
-            with tempfile.NamedTemporaryFile(
-                "w",
-                encoding="utf-8",
-                dir=self.path.parent,
-                prefix=self.path.name + ".",
-                suffix=".tmp",
-                delete=False,
-            ) as tf:
-                tf.write(payload)
-                tf.flush()
-                os.fsync(tf.fileno())
-                tmp_path = tf.name
-            for attempt in range(5):
-                try:
-                    os.replace(tmp_path, self.path)
-                    break
-                except PermissionError:
-                    if attempt == 4:
-                        raise
-                    time.sleep(0.05 * (attempt + 1))
+            self._write_locked()
+
+    def _write_locked(self) -> None:
+        """Serialize and atomically replace the file. Caller holds the lock.
+
+        Split out of `save()` so explicit recovery can write valid defaults
+        over a file that is still flagged corrupt, without giving any other
+        path a way to skip the guard.
+        """
+        # Serialize BEFORE touching the filesystem so a serialization failure
+        # leaves the original file untouched and drops no temp file.
+        payload = json.dumps(asdict(self.config), indent=2)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=self.path.parent,
+            prefix=self.path.name + ".",
+            suffix=".tmp",
+            delete=False,
+        ) as tf:
+            tf.write(payload)
+            tf.flush()
+            os.fsync(tf.fileno())
+            tmp_path = tf.name
+        for attempt in range(5):
+            try:
+                os.replace(tmp_path, self.path)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
 
     def _is_nullable(self, key: str) -> bool:
         return key in _OPTIONAL_STR_KEYS
@@ -592,9 +632,11 @@ class ConfigStore:
         """
         with self._locked():
             self.load()  # ensures the corrupt original is backed up first
-            backup = self.corrupt_backup()
+            backup = self.corrupt_backup
             self._corrupt = False
             self._corrupt_reason = ""
             self._config = self._defaults()
-            self.save()
+            # Write directly: `save()` would re-read and re-flag the corruption
+            # we are deliberately recovering from, still under this same lock.
+            self._write_locked()
             return backup

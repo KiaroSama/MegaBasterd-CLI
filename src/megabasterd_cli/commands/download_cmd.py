@@ -22,6 +22,7 @@ from ..core.links import (
     resolve_megacrypter_link,
     resolve_password_link,
 )
+from ..proxy.selector import ProxySelector
 from ..ui.machine_output import MachineOutput, error_code_for
 from ..ui.prompts import print_error, print_info, print_success
 from ..ui.transfer_progress import TransferProgress, redact_link
@@ -189,6 +190,9 @@ def download(
         redirect.__enter__()
         ctx.call_on_close(lambda: redirect.__exit__(None, None, None))
     proxies = {"http": proxy, "https": proxy} if proxy else None
+    # One selector for every link-resolution request this command makes, so
+    # force_smart_proxy is enforced on DLC/ELC/MegaCrypter too.
+    selector = ProxySelector.from_config(cfg, proxy)
     failures = 0
 
     # Collect URLs from args and/or file
@@ -200,7 +204,7 @@ def download(
                     decrypt_dlc_container(
                         input_file.read_bytes(),
                         timeout=cfg.timeout_seconds,
-                        proxies=proxies,
+                        selector=selector,
                     )
                 )
             except Exception as exc:  # noqa: BLE001
@@ -296,7 +300,7 @@ def download(
                         user=elc_user,
                         api_key=elc_api_key,
                         timeout=cfg.timeout_seconds,
-                        proxies=proxies,
+                        selector=selector,
                     )
                 )
             except Exception as exc:  # noqa: BLE001
@@ -338,6 +342,7 @@ def download(
                     parsed,
                     timeout=cfg.timeout_seconds,
                     password=password,
+                    selector=selector,
                 )
             except ValueError as exc:
                 log.info("MegaCrypter link will be downloaded via server API: %s", exc)

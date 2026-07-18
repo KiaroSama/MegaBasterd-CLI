@@ -49,11 +49,15 @@ _MEGA_SCHEME_KEY = re.compile(r"(mega://[^\s#]*)#[^\s\"']+", re.IGNORECASE)
 # --- Free-text shapes (these are how secrets leak through `str(exc)`) -------
 # `user:pass@host` credentials embedded in any URL (proxy URLs especially).
 _URL_CREDENTIALS = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^\s/:@\"']+:[^\s/@\"']+@")
-# `Authorization: <anything>` — the whole value goes, scheme included, so
-# `Authorization: Bearer <token>` does not stop at the scheme word.
-_AUTH_HEADER = re.compile(
-    r"(?i)\b(authorization)(\s*[:=]\s*)(?:(?:bearer|basic|digest)\s+)?[^\s\"']+"
-)
+# `Authorization: <anything>` / `Proxy-Authorization: <anything>` — the value
+# runs to the END OF LINE, never just the first token: a Digest header carries
+# `nonce`, `response`, `cnonce` and `opaque` in later comma-separated fields.
+# Stopping at the newline keeps unrelated following lines intact.
+_AUTH_HEADER = re.compile(r"(?i)\b((?:proxy-)?authorization)(\s*[:=]\s*)[^\r\n]*")
+# A bare `Digest username="...", response="..."` outside a header. The
+# lookahead requires an actual `key=` field so ordinary prose such as
+# "Digest authentication failed" is left alone.
+_AUTH_DIGEST = re.compile(r"(?i)\b(digest)\s+(?=[a-z]+\s*=)[^\r\n]*")
 # A bare `Bearer <token>` outside a header ("Basic" is left alone: it collides
 # with ordinary prose like "Basic authentication failed").
 _AUTH_SCHEME = re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9\-._~+/=]+")
@@ -76,6 +80,31 @@ _FREE_TEXT_CODE = re.compile(r"(?i)\b((?:mfa|otp|2fa)(?:[ _-]?code)?)\s+(\d{4,12
 LINK_OUTPUT_FIELDS = frozenset({"share_link", "public_link"})
 
 
+# Punctuation that ends a sentence or closes a bracket rather than belonging to
+# the secret: `(password: hunter2), retrying` must keep its `),`.
+# `>` is deliberately excluded: it would re-append itself to the REDACTED
+# sentinel and break idempotence.
+_TRAILING_PUNCTUATION = ",;.:!?)]}"
+
+
+def _redact_free_text(match: re.Match) -> str:
+    """Replace a `<name><sep><value>` hit, keeping trailing punctuation.
+
+    Without this the greedy value run swallows the closing bracket and comma of
+    a phrase like `(password: x), retrying`, mangling the surrounding message.
+    """
+    name: str = match.group(1)
+    separator: str = match.group(2)
+    value: str = match.group(3)
+    if value == REDACTED:
+        return str(match.group(0))  # already redacted: keep the pass idempotent
+    if value[:1] in ("'", '"'):
+        return f"{name}{separator}{REDACTED}"
+    kept = len(value) - len(value.rstrip(_TRAILING_PUNCTUATION))
+    tail = value[len(value) - kept :] if kept else ""
+    return f"{name}{separator}{REDACTED}{tail}"
+
+
 def redact_link(value: str) -> str:
     """Strip the key fragment from a MEGA URL for on-screen summaries."""
     if "#" in value:
@@ -96,8 +125,9 @@ def redact_text(value: str) -> str:
     value = _MEGA_SCHEME_KEY.sub(r"\1#<key>", value)
     value = _URL_CREDENTIALS.sub(rf"\1{REDACTED}@", value)
     value = _AUTH_HEADER.sub(rf"\1\2{REDACTED}", value)
+    value = _AUTH_DIGEST.sub(rf"\1 {REDACTED}", value)
     value = _AUTH_SCHEME.sub(rf"\1 {REDACTED}", value)
-    value = _FREE_TEXT_SECRET.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", value)
+    value = _FREE_TEXT_SECRET.sub(_redact_free_text, value)
     value = _FREE_TEXT_CODE.sub(rf"\1 {REDACTED}", value)
     value = _SECRET_QUERY.sub(lambda m: f"{m.group(1)}=<redacted>", value)
     return value

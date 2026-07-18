@@ -130,3 +130,125 @@ def test_reset_recovers_a_corrupt_queue_and_keeps_the_backup(tmp_path):
     assert json.loads(path.read_text(encoding="utf-8")) == []
     backups = list(tmp_path.glob("queue.json.corrupt.*"))
     assert len(backups) == 1 and backups[0].read_bytes() == raw
+
+
+# ---------------------------------------------------------------------------
+# Semantic completeness: shapes that are structurally fine but operationally
+# ambiguous. These all loaded silently before.
+# ---------------------------------------------------------------------------
+
+
+def test_duplicate_ids_are_rejected(tmp_path):
+    raw = json.dumps([_valid(), _valid()]).encode("utf-8")
+    path = tmp_path / "queue.json"
+    path.write_bytes(raw)
+    mgr = QueueManager(path=path, lock_timeout=0.5)
+    assert mgr.is_corrupt, "an id addresses a job; duplicates make remove/retry ambiguous"
+    assert mgr.items == []
+    assert path.read_bytes() == raw
+
+
+def test_distinct_ids_still_load(tmp_path):
+    mgr = _manager(tmp_path, [_valid(id="one"), _valid(id="two")])
+    assert not mgr.is_corrupt and len(mgr.items) == 2
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t\n"])
+def test_blank_source_is_rejected(tmp_path, blank):
+    mgr = _manager(tmp_path, [_valid(source=blank)])
+    assert mgr.is_corrupt
+
+
+def test_empty_destination_is_accepted_as_documented(tmp_path):
+    """Upload jobs are written with destination="" and the runner falls back to
+    config download_path, so this must NOT be treated as corruption."""
+    mgr = _manager(tmp_path, [_valid(destination="")])
+    assert not mgr.is_corrupt and len(mgr.items) == 1
+
+
+@pytest.mark.parametrize(
+    "stamp",
+    [
+        "2026-01-01T00:00:00",  # naive: no timezone
+        "not-a-date",
+        "2026-13-45T99:99:99+00:00",
+        "01/01/2026",
+    ],
+)
+def test_invalid_created_iso_is_rejected(tmp_path, stamp):
+    mgr = _manager(tmp_path, [_valid(created_iso=stamp)])
+    assert mgr.is_corrupt, f"{stamp!r} must be rejected"
+
+
+def test_legacy_empty_created_iso_is_still_accepted(tmp_path):
+    """Documented legacy value: files predating created_iso carry ""."""
+    mgr = _manager(tmp_path, [_valid(created_iso="")])
+    assert not mgr.is_corrupt and len(mgr.items) == 1
+
+
+def test_utc_z_suffix_timestamp_is_accepted(tmp_path):
+    mgr = _manager(tmp_path, [_valid(created_iso="2026-01-01T00:00:00Z")])
+    assert not mgr.is_corrupt
+
+
+@pytest.mark.parametrize("field_name", ["finished_iso", "heartbeat_iso"])
+def test_invalid_optional_timestamps_are_rejected(tmp_path, field_name):
+    entry = _valid(status="done") if field_name == "finished_iso" else _valid(status="active")
+    entry[field_name] = "whenever"
+    mgr = _manager(tmp_path, [entry])
+    assert mgr.is_corrupt
+
+
+@pytest.mark.parametrize("status", ["pending", "done", "failed", "canceled", "interrupted"])
+def test_lease_fields_on_a_non_active_status_are_rejected(tmp_path, status):
+    """Every writer clears run_id/heartbeat off a non-active job, so their
+    presence means the file was edited or damaged."""
+    entry = _valid(status=status, run_id="run-1")
+    if status in ("done", "failed", "canceled"):
+        entry["finished_iso"] = "2026-01-02T00:00:00+00:00"
+    mgr = _manager(tmp_path, [entry])
+    assert mgr.is_corrupt
+
+
+def test_active_job_without_a_lease_is_accepted(tmp_path):
+    """The crashed-owner / legacy shape recover_interrupted() exists to fix."""
+    mgr = _manager(tmp_path, [_valid(status="active")])
+    assert not mgr.is_corrupt and len(mgr.items) == 1
+
+
+def test_finished_iso_on_a_running_status_is_rejected(tmp_path):
+    mgr = _manager(tmp_path, [_valid(status="pending", finished_iso="2026-01-02T00:00:00+00:00")])
+    assert mgr.is_corrupt
+
+
+def test_invalid_enc_password_encoding_is_rejected(tmp_path):
+    mgr = _manager(tmp_path, [_valid(enc_password="!!! not base64 !!!")])
+    assert mgr.is_corrupt
+
+
+def test_unknown_fields_are_preserved_not_dropped(tmp_path):
+    """Forward compatibility: a field written by a newer version survives a
+    load/save round trip instead of being silently discarded."""
+    path = tmp_path / "queue.json"
+    path.write_text(json.dumps([_valid(future_field={"nested": 1})]), encoding="utf-8")
+    mgr = QueueManager(path=path, lock_timeout=0.5)
+    assert not mgr.is_corrupt
+    mgr.save()
+    on_disk = json.loads(path.read_text(encoding="utf-8"))[0]
+    assert on_disk["future_field"] == {"nested": 1}
+
+
+def test_no_raw_exception_escapes_for_any_semantic_violation(tmp_path):
+    """Whatever the violation, the CLI sees QueueCorruptionError only."""
+    bad_entries = [
+        _valid(created_iso="nope"),
+        _valid(status="done", run_id="r"),
+        _valid(source="  "),
+        _valid(enc_password="%%%"),
+    ]
+    for entry in bad_entries:
+        path = tmp_path / "queue.json"
+        path.write_text(json.dumps([entry]), encoding="utf-8")
+        mgr = QueueManager(path=path, lock_timeout=0.5)
+        with pytest.raises(QueueCorruptionError):
+            mgr.add(QueueItem(id="new", type="download", source="s", destination="d"))

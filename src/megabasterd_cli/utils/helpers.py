@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import threading
@@ -96,12 +97,28 @@ def _numbered_candidates(path: Path) -> Iterator[Path]:
         i += 1
 
 
-# Process-wide destination reservations. One claimed path belongs to exactly
-# one in-flight transfer, so parallel downloads with identical (or
-# sanitization/truncation-colliding) names can never write to the same file
-# or share a state file.
+# Destination reservations. One claimed path belongs to exactly one in-flight
+# transfer, so parallel downloads with identical (or sanitization/truncation-
+# colliding) names can never write to the same file or share a state file.
+#
+# Two layers, because a `threading.Lock` cannot see another OS process:
+#   * `_claimed_destinations` - fast in-process bookkeeping;
+#   * a `.mbclaim` sidecar holding an ADVISORY FILE LOCK for the lifetime of
+#     the transfer, which is what makes two independent `mb` processes
+#     mutually exclusive.
+#
+# The file lock is deliberately chosen over a marker file: the OS drops it when
+# the owning process exits for any reason, so a crash can never leave a stale
+# reservation that permanently blocks a valid future transfer.
+CLAIM_SUFFIX = ".mbclaim"
+
 _claimed_destinations: set[str] = set()
+_claim_locks: dict[str, object] = {}
 _claim_lock = threading.Lock()
+
+
+def _claim_lock_path(candidate: Path) -> Path:
+    return candidate.parent / (candidate.name + CLAIM_SUFFIX)
 
 
 def claim_destination(
@@ -109,13 +126,16 @@ def claim_destination(
     overwrite: bool = False,
     is_resumable: Callable[[Path], bool] | None = None,
 ) -> Path:
-    """Atomically reserve a destination for exactly one transfer.
+    """Atomically reserve a destination for exactly one transfer, process-wide.
 
     Walks `path`, `path (1)`, ... and claims the first candidate that is not
-    reserved by another in-process transfer and either does not exist on disk,
-    may be overwritten, or is a resumable continuation of this exact transfer
-    (as decided by `is_resumable`). Call `release_destination` when done.
+    reserved by another transfer IN ANY PROCESS and either does not exist on
+    disk, may be overwritten, or is a resumable continuation of this exact
+    transfer (as decided by `is_resumable`). Call `release_destination` when
+    done.
     """
+    from .filelock import FileLock, FileLockError
+
     with _claim_lock:
         for candidate in _numbered_candidates(path):
             key = os.path.normcase(str(candidate))
@@ -124,7 +144,22 @@ def claim_destination(
             blocked = candidate.exists() and not overwrite
             if blocked and (is_resumable is None or not is_resumable(candidate)):
                 continue
+            lock = FileLock(_claim_lock_path(candidate))
+            try:
+                # timeout=0 makes this a try-lock: a candidate held by another
+                # process is skipped instead of waited on.
+                lock.acquire(timeout=0)
+            except (FileLockError, OSError):
+                continue
+            # Re-check UNDER the reservation: this closes the TOCTOU window in
+            # which another process created the file between our existence
+            # check and our claim.
+            still_blocked = candidate.exists() and not overwrite
+            if still_blocked and (is_resumable is None or not is_resumable(candidate)):
+                lock.release()
+                continue
             _claimed_destinations.add(key)
+            _claim_locks[key] = lock
             return candidate
     raise AssertionError("unreachable")  # pragma: no cover - generator is infinite
 
@@ -132,7 +167,14 @@ def claim_destination(
 def release_destination(path: Path) -> None:
     """Release a reservation made by `claim_destination`."""
     with _claim_lock:
-        _claimed_destinations.discard(os.path.normcase(str(path)))
+        key = os.path.normcase(str(path))
+        _claimed_destinations.discard(key)
+        lock = _claim_locks.pop(key, None)
+    if lock is not None:
+        lock.release()  # type: ignore[attr-defined]
+        # Best effort: another process may already hold the sidecar again.
+        with contextlib.suppress(OSError):
+            _claim_lock_path(Path(path)).unlink()
 
 
 def file_md5(path: Path, chunk: int = 65536) -> str:

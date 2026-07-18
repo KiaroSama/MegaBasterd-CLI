@@ -221,3 +221,54 @@ def test_failed_refresh_sets_free_space_to_zero():
     ledger.reconcile_free("a@example.com", 0)
     assert ledger.free_of("a@example.com") == 0
     assert ledger.reserve(1) is None
+
+
+# ---------------------------------------------------------------------------
+# Adjacent path found while re-verifying issue 10: `account refresh` /
+# `refresh-all` invalidated the session but never released the HTTP session,
+# leaking one connection pool per account.
+# ---------------------------------------------------------------------------
+
+
+def test_account_refresh_all_closes_every_http_session(cli_env, monkeypatch):
+    tmp_path, _logins = cli_env
+    closed: list = []
+    original_close = MegaAPIClient.close
+
+    def counting_close(self):
+        closed.append(self)
+        original_close(self)
+
+    monkeypatch.setattr(MegaAPIClient, "close", counting_close)
+    monkeypatch.setattr(MegaClient, "get_quota", lambda self: {"cstrg": 1, "mstrg": 100 * GB})
+    monkeypatch.setattr(MegaClient, "logout", lambda self: None)
+
+    from megabasterd_cli.cli import cli
+
+    result = CliRunner().invoke(cli, ["-q", "account", "refresh-all", "--vault-passphrase", "pp"])
+    assert result.exit_code == 0, result.output
+    assert len(closed) >= 2, "each account's API session must be closed"
+    assert len(closed) == len({id(c) for c in closed}), "no client closed twice"
+
+
+def test_account_info_closes_the_session_even_when_quota_fails(cli_env, monkeypatch):
+    tmp_path, _logins = cli_env
+    closed: list = []
+    original_close = MegaAPIClient.close
+
+    def counting_close(self):
+        closed.append(self)
+        original_close(self)
+
+    def failing_quota(self):
+        raise MegaError(message="quota lookup failed")
+
+    monkeypatch.setattr(MegaAPIClient, "close", counting_close)
+    monkeypatch.setattr(MegaClient, "get_quota", failing_quota)
+    monkeypatch.setattr(MegaClient, "logout", lambda self: None)
+
+    from megabasterd_cli.cli import cli
+
+    result = CliRunner().invoke(cli, ["-q", "account", "info", "--vault-passphrase", "pp"])
+    assert closed, "the HTTP session must be closed on the failure path too"
+    assert result.exit_code == 0

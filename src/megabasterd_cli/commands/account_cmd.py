@@ -12,6 +12,7 @@ from ..core.errors import MegaError
 from ..proxy.runtime import effective_pool
 from ..ui.prompts import ask, ask_password, confirm, print_error, print_info, print_success
 from ..ui.tables import render_accounts
+from ..utils.redaction import redact_text
 
 
 def _mfa_prompt() -> str:
@@ -142,10 +143,13 @@ def account_info(
         client.login(acc.email, password, mfa_code=mfa_code, mfa_prompt=_mfa_prompt)
         quota = client.get_quota()
     except MegaError as e:
-        print_error(f"Could not fetch quota: {e}")
+        print_error(f"Could not fetch quota: {redact_text(str(e))}")
         return
     finally:
+        # logout() invalidates the session; close() releases the HTTP session
+        # itself. Without the close, every refresh leaked a connection pool.
         client.logout()
+        client.api.close()
 
     used = quota.get("cstrg", 0)
     total = quota.get("mstrg", 0)
@@ -179,8 +183,10 @@ def account_refresh_all(
             mgr.update_quota(acc.email, quota.get("cstrg", 0), quota.get("mstrg", 0))
             print_success(f"{acc.email}: refreshed")
         except MegaError as e:
-            print_error(f"{acc.email}: {e}")
+            print_error(f"{acc.email}: {redact_text(str(e))}")
         finally:
+            # One HTTP session per account was leaked here before the close().
             client.logout()
+            client.api.close()
 
     render_accounts(mgr.list_accounts(), mgr.store.default_email)
