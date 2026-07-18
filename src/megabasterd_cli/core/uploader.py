@@ -14,6 +14,7 @@ Uploading a file to MEGA:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import os
@@ -77,6 +78,16 @@ class UploadResult:
 
 class UploadUrlExpiredError(Exception):
     """Raised when an upload slot is no longer usable and must be refreshed."""
+
+
+class UploadInProgressError(TransferError):
+    """Another live process already owns this source's upload slot.
+
+    Two processes uploading the same local file resolve to the SAME resume
+    state and therefore to the same MEGA upload slot: they would trade
+    `upload_url` values and completion tokens, and the last writer would win.
+    Refusing is the safe policy - the user can retry once the other run ends.
+    """
 
 
 class MegaUploader:
@@ -152,9 +163,60 @@ class MegaUploader:
         """Upload `source` into the user's MEGA tree under `target_handle`.
 
         If `target_handle` is None, uploads into the user's root.
+
+        Holds a WHOLE-TRANSFER lease on the source for the duration: see
+        `_upload_lease`. Without it two processes uploading the same file share
+        one resume state and one upload slot.
         """
         if not source.is_file():
             raise FileNotFoundError(f"Not a file: {source}")
+        with self._upload_lease(source):
+            return self._upload_file_locked(source, target_handle, rename_to, on_progress)
+
+    @contextlib.contextmanager
+    def _upload_lease(self, source: Path):
+        """Own this source's upload for the whole transfer, across processes.
+
+        The lease is an advisory lock on a sidecar beside the resume state, so
+        the OS releases it if this process dies - a crashed owner never blocks
+        a later retry, and no stale-lease heuristic is needed. A second LIVE
+        process is refused rather than allowed to interleave slot refreshes and
+        completion tokens with ours.
+
+        The sidecar file is never unlinked: removing it would let a third
+        process create a new inode and acquire a second, independent lease on
+        the same source (the same race fixed for destination claims).
+        """
+        from ..utils.filelock import FileLock, FileLockError
+
+        state_path = self._upload_state_destination(source)
+        lease = FileLock(Path(str(state_path) + ".uplock"))
+        try:
+            lease.acquire(timeout=0)  # try-lock: do not queue behind another run
+        except FileLockError as exc:
+            raise UploadInProgressError(
+                message=(
+                    f"Another upload of {source.name} is already running in this or "
+                    "another process. Wait for it to finish, or upload a copy under "
+                    "a different name."
+                )
+            ) from exc
+        except OSError as exc:
+            raise TransferError(
+                message=f"Could not take the upload lease for {source.name}: {exc}"
+            ) from exc
+        try:
+            yield
+        finally:
+            lease.release()
+
+    def _upload_file_locked(
+        self,
+        source: Path,
+        target_handle: str | None = None,
+        rename_to: str | None = None,
+        on_progress: Callable[[UploadProgress], None] | None = None,
+    ) -> UploadResult:
         # Reset ALL per-file mutable state at the safe start of every upload,
         # BEFORE hashing. `upload_directory(keep_going=True)` reuses one
         # uploader for every file, so a previous file that set `_stop_event`
