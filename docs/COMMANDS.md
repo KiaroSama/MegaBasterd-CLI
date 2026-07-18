@@ -69,8 +69,8 @@ field, user skips use `"skipped"`, and sources are always key-redacted
 parallel `-P N` output stays valid JSONL, and every string value is passed
 through a recursive secret sanitizer (link keys, SIDs, passwords, API keys,
 MFA codes, tokens are never emitted; a `share_link` keeps its public key).
-Exit codes are unchanged. This is the stable interface external callers (e.g.
-EVdlc) should parse.
+Exit codes are unchanged. This is the stable interface an external caller
+should parse.
 
 Examples:
 
@@ -306,6 +306,17 @@ Watches clipboard text and queues MEGA links as they appear.
 .\Run.ps1 config set KEY VALUE
 .\Run.ps1 config reset
 .\Run.ps1 config path
+.\Run.ps1 config migrate
+.\Run.ps1 config recover [--reset]
 ```
 
 Use `config path` to see the exact config file used on the current machine.
+
+A malformed `config.json` (bad JSON, invalid UTF-8, or a root that is not an
+object) is treated as corruption: the original is preserved byte-for-byte, one
+timestamped copy is kept as `config.json.corrupt.<ts>.json`, and every mutation
+(`set`, `unset`, `migrate`, `reset`) refuses with a non-zero exit instead of
+overwriting it. `config recover` reports that state; `config recover --reset`
+writes a fresh default config and keeps the backup. Read-only commands keep
+working and never rewrite the file. Corruption messages never echo values from
+the corrupt file.

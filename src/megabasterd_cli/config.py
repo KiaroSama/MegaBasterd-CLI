@@ -24,6 +24,15 @@ class ConfigLockError(Exception):
     """Raised when the config file lock cannot be acquired in time."""
 
 
+class ConfigCorruptionError(Exception):
+    """Raised when the config file is malformed or has an invalid root.
+
+    A corrupt config is preserved byte-for-byte (never overwritten) and every
+    mutation is blocked until the operator resolves it with
+    `mb config recover --reset` or by restoring a good copy.
+    """
+
+
 # Nullable (None-default) fields accept an explicit "null"/"none" to unset.
 _NULL_TOKENS = {"null", "none"}
 
@@ -40,7 +49,7 @@ DEPRECATED_CONFIG_KEYS = {
 }
 
 # Deterministic warn-once bookkeeping: old config files written by other
-# tools (e.g. EVdlc) may carry deprecated or unknown keys on every load;
+# tools may carry deprecated or unknown keys on every load;
 # each key is warned about at most once per process, never per access.
 _warned_config_keys: set[str] = set()
 
@@ -306,7 +315,7 @@ class ConfigStore:
     (`set`/`unset`) run under an instance mutex plus a cross-process file
     lock, reload the newest on-disk config first, apply only the requested
     change, and persist atomically via a unique fsync'd temp file. This
-    prevents two CLI/EVdlc processes from losing each other's updates or
+    prevents two processes from losing each other's updates or
     colliding on a shared temp file.
     """
 
@@ -323,6 +332,9 @@ class ConfigStore:
             ),
         )
         self._lock_depth = 0
+        # Set by `load()` when the on-disk config is malformed/invalid-root.
+        self._corrupt = False
+        self._corrupt_reason = ""
 
     @contextlib.contextmanager
     def _locked(self):
@@ -350,19 +362,80 @@ class ConfigStore:
             self._config = self.load()
         return self._config
 
+    @property
+    def is_corrupt(self) -> bool:
+        return self._corrupt
+
+    @property
+    def corruption_reason(self) -> str:
+        return self._corrupt_reason
+
+    def _ensure_writable(self) -> None:
+        """Block mutations while the on-disk config is corrupt."""
+        if self._corrupt:
+            raise ConfigCorruptionError(self._corrupt_reason)
+
+    def _defaults(self) -> Config:
+        cfg = Config()
+        cfg.download_path = str(default_download_dir())
+        return cfg
+
+    def corrupt_backup(self) -> Path | None:
+        """Newest preserved copy of a corrupt config, when one exists."""
+        backups = sorted(self.path.parent.glob(self.path.name + ".corrupt.*"))
+        return backups[-1] if backups else None
+
+    def _mark_corrupt(self, reason: str, data: bytes | None) -> None:
+        """Flag the on-disk config as corrupt, preserve it, and back it up once.
+
+        The original is NEVER overwritten. A single timestamped copy is made
+        the first time corruption is seen, under the cross-process file lock so
+        two processes cannot duplicate the backup. The reason is sanitized: it
+        must never carry a value from the corrupt file.
+        """
+        from .utils.redaction import redact_text
+
+        self._corrupt = True
+        self._corrupt_reason = redact_text(
+            f"The config file is corrupt and was preserved untouched: {reason}. "
+            f"A backup was saved next to {self.path.name}; run "
+            "`mb config recover --reset` to start from defaults, or restore a good copy."
+        )
+        log.warning("%s", self._corrupt_reason)
+        if data is None:
+            return
+        try:
+            with self._locked():
+                if self.corrupt_backup() is not None:
+                    return  # back up once, not on every read
+                stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+                backup = self.path.parent / f"{self.path.name}.corrupt.{stamp}.json"
+                with contextlib.suppress(OSError):
+                    backup.write_bytes(data)  # byte-for-byte
+                    log.warning("Preserved corrupt config as %s", backup.name)
+        except ConfigLockError:
+            # Another process holds the lock; it is making the same backup.
+            log.warning("Could not lock the config file to back up the corrupt copy.")
+
     def load(self) -> Config:
+        self._corrupt = False
+        self._corrupt_reason = ""
         if not self.path.exists():
-            cfg = Config()
-            cfg.download_path = str(default_download_dir())
-            return cfg
+            return self._defaults()
 
         try:
-            with open(self.path, encoding="utf-8") as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            cfg = Config()
-            cfg.download_path = str(default_download_dir())
-            return cfg
+            raw = self.path.read_bytes()
+        except OSError as exc:
+            self._mark_corrupt(f"unreadable ({type(exc).__name__})", None)
+            return self._defaults()
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            self._mark_corrupt(f"not valid UTF-8 JSON ({type(exc).__name__})", raw)
+            return self._defaults()
+        if not isinstance(data, dict):
+            self._mark_corrupt(f"root is {type(data).__name__}, expected an object", raw)
+            return self._defaults()
 
         cfg = Config()
         for key, value in data.items():
@@ -388,6 +461,9 @@ class ConfigStore:
 
     def save(self) -> None:
         with self._locked():
+            # Never overwrite a corrupt config: every mutation funnels through
+            # save(), so this one guard blocks set/unset/migrate/reset too.
+            self._ensure_writable()
             self.path.parent.mkdir(parents=True, exist_ok=True)
             # Serialize BEFORE touching the filesystem so a serialization
             # failure leaves the original file untouched.
@@ -484,21 +560,41 @@ class ConfigStore:
     def migrate(self) -> list[str]:
         """Normalize the persisted config: drop deprecated/unknown keys.
 
-        Returns the removed keys so callers (and EVdlc) can report them.
+        Returns the removed keys so callers can report them.
         Values of known keys are validated/kept by the normal load path.
         """
         with self._locked():
+            self._config = self.load()  # detects corruption before any rewrite
+            self._ensure_writable()
             stale = sorted(
                 key
                 for key in self.raw_keys()
                 if key in DEPRECATED_CONFIG_KEYS or not hasattr(Config(), key)
             )
-            self._config = self.load()
             self.save()
             return stale
 
     def reset(self) -> None:
         with self._locked():
-            self._config = Config()
-            self._config.download_path = str(default_download_dir())
+            # Load first: a corrupt file must be detected (and preserved)
+            # BEFORE reset would otherwise overwrite it with defaults.
+            self.load()
+            self._ensure_writable()
+            self._config = self._defaults()
             self.save()
+
+    def recover(self) -> Path | None:
+        """Explicit recovery from corruption: write a fresh default config.
+
+        The corrupt original is preserved as a backup (made on load); this only
+        clears the corruption flag and writes valid defaults, so it must be
+        driven by a deliberate user action. Returns the preserved backup path.
+        """
+        with self._locked():
+            self.load()  # ensures the corrupt original is backed up first
+            backup = self.corrupt_backup()
+            self._corrupt = False
+            self._corrupt_reason = ""
+            self._config = self._defaults()
+            self.save()
+            return backup

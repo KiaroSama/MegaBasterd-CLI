@@ -227,7 +227,7 @@ def test_migrate_removes_deprecated_keys_and_preserves_settings(tmp_path):
 
 
 def test_old_evdlc_style_config_loads_safely(tmp_path):
-    """A config written by an old EVdlc integration must load without crashing."""
+    """A config written by an old external integration must load without crashing."""
     path = tmp_path / "config.json"
     path.write_text(
         json.dumps(

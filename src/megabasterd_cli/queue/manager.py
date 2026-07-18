@@ -356,7 +356,13 @@ class QueueManager:
         # Only now — with the whole file validated — build items. Never
         # partially load and then rewrite.
         self._had_encrypted_secrets = any(entry.get("enc_password") for entry in validated)
-        self.items = [self._deserialize(entry) for entry in validated]
+        try:
+            self.items = [self._deserialize(entry) for entry in validated]
+        except (TypeError, ValueError, KeyError) as exc:
+            # Belt and braces: a dataclass-construction error is corruption,
+            # never a raw Python exception surfacing in the CLI.
+            self._mark_corrupt(f"entry could not be loaded ({type(exc).__name__})", raw)
+            return
         # Rewrite once to encrypt any legacy plaintext passwords found on load.
         # If the key cannot be created safely, preserve the original file.
         if self._needs_migration:
@@ -371,9 +377,26 @@ class QueueManager:
         "source": str,
         "destination": str,
     }
+    # Persisted optional fields: a string or null when present. `password` is
+    # the legacy plaintext form (re-encrypted on load); `enc_password` is the
+    # sealed blob and is not a dataclass field.
+    _OPTIONAL_STR_ITEM_FIELDS = (
+        "error",
+        "account",
+        "password",
+        "enc_password",
+        "finished_iso",
+        "run_id",
+        "heartbeat_iso",
+    )
 
     def _validate_raw_item(self, entry) -> dict:
-        """Validate one raw queue entry's shape; raise QueueCorruptionError."""
+        """Validate one raw queue entry's shape; raise QueueCorruptionError.
+
+        Every shape/type/enum failure becomes QueueCorruptionError, so a raw
+        TypeError/ValueError/KeyError from the dataclass constructor can never
+        escape to the CLI.
+        """
         if not isinstance(entry, dict):
             raise QueueCorruptionError(f"queue entry is {type(entry).__name__}, expected an object")
         for name, expected in self._REQUIRED_ITEM_FIELDS.items():
@@ -383,13 +406,31 @@ class QueueManager:
                 raise QueueCorruptionError(
                     f"queue entry field {name!r} must be {expected.__name__}"
                 )
+        if not entry["id"].strip():
+            raise QueueCorruptionError("queue entry field 'id' must not be empty")
+        # `type` is already known to be a str, so set membership is safe here.
         if entry["type"] not in {t.value for t in JobType}:
             raise QueueCorruptionError(f"queue entry has unknown type {entry['type']!r}")
+        # Type check BEFORE set membership: an unhashable list/dict status
+        # would raise a raw TypeError from `in`.
         status = entry.get("status", JobStatus.PENDING.value)
+        if not isinstance(status, str):
+            raise QueueCorruptionError(
+                f"queue entry field 'status' is {type(status).__name__}, expected a string"
+            )
         if status not in {s.value for s in JobStatus}:
             raise QueueCorruptionError(f"queue entry has unknown status {status!r}")
-        if "size" in entry and not isinstance(entry["size"], int):
-            raise QueueCorruptionError("queue entry field 'size' must be an integer")
+        # bool is a subclass of int; a boolean size is corruption, not 0/1.
+        size = entry.get("size", 0)
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            raise QueueCorruptionError("queue entry field 'size' must be an integer >= 0")
+        created = entry.get("created_iso", "")
+        if not isinstance(created, str):
+            raise QueueCorruptionError("queue entry field 'created_iso' must be a string")
+        for name in self._OPTIONAL_STR_ITEM_FIELDS:
+            value = entry.get(name)
+            if value is not None and not isinstance(value, str):
+                raise QueueCorruptionError(f"queue entry field {name!r} must be a string or null")
         return entry
 
     def save(self) -> None:

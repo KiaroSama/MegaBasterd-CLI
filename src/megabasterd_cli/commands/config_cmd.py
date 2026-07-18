@@ -7,11 +7,23 @@ from dataclasses import asdict
 import click
 from rich.table import Table
 
-from ..config import ConfigLockError, ConfigStore, config_file, display_value
+from ..config import (
+    ConfigCorruptionError,
+    ConfigLockError,
+    ConfigStore,
+    config_file,
+    display_value,
+)
 from ..ui.prompts import confirm, print_success
 from ..ui.theme import make_console
 
 _console = make_console()
+
+
+def _warn_if_corrupt(store: ConfigStore) -> None:
+    """Read-only commands report corruption but never rewrite anything."""
+    if store.is_corrupt:
+        click.echo(store.corruption_reason, err=True)
 
 
 @click.group("config", short_help="View or modify CLI settings.")
@@ -22,7 +34,9 @@ def config_cmd() -> None:
 @config_cmd.command("show", short_help="Print current configuration.")
 @click.pass_context
 def config_show(ctx: click.Context) -> None:
-    cfg = ctx.obj["config_store"].config
+    store: ConfigStore = ctx.obj["config_store"]
+    cfg = store.config
+    _warn_if_corrupt(store)
     table = Table(
         title=f"Configuration ({config_file()})",
         show_header=True,
@@ -51,7 +65,7 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
     except (ValueError, TypeError) as e:
         click.echo(f"Bad value: {e}", err=True)
         ctx.exit(2)
-    except ConfigLockError as e:
+    except (ConfigLockError, ConfigCorruptionError) as e:
         click.echo(str(e), err=True)
         ctx.exit(1)
     # Never echo the value: secrets must not reach stdout. Confirm the key only.
@@ -71,7 +85,7 @@ def config_unset(ctx: click.Context, key: str) -> None:
     except ValueError as e:
         click.echo(str(e), err=True)
         ctx.exit(2)
-    except ConfigLockError as e:
+    except (ConfigLockError, ConfigCorruptionError) as e:
         click.echo(str(e), err=True)
         ctx.exit(1)
     print_success(f"{key} cleared.")
@@ -82,6 +96,7 @@ def config_unset(ctx: click.Context, key: str) -> None:
 @click.pass_context
 def config_get(ctx: click.Context, key: str) -> None:
     cfg = ctx.obj["config"]
+    _warn_if_corrupt(ctx.obj["config_store"])
     if not hasattr(cfg, key):
         click.echo(f"Unknown config key: {key}", err=True)
         ctx.exit(2)
@@ -94,9 +109,48 @@ def config_get(ctx: click.Context, key: str) -> None:
 @click.pass_context
 def config_reset(ctx: click.Context) -> None:
     if not confirm("Reset all settings to defaults?", default=False):
-        return
-    ctx.obj["config_store"].reset()
+        return  # declined: exit 0, nothing written
+    try:
+        ctx.obj["config_store"].reset()
+    except (ConfigLockError, ConfigCorruptionError) as e:
+        click.echo(str(e), err=True)
+        ctx.exit(1)
     print_success("Configuration reset to defaults.")
+
+
+@config_cmd.command("recover", short_help="Recover from a corrupt config file.")
+@click.option(
+    "--reset",
+    "do_reset",
+    is_flag=True,
+    help="Discard the corrupt config and start from defaults (the original is kept as a backup).",
+)
+@click.pass_context
+def config_recover(ctx: click.Context, do_reset: bool) -> None:
+    """Report or resolve a corrupt config file.
+
+    Without `--reset` this only reports the state; the corrupt file is never
+    rewritten implicitly. With `--reset` a fresh default config is written and
+    the preserved backup is kept.
+    """
+    store: ConfigStore = ctx.obj["config_store"]
+    store.load()  # refresh the corruption state (and preserve/back up once)
+    if not do_reset:
+        if store.is_corrupt:
+            click.echo(store.corruption_reason, err=True)
+            click.echo("Run `mb config recover --reset` to start from defaults.", err=True)
+            ctx.exit(1)
+        print_success("Configuration file is valid; nothing to recover.")
+        return
+    try:
+        backup = store.recover()
+    except ConfigLockError as e:
+        click.echo(str(e), err=True)
+        ctx.exit(1)
+    if backup is not None:
+        print_success(f"Configuration reset to defaults; corrupt file kept as {backup.name}.")
+    else:
+        print_success("Configuration reset to defaults.")
 
 
 @config_cmd.command("path", short_help="Print config file path.")
@@ -109,13 +163,13 @@ def config_path() -> None:
 def config_migrate(ctx: click.Context) -> None:
     """Rewrite config.json without deprecated/unknown keys.
 
-    Lets external callers (e.g. EVdlc) clean old config files they wrote for
+    Lets an external caller clean old config files it wrote for
     earlier versions. Valid settings are preserved; removed keys are listed.
     """
     store: ConfigStore = ctx.obj["config_store"]
     try:
         removed = store.migrate()
-    except ConfigLockError as e:
+    except (ConfigLockError, ConfigCorruptionError) as e:
         click.echo(str(e), err=True)
         ctx.exit(1)
     if removed:

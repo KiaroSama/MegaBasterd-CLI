@@ -2,7 +2,7 @@
 
 In machine mode, stdout carries ONLY structured records (one JSON object per
 line); every human-facing message and progress frame goes to stderr, so a
-caller such as EVdlc can parse stdout without scraping UI text. Records never
+machine-mode consumer can parse stdout without scraping UI text. Records never
 contain passwords, keys, SIDs, vault passphrases, or unredacted link keys —
 every field is passed through the central recursive sanitizer first.
 """
@@ -15,7 +15,7 @@ import threading
 
 from ..utils.redaction import sanitize
 
-# Stable machine-readable error codes, so EVdlc can branch without parsing
+# Stable machine-readable error codes, so an external caller can branch without parsing
 # free-text messages. Mapped from the internal error class name.
 _ERROR_CODES = {
     "QuotaError": "quota_exceeded",

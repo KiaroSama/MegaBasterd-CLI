@@ -40,11 +40,23 @@ null, and `mb config unset <key>` clears a nullable key (any other string
 value, including a URL or the literal `null-value`, is kept verbatim).
 `config get`/`set`/`unset` exit non-zero on unknown keys, invalid values, or
 deprecated keys. Config writes are cross-process safe (a bounded file lock,
-reload-before-write, and a unique fsync'd temp file), so the CLI and EVdlc
-can update the file concurrently without losing each other's changes.
+reload-before-write, and a unique fsync'd temp file), so the CLI and any
+external caller can update the file concurrently without losing each other's
+changes.
 
 Deprecated or unknown keys in old files are ignored with a single warning per
 key per process; `mb config migrate` rewrites the file without them.
+
+## Corrupt config files
+
+A `config.json` that is not valid UTF-8 JSON, or whose root is not an object,
+is treated as corruption rather than silently replaced by defaults. The
+original is preserved byte-for-byte and copied once to
+`config.json.corrupt.<timestamp>.json`; `set`, `unset`, `migrate`, and `reset`
+then refuse with a sanitized message and a non-zero exit. `mb config recover`
+reports the state, and `mb config recover --reset` writes a fresh default
+config while keeping the backup. Corruption messages never include values read
+from the corrupt file.
 
 ## Transfer Settings
 
