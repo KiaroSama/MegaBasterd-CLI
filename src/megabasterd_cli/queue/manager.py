@@ -49,16 +49,23 @@ class _QueueFileLock:
             while True:
                 try:
                     if os.name == "nt":
-                        import msvcrt
+                        # msvcrt only exists on Windows; fcntl only on POSIX.
+                        # Each platform's module is invisible to mypy on the
+                        # other, so both branches are attribute-ignored.
+                        import msvcrt  # type: ignore[import-not-found, unused-ignore]
 
                         os.lseek(fd, 0, os.SEEK_SET)
-                        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-                    else:
-                        import fcntl
-
-                        fcntl.flock(  # type: ignore[attr-defined]
+                        msvcrt.locking(  # type: ignore[attr-defined, unused-ignore]
                             fd,
-                            fcntl.LOCK_EX | fcntl.LOCK_NB,  # type: ignore[attr-defined]
+                            msvcrt.LK_NBLCK,  # type: ignore[attr-defined, unused-ignore]
+                            1,
+                        )
+                    else:
+                        import fcntl  # type: ignore[import-not-found, unused-ignore]
+
+                        fcntl.flock(  # type: ignore[attr-defined, unused-ignore]
+                            fd,
+                            fcntl.LOCK_EX | fcntl.LOCK_NB,  # type: ignore[attr-defined, unused-ignore]
                         )
                     self._fd = fd
                     return
@@ -81,16 +88,20 @@ class _QueueFileLock:
             return
         try:
             if os.name == "nt":
-                import msvcrt
+                import msvcrt  # type: ignore[import-not-found, unused-ignore]
 
                 os.lseek(fd, 0, os.SEEK_SET)
                 with contextlib.suppress(OSError):
-                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                    msvcrt.locking(  # type: ignore[attr-defined, unused-ignore]
+                        fd,
+                        msvcrt.LK_UNLCK,  # type: ignore[attr-defined, unused-ignore]
+                        1,
+                    )
             else:
-                import fcntl
+                import fcntl  # type: ignore[import-not-found, unused-ignore]
 
                 with contextlib.suppress(OSError):
-                    fcntl.flock(fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]
+                    fcntl.flock(fd, fcntl.LOCK_UN)  # type: ignore[attr-defined, unused-ignore]
         finally:
             os.close(fd)
 
