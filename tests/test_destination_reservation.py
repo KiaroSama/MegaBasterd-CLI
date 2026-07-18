@@ -183,20 +183,115 @@ def test_a_crashed_owner_does_not_block_the_destination_forever(tmp_path):
         release_destination(reclaimed)
 
 
-def test_release_removes_the_claim_sidecar(tmp_path):
+def test_released_sidecar_is_inert_and_reclaimable(tmp_path):
+    """The sidecar PERSISTS by design (see release_destination); what matters
+    is that it holds no lock and does not block the next claim."""
     target = tmp_path / "clean.bin"
     claimed = claim_destination(target)
     release_destination(claimed)
-    leftovers = [p.name for p in tmp_path.iterdir() if p.name.endswith(CLAIM_SUFFIX)]
-    assert leftovers == [], f"claim sidecars must not leak: {leftovers}"
+
+    sidecar = tmp_path / (claimed.name + CLAIM_SUFFIX)
+    assert sidecar.exists(), "removing it would re-open the two-owner race"
+    assert sidecar.stat().st_size == 0, "the sidecar must carry no data"
+
+    again = claim_destination(target)  # must not be blocked by the leftover
+    try:
+        assert again == claimed
+    finally:
+        release_destination(again)
 
 
-def test_successful_transfer_leaves_no_reservation_artifacts(tmp_path):
+def test_repeated_transfers_do_not_accumulate_locks(tmp_path):
+    """Sidecars persist, but exactly one per destination name - they are reused,
+    never multiplied, and none of them stays locked."""
+    from megabasterd_cli.utils.filelock import FileLock
+
     for _ in range(3):
         claimed = claim_destination(tmp_path / "cycle.bin")
         claimed.write_text("done", encoding="utf-8")
         release_destination(claimed)
-    names = sorted(p.name for p in tmp_path.iterdir())
-    assert names == ["cycle.bin", "cycle (1).bin", "cycle (2).bin"] or all(
-        not n.endswith(CLAIM_SUFFIX) for n in names
-    ), names
+
+    sidecars = sorted(p for p in tmp_path.iterdir() if p.name.endswith(CLAIM_SUFFIX))
+    data_files = sorted(p.name for p in tmp_path.iterdir() if not p.name.endswith(CLAIM_SUFFIX))
+    assert data_files == ["cycle (1).bin", "cycle (2).bin", "cycle.bin"]
+    assert len(sidecars) == len(data_files), "one sidecar per destination, reused"
+    for sidecar in sidecars:  # every one must be free
+        lock = FileLock(sidecar)
+        lock.acquire(timeout=0)
+        lock.release()
+
+
+# ---------------------------------------------------------------------------
+# P0-05: the release/unlink inode race.
+#
+# `release_destination` used to unlink the sidecar. Between release() and
+# unlink() a second process could lock the still-open inode; the unlink then
+# freed the NAME, so a third process created a FRESH inode and locked that -
+# two live owners of one destination. The sidecar is now persistent.
+# ---------------------------------------------------------------------------
+
+
+def test_release_does_not_unlink_the_sidecar(tmp_path):
+    """Deleting the name is what allows a second inode to exist."""
+    target = tmp_path / "race.bin"
+    claimed = claim_destination(target)
+    sidecar = tmp_path / (claimed.name + CLAIM_SUFFIX)
+    assert sidecar.exists()
+    release_destination(claimed)
+    assert sidecar.exists(), "unlinking the sidecar re-opens the two-owner race"
+
+
+def test_three_party_sequence_cannot_produce_two_owners(tmp_path):
+    """A releases -> B takes the OLD inode -> A cleans up -> C claims.
+
+    Deterministic: every step is an explicit call, no sleeps. B and C must not
+    both hold a lock on the same destination.
+    """
+    from megabasterd_cli.utils.filelock import FileLock
+
+    target = tmp_path / "shared.bin"
+
+    # A claims and releases, exactly as a finished transfer does.
+    a_path = claim_destination(target)
+    sidecar = tmp_path / (a_path.name + CLAIM_SUFFIX)
+    release_destination(a_path)
+
+    # B grabs the lock on whatever inode currently answers to that name.
+    b_lock = FileLock(sidecar)
+    b_lock.acquire(timeout=5)
+    try:
+        # A's (now removed) cleanup step would have run here.
+        # C then tries to claim the same destination.
+        c_path = claim_destination(target)
+        try:
+            assert c_path != a_path, (
+                "C acquired the SAME destination while B still owns it: " f"{c_path} == {a_path}"
+            )
+        finally:
+            release_destination(c_path)
+    finally:
+        b_lock.release()
+
+    # With B gone the original destination is claimable again.
+    again = claim_destination(target)
+    try:
+        assert again == a_path
+    finally:
+        release_destination(again)
+
+
+def test_sidecar_is_reused_not_recreated(tmp_path):
+    """A stable pathname means every claimer contends on ONE inode."""
+    target = tmp_path / "stable.bin"
+    first = claim_destination(target)
+    sidecar = tmp_path / (first.name + CLAIM_SUFFIX)
+    inode_before = sidecar.stat().st_ino if _os.name != "nt" else sidecar.stat().st_ctime_ns
+    release_destination(first)
+
+    second = claim_destination(target)
+    try:
+        inode_after = sidecar.stat().st_ino if _os.name != "nt" else sidecar.stat().st_ctime_ns
+        assert second == first
+        assert inode_after == inode_before, "the sidecar was recreated, not reused"
+    finally:
+        release_destination(second)

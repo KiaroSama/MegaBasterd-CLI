@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import os
 import re
 import threading
@@ -165,16 +164,26 @@ def claim_destination(
 
 
 def release_destination(path: Path) -> None:
-    """Release a reservation made by `claim_destination`."""
+    """Release a reservation made by `claim_destination`.
+
+    The `.mbclaim` sidecar is deliberately NOT unlinked. Removing it looks
+    tidier but is unsound: between `release()` and `unlink()` another process
+    can acquire the lock on the still-open inode, and the unlink then frees the
+    NAME, so a third process creates a fresh inode and locks that instead -
+    leaving two live owners of one destination.
+
+    Keeping a stable pathname means every process contends on the same inode
+    forever. A leftover sidecar is inert: it is empty, holds no lock once its
+    owner releases or exits (the OS drops advisory locks on close), and the
+    next claim REUSES it instead of creating a new one. It is therefore safe to
+    leave behind, and safe for a user to delete when no transfer is running.
+    """
     with _claim_lock:
         key = os.path.normcase(str(path))
         _claimed_destinations.discard(key)
         lock = _claim_locks.pop(key, None)
     if lock is not None:
         lock.release()  # type: ignore[attr-defined]
-        # Best effort: another process may already hold the sidecar again.
-        with contextlib.suppress(OSError):
-            _claim_lock_path(Path(path)).unlink()
 
 
 def file_md5(path: Path, chunk: int = 65536) -> str:
