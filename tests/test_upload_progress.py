@@ -26,6 +26,10 @@ class _FakeResponse:
         self.status_code = 200
         self.content = body
 
+    def iter_content(self, chunk_size: int = 65536):
+        for start in range(0, len(self.content), chunk_size):
+            yield self.content[start : start + chunk_size]
+
     def close(self) -> None:
         pass
 
@@ -80,7 +84,7 @@ def test_resumed_upload_speed_excludes_resumed_bytes(tmp_path, monkeypatch):
         state.mark_chunk_done(chunk.index, b"\x00" * 16)
     save_state(state)
 
-    def fake_post(url, data=b"", timeout=None, proxies=None, headers=None):
+    def fake_post(url, data=b"", timeout=None, proxies=None, headers=None, stream=False):
         time.sleep(0.35)  # deterministic transfer duration for the rate check
         return _FakeResponse(b"")
 

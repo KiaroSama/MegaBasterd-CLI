@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Callable, cast
 
 import requests
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from ..proxy.selector import ProxySelector
 from ..utils.helpers import (
@@ -44,7 +44,13 @@ from .crypto import (
     str_to_a32,
     unpack_file_key,
 )
-from .errors import IntegrityError, QuotaError, TransferCancelled, TransferError
+from .errors import (
+    IntegrityError,
+    NonRetryableTransferError,
+    QuotaError,
+    TransferCancelled,
+    TransferError,
+)
 from .link_services import (
     get_megacrypter_download_url,
     get_megacrypter_info,
@@ -92,6 +98,23 @@ class DownloadResult:
 
 class CdnUrlExpired(TransferError):  # noqa: N818 - internal retry sentinel name
     """Raised when the CDN URL has expired and needs to be refreshed."""
+
+
+def _is_transient_chunk_failure(exc: BaseException) -> bool:
+    """Retry only faults that a later attempt could plausibly survive.
+
+    The predicate used to be `retry_if_exception_type(..., TransferError, ...)`,
+    which matches the BASE class - so every deterministic refusal that happens
+    to subclass it was replayed eight times with exponential backoff: a proxy
+    policy refusal, a cancellation, a range the server will ignore again.
+    `NonRetryableTransferError` is checked first precisely because it is a
+    subclass of `TransferError` and would otherwise match.
+    """
+    if isinstance(exc, NonRetryableTransferError):
+        return False
+    return isinstance(
+        exc, (requests.ConnectionError, requests.Timeout, TransferError, CdnUrlExpired)
+    )
 
 
 class MegaDownloader:
@@ -696,9 +719,7 @@ class MegaDownloader:
         return all(state.get_chunk_mac(index) is not None for index in completed)
 
     @retry(
-        retry=retry_if_exception_type(
-            (requests.ConnectionError, requests.Timeout, TransferError, CdnUrlExpired)
-        ),
+        retry=retry_if_exception(_is_transient_chunk_failure),
         stop=stop_after_attempt(8),
         wait=wait_exponential(multiplier=2, min=2, max=30),
         reraise=True,
@@ -766,7 +787,7 @@ class MegaDownloader:
                         self.proxy_pool.report_failure(picked_proxy)
                     # A protocol violation, not a transient fault: retrying the
                     # same request against the same server would repeat it.
-                    raise TransferError(
+                    raise NonRetryableTransferError(
                         message=f"Upstream ignored the requested range for chunk {chunk.index}: {exc}"
                     ) from exc
 

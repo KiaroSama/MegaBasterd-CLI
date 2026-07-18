@@ -17,15 +17,18 @@ Enforced invariant:
 
 from __future__ import annotations
 
-from ..core.errors import TransferError
+from ..core.errors import NonRetryableTransferError
 
 
-class ProxyRequiredError(TransferError):
+class ProxyRequiredError(NonRetryableTransferError):
     """force_smart_proxy is on but no usable proxy is available.
 
     A TransferError (and therefore a MegaError) so every existing
     command-level handler already reports it as a normal transfer failure —
     non-zero exit with a sanitized message, never a traceback.
+
+    Non-retryable: the pool's state cannot change because we asked again, so
+    replaying this decision only burns the retry budget in backoff.
     """
 
 

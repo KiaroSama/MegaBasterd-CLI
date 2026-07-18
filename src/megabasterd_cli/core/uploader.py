@@ -26,9 +26,9 @@ from pathlib import Path
 from typing import Callable
 
 import requests
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
-from ..proxy.selector import ProxySelector
+from ..proxy.selector import ProxyRequiredError, ProxySelector
 from ..utils.helpers import sanitize_filename
 from ..utils.speed import RollingSpeedMeter, make_limiter
 from .chunks import Chunk, chunk_mac, combine_chunk_macs, condense_mac, iter_chunks
@@ -41,12 +41,17 @@ from .crypto import (
     make_ctr_cipher,
     pack_file_key,
 )
-from .errors import TransferError
+from .errors import TransferCancelled, TransferError
 from .state import TransferState, clear_state, load_state, save_state, snapshot_state
 
 log = logging.getLogger(__name__)
 
 UPLOAD_URL_EXPIRY_STATUS = {403, 404, 410, 509}
+
+# An upload endpoint answers a chunk POST with either an empty body or a small
+# (~27 byte) completion token. Reading it unbounded would let a broken or
+# hostile endpoint stream arbitrary data straight into memory.
+MAX_UPLOAD_RESPONSE_BYTES = 4096
 
 # Versioned identity of the local source file stored in upload resume state.
 # v2 uses a FULL streaming SHA-256 of the content plus path/size/mtime_ns and
@@ -74,6 +79,58 @@ class UploadResult:
     size: int
     elapsed_seconds: float
     public_link: str | None = None
+
+
+def walk_upload_entries(root: Path) -> tuple[list[Path], int]:
+    """Sorted ``rglob("*")`` of `root` with every symlink skipped.
+
+    A symlinked FILE passes `is_file()` and would be uploaded, publishing
+    whatever it points at (`notes.lnk -> ~/.ssh/id_rsa`); a symlinked DIRECTORY
+    would be recreated as an empty remote folder, silently producing an
+    incomplete tree. Anything below a skipped symlinked directory is skipped
+    too. Returns the kept entries and how many were skipped, so callers can
+    tell the user the upload is deliberately incomplete.
+    """
+    kept: list[Path] = []
+    skipped_dirs: set[Path] = set()
+    skipped = 0
+    # Sorting puts a parent directly before its children, so a symlinked
+    # directory is always recorded before the entries underneath it.
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink():
+            skipped_dirs.add(path)
+            skipped += 1
+            continue
+        if skipped_dirs and any(parent in skipped_dirs for parent in path.parents):
+            skipped += 1
+            continue
+        kept.append(path)
+    return kept, skipped
+
+
+def _read_bounded_body(resp: requests.Response, limit: int = MAX_UPLOAD_RESPONSE_BYTES) -> bytes:
+    """Read at most `limit` bytes from a streamed upload response body."""
+    body = b""
+    for block in resp.iter_content(chunk_size=limit + 1):
+        body += block
+        if len(body) > limit:
+            raise TransferError(
+                message=f"Upload endpoint returned more than {limit} bytes instead of a token"
+            )
+    return body
+
+
+def _is_retryable_upload_error(exc: BaseException) -> bool:
+    """Retry transport hiccups only.
+
+    `TransferError` is also the base of deterministic failures — a missing
+    proxy under force mode (`ProxyRequiredError`) or a deliberate cancellation
+    — and retrying those only burns five exponential backoffs before returning
+    the same answer.
+    """
+    if isinstance(exc, (ProxyRequiredError, TransferCancelled)):
+        return False
+    return isinstance(exc, (requests.ConnectionError, requests.Timeout, TransferError))
 
 
 class UploadUrlExpiredError(Exception):
@@ -494,8 +551,21 @@ class MegaUploader:
         )
         self.client.invalidate_cache()
 
-        nodes = result.get("f", []) if isinstance(result, dict) else []
-        return nodes[0]["h"] if nodes else completion_token.hex()
+        # Never fabricate a handle out of the completion token: the caller
+        # would clear the resume state and report success for a node that may
+        # never have been created. Raising keeps the state on disk so the
+        # upload can be resumed instead of silently lost.
+        nodes = result.get("f") if isinstance(result, dict) else None
+        node = nodes[0] if isinstance(nodes, list) and nodes else None
+        handle = node.get("h") if isinstance(node, dict) else None
+        if not isinstance(handle, str) or not handle:
+            raise TransferError(
+                message=(
+                    "Upload completion returned no usable node handle for "
+                    f"{upload_name}; the resume state was kept so the upload can be retried."
+                )
+            )
+        return handle
 
     def _upload_empty_file(
         self,
@@ -530,13 +600,17 @@ class MegaUploader:
                     timeout=self.timeout,
                     proxies=request_proxies,
                     headers={"User-Agent": self.user_agent},
+                    stream=True,
                 )
             except (requests.ConnectionError, requests.Timeout):
                 if picked_proxy and self.proxy_pool is not None:
                     self.proxy_pool.report_failure(picked_proxy)
                 raise
-            status, body = resp.status_code, resp.content
-            resp.close()
+            try:
+                status = resp.status_code
+                body = _read_bounded_body(resp) if status == 200 else b""
+            finally:
+                resp.close()
             if status in UPLOAD_URL_EXPIRY_STATUS and attempt == 0:
                 upload_info = self.api.request_upload(0)
                 upload_url = upload_info["p"]
@@ -687,8 +761,16 @@ class MegaUploader:
             raise FileNotFoundError(f"Not a directory: {source_dir}")
 
         # Complete file manifest first: total files and bytes are known before
-        # any upload starts.
-        entries = sorted(source_dir.rglob("*"))
+        # any upload starts. Symlinks are excluded, so the manifest is the
+        # truth about what will actually be uploaded.
+        entries, skipped_links = walk_upload_entries(source_dir)
+        if skipped_links:
+            log.warning(
+                "Skipped %d symlink(s) under %s; symlinked files are never uploaded, "
+                "so the remote tree is deliberately incomplete.",
+                skipped_links,
+                source_dir,
+            )
         if on_manifest:
             on_manifest([(p, p.stat().st_size) for p in entries if p.is_file()])
 
@@ -747,7 +829,7 @@ class MegaUploader:
         return results
 
     @retry(
-        retry=retry_if_exception_type((requests.ConnectionError, requests.Timeout, TransferError)),
+        retry=retry_if_exception(_is_retryable_upload_error),
         stop=stop_after_attempt(5),
         wait=wait_exponential(multiplier=2, min=2, max=30),
         reraise=True,
@@ -794,6 +876,7 @@ class MegaUploader:
                 timeout=self.timeout,
                 proxies=request_proxies,
                 headers={"User-Agent": self.user_agent},
+                stream=True,
             )
         except (requests.ConnectionError, requests.Timeout):
             if picked_proxy and self.proxy_pool is not None:
@@ -816,8 +899,10 @@ class MegaUploader:
         # we see a non-empty body, regardless of which worker finishes
         # last; otherwise a race between the offset-final chunk and any
         # earlier chunk causes the token to be dropped.
-        body = resp.content
-        resp.close()
+        try:
+            body = _read_bounded_body(resp)
+        finally:
+            resp.close()
         with self._lock:
             state.mark_chunk_done(chunk.index, mac)
             self._bytes_done += chunk.size

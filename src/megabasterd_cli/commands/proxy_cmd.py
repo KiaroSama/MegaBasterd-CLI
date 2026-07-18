@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import tempfile
+import time
 from pathlib import Path
 
 import click
@@ -10,10 +14,19 @@ from rich.table import Table
 
 from ..proxy.runtime import _load_persisted_pool, _pool_path
 from ..proxy.smart_proxy import SmartProxyPool
-from ..ui.prompts import confirm, print_error, print_info, print_success
+from ..ui.prompts import confirm, print_error, print_info, print_success, print_warn
 from ..ui.theme import make_console
+from ..utils.filelock import FileLock
+from ..utils.redaction import redact_text
 
 _console = make_console()
+
+# Matches the other persisted stores (config, queue, state): long enough for a
+# concurrent `mb proxy add` to finish, short enough to fail with a clear error.
+_POOL_LOCK_TIMEOUT_SECONDS = 10.0
+# Cap on a fetched proxy list. The URL is user-supplied and may be hostile, so
+# the body is streamed and cut off instead of being read into memory whole.
+MAX_FETCH_BYTES = 4 * 1024 * 1024
 
 
 def _load_pool() -> SmartProxyPool:
@@ -25,11 +38,54 @@ def _load_pool() -> SmartProxyPool:
 
 
 def _save_pool(pool: SmartProxyPool) -> None:
+    """Write the pool atomically under the cross-process lock.
+
+    Same contract as accounts/config/state/queue: serialize first, write to a
+    temp file in the destination directory, then `os.replace`. A plain
+    `open(path, "w")` truncated the live file before writing, so a crash or a
+    second process mid-write left a half-written (and now unloadable) pool.
+    """
     path = _pool_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = {"proxies": [e.url for e in pool.list()]}
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    payload = json.dumps({"proxies": [e.url for e in pool.list()]}, indent=2)
+    lock = FileLock(
+        path.parent / (path.name + ".lock"),
+        message=(
+            f"Could not lock the proxy pool within {_POOL_LOCK_TIMEOUT_SECONDS:.0f}s; "
+            "another proxy command is holding it. Retry after it finishes."
+        ),
+    )
+    lock.acquire(timeout=_POOL_LOCK_TIMEOUT_SECONDS)
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=path.name + ".",
+            suffix=".tmp",
+            delete=False,
+        ) as tf:
+            tf.write(payload)
+            tf.flush()
+            os.fsync(tf.fileno())
+            tmp_path = tf.name
+        try:
+            for attempt in range(5):
+                try:
+                    os.replace(tmp_path, path)
+                    break
+                except PermissionError:
+                    # Windows: a transient lock from AV or another replace.
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
+        except OSError:
+            # Never leave the temp file behind when the swap did not happen.
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise
+    finally:
+        lock.release()
 
 
 @click.group("proxy", short_help="Manage the Smart Proxy pool.")
@@ -71,7 +127,9 @@ def proxy_list(ctx: click.Context, config_urls: bool) -> None:
     for e in entries:
         status = "OK" if e.is_available else "Cooldown"
         source = "persisted" if e.url in persisted else "config"
-        table.add_row(e.url, str(e.successes), str(e.failures), status, source)
+        # A proxy URL routinely carries `user:pass@`; the table is printed to a
+        # terminal that gets screenshotted and pasted into bug reports.
+        table.add_row(redact_text(e.url), str(e.successes), str(e.failures), status, source)
     _console.print(table)
 
 
@@ -183,10 +241,40 @@ def proxy_serve(ctx: click.Context, port: int | None, password: str | None, any_
     try:
         import threading
 
-        threading.Event().wait()
+        # A bare `Event().wait()` is not interruptible by Ctrl-C on Windows,
+        # so the wait is polled: the KeyboardInterrupt is delivered between
+        # timeouts and shutdown actually runs.
+        forever = threading.Event()
+        while not forever.wait(0.5):
+            pass
     except KeyboardInterrupt:
-        proxy.stop()
         print_info("Stopped.")
+    finally:
+        # Any exit path must release the listener and the accepted sockets.
+        proxy.stop()
+
+
+def _read_capped(resp) -> str:
+    """Read at most MAX_FETCH_BYTES of a streamed response body.
+
+    `resp.text` buffers the whole body, so a proxy-list URL — which the user
+    may have copied from anywhere — could stream gigabytes into memory. The
+    partial final line is dropped so truncation cannot invent a mangled entry.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in resp.iter_content(chunk_size=65536):
+        if not chunk:
+            continue
+        chunks.append(chunk)
+        total += len(chunk)
+        if total >= MAX_FETCH_BYTES:
+            break
+    body = b"".join(chunks)
+    if total >= MAX_FETCH_BYTES:
+        print_warn(f"Proxy list truncated at {MAX_FETCH_BYTES} bytes.")
+        body = body.rpartition(b"\n")[0]
+    return body.decode("utf-8", errors="replace")
 
 
 @proxy_cmd.command("fetch", short_help="Auto-fetch free proxies from a public list.")
@@ -229,15 +317,19 @@ def proxy_fetch(
     for url in sources:
         try:
             request_proxies, _picked = selector.select()
-            resp = requests.get(url, timeout=timeout, proxies=request_proxies)
-            resp.raise_for_status()
+            resp = requests.get(url, timeout=timeout, proxies=request_proxies, stream=True)
+            try:
+                resp.raise_for_status()
+                body = _read_capped(resp)
+            finally:
+                resp.close()
         except ProxyRequiredError as exc:
             print_error(str(exc))
             ctx.exit(1)
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{url}: {exc}")
             continue
-        for raw in resp.text.splitlines():
+        for raw in body.splitlines():
             line = raw.strip()
             if not line:
                 continue
