@@ -68,7 +68,12 @@ def preserve_corrupt_file(path: Path, data: bytes) -> Path | None:
         suffix = "" if attempt == 0 else f".{attempt}"
         backup = path.parent / f"{path.name}.corrupt.{stamp}{suffix}-{digest}.json"
         try:
-            fd = os.open(str(backup), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            # 0o600: a corrupt config or queue can still contain secrets
+            # (connect_proxy_password, sealed enc_password blobs), so the
+            # preserved copy must not be readable by other users. Matches how
+            # the queue key file is created. Ignored on Windows, which has no
+            # POSIX mode bits.
+            fd = os.open(str(backup), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except FileExistsError:
             # Same content, same second, another process: adopt its file.
             if backup.exists() and backup.read_bytes() == data:
@@ -87,6 +92,10 @@ def preserve_corrupt_file(path: Path, data: bytes) -> Path | None:
             with contextlib.suppress(OSError):
                 backup.unlink()
             return None
+        # A restrictive umask already gave us 0o600; this covers a permissive
+        # one without ever widening the mode.
+        with contextlib.suppress(OSError, AttributeError):
+            os.chmod(backup, 0o600)
         log.warning("Preserved corrupt file as %s", backup.name)
         return backup
     log.warning("Could not find a free backup name for %s", path.name)
