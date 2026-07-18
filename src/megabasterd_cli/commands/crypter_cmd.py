@@ -7,7 +7,8 @@ from pathlib import Path
 import click
 
 from ..core.crypter import CrypterError, decrypt_file, encrypt_file
-from ..core.links import LinkType, decrypt_dlc_container, parse_link, resolve_elc_links
+from ..core.link_services import decrypt_dlc_container, resolve_elc_links
+from ..core.links import LinkType, parse_link
 from ..proxy.selector import ProxySelector
 from ..ui.prompts import ask_password, print_error, print_info, print_success
 from ..utils.helpers import format_bytes
@@ -179,7 +180,7 @@ def crypter_make_link(
 @click.pass_context
 def crypter_resolve(ctx: click.Context, mc_url: str, password: str | None) -> None:
     """Print the MEGA URL hidden behind an `mc://` / MegaCrypter link."""
-    from ..core.links import resolve_megacrypter_link
+    from ..core.link_services import resolve_megacrypter_link
 
     cfg = ctx.obj["config"]
     try:

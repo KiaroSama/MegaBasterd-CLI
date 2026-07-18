@@ -7,9 +7,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import megabasterd_cli.utils.hooks as hooks_module
-from megabasterd_cli.commands.upload_cmd import finalize_upload_success
 from megabasterd_cli.core.errors import MegaError
 from megabasterd_cli.core.uploader import UploadResult
+from megabasterd_cli.upload_support import finalize_upload_success
 
 
 class _FakeClient:
@@ -44,11 +44,11 @@ def test_finalize_writes_log_runs_hook_and_shares(tmp_path, monkeypatch):
         "run_post_transfer_command",
         lambda command, path: hook_calls.append((command, path)),
     )
-    # The command module imported the symbol directly; patch there too.
-    import megabasterd_cli.commands.upload_cmd as upload_cmd_module
+    # `upload_support` imported the symbol directly; patch it there too.
+    import megabasterd_cli.upload_support as upload_support_module
 
     monkeypatch.setattr(
-        upload_cmd_module,
+        upload_support_module,
         "run_post_transfer_command",
         lambda command, path: hook_calls.append((command, path)),
     )

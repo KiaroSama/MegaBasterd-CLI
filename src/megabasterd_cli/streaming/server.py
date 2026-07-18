@@ -137,14 +137,12 @@ class _StreamSource:
         selector=None,  # ProxySelector | None
     ):
         from ..core.crypto import a32_to_bytes, aes_key_wrap_decrypt, bytes_to_a32
-        from ..core.links import (
-            LinkType,
+        from ..core.link_services import (
             get_megacrypter_download_url,
             get_megacrypter_info,
-            resolve_encrypted_container_link,
             resolve_megacrypter_link,
-            resolve_password_link,
         )
+        from ..core.links import LinkType, resolve_encrypted_container_link, resolve_password_link
 
         self._cdn_url_lock = threading.Lock()
         self._resolver: Callable[[], str] | None = None

@@ -45,15 +45,12 @@ from .crypto import (
     unpack_file_key,
 )
 from .errors import IntegrityError, QuotaError, TransferError
-from .links import (
-    LinkType,
+from .link_services import (
     get_megacrypter_download_url,
     get_megacrypter_info,
-    parse_link,
-    resolve_encrypted_container_link,
     resolve_megacrypter_link,
-    resolve_password_link,
 )
+from .links import LinkType, parse_link, resolve_encrypted_container_link, resolve_password_link
 from .state import (
     TransferState,
     clear_state,

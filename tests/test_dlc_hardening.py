@@ -10,8 +10,8 @@ import contextlib
 
 import pytest
 
-from megabasterd_cli.core import links as links_mod
-from megabasterd_cli.core.links import (
+from megabasterd_cli.core import link_services as links_mod
+from megabasterd_cli.core.link_services import (
     DLC_SERVICE_URL,
     MAX_DLC_REDIRECTS,
     MAX_DLC_RESPONSE_BYTES,

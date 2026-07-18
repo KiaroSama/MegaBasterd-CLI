@@ -197,9 +197,9 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
     from ..core.uploader import MegaUploader
     from ..ui.prompts import ask, ask_password
     from ..ui.transfer_progress import TransferProgress, redact_link
+    from ..upload_support import finalize_upload_success
     from ..utils.redaction import redact_text
     from ..utils.speed import make_limiter
-    from .upload_cmd import finalize_upload_success
 
     cfg = ctx.obj["config"]
     quiet = bool(ctx.obj.get("quiet"))
