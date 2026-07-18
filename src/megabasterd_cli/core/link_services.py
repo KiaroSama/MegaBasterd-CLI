@@ -112,6 +112,9 @@ def resolve_elc_links(
     selector = _require_selector(selector, "resolve_elc_links")
 
     payload = decode_elc_payload(parsed)
+    # The service URL comes from the untrusted link payload: validate it before
+    # any credential is looked up, let alone sent.
+    validate_safe_target(payload.service_url, what="ELC service")
     host = urlparse(payload.service_url).netloc.lower()
     account = (accounts or {}).get(host) or (accounts or {}).get(host.split(":")[0]) or {}
     user = user or account.get("user")
@@ -196,6 +199,43 @@ def _normalize_host(host: str) -> str:
         return host.encode("idna").decode("ascii")
     except (UnicodeError, ValueError):
         return host
+
+
+class UnsafeTargetError(ValueError):
+    """A link payload named a destination we refuse to contact."""
+
+
+def validate_safe_target(url: str, *, what: str) -> None:
+    """Reject any destination an untrusted link payload must not reach.
+
+    ELC and MegaCrypter both take their service URL from the LINK ITSELF, so a
+    crafted link could previously point them at `http://127.0.0.1`, a cloud
+    metadata address, or an RFC1918 host - and the resolver would happily POST
+    the user's ELC credentials or link password there.
+
+    Enforces: HTTPS only; no embedded userinfo; a real host; and, for literal
+    IPs, globally routable only (blocks loopback, private, link-local -
+    including 169.254.169.254 - reserved, multicast and unspecified, for both
+    IPv4 and IPv6).
+
+    Hostname-based targets still resolve through DNS at connect time; this is
+    the same limitation the DLC allowlist works around by pinning an approved
+    origin, and is documented rather than silently assumed away.
+    """
+    parts = urlparse(url or "")
+    if parts.scheme != "https":
+        raise UnsafeTargetError(f"Refusing to contact a non-HTTPS {what} endpoint")
+    if parts.username or parts.password:
+        raise UnsafeTargetError(f"Refusing {what} endpoint with embedded credentials")
+    raw_host = parts.hostname or ""
+    if not _normalize_host(raw_host):
+        raise UnsafeTargetError(f"Refusing {what} endpoint without a host")
+    try:
+        ip = ipaddress.ip_address(raw_host)
+    except ValueError:
+        ip = None
+    if ip is not None and not ip.is_global:
+        raise UnsafeTargetError(f"Refusing {what} endpoint at a non-global IP address")
 
 
 def _dlc_origin(url: str) -> tuple[str, int]:
@@ -365,11 +405,15 @@ def _post_megacrypter(
     import requests
 
     selector = _require_selector(selector, "_post_megacrypter")
+    # The MegaCrypter host comes from the link itself, so a crafted mc:// link
+    # must not aim a password-bearing POST at loopback or a metadata service.
+    api_url = _megacrypter_api_url(parsed)
+    validate_safe_target(api_url, what="MegaCrypter server")
 
     request_proxies, picked = selector.select()
 
     response = requests.post(
-        _megacrypter_api_url(parsed),
+        api_url,
         json=payload,
         timeout=timeout,
         proxies=request_proxies,
@@ -567,10 +611,11 @@ def resolve_megacrypter_link(
             payload["pass"] = password
         try:
             body = _post_megacrypter(parsed, payload, timeout=timeout, selector=selector)
-        except ProxyRequiredError:
-            # A force-mode refusal is a policy decision, not a server error:
-            # swallowing it here would let the caller fall back to another
-            # (possibly unproxied) resolution path.
+        except (ProxyRequiredError, UnsafeTargetError):
+            # Policy refusals, not server errors: swallowing them here would let
+            # the caller fall back to another (possibly unproxied, or unsafe)
+            # resolution path, and would report "server exposed no link" for
+            # what is really a refusal to contact that host at all.
             raise
         except Exception as exc:  # noqa: BLE001
             last_body = f"{type(exc).__name__}: {exc}"
