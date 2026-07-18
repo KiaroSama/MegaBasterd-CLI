@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import threading
 from pathlib import Path
 
 from .storage import Account, AccountStorage, AccountStore, CredentialVault
@@ -64,6 +65,9 @@ class AccountManager:
         self.storage = AccountStorage(store_path)
         self.store: AccountStore = self.storage.load()
         self._vault: CredentialVault | None = None
+        # Guards the store during concurrent quota refreshes triggered by
+        # parallel --auto-account uploads.
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Vault control
@@ -130,13 +134,16 @@ class AccountManager:
         self.storage.save(self.store)
 
     def update_quota(self, email: str, used: int, total: int) -> None:
-        for a in self.store.accounts:
-            if a.email == email:
-                a.quota_used = used
-                a.quota_total = total
-                a.last_used_iso = dt.datetime.now(dt.timezone.utc).isoformat()
-                break
-        self.storage.save(self.store)
+        # Thread-safe: parallel --auto-account uploads refresh quota
+        # concurrently, mutating the shared store and persisting it.
+        with self._lock:
+            for a in self.store.accounts:
+                if a.email == email:
+                    a.quota_used = used
+                    a.quota_total = total
+                    a.last_used_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+                    break
+            self.storage.save(self.store)
 
     def pick_account_with_space(self, required_bytes: int) -> Account | None:
         """Find an account with enough free quota for a file of this size."""

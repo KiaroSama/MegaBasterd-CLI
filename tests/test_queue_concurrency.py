@@ -20,8 +20,8 @@ from megabasterd_cli.queue.manager import (
     QueueItem,
     QueueLockError,
     QueueManager,
-    _QueueFileLock,
 )
+from megabasterd_cli.utils.filelock import FileLock
 
 
 def _mgr(tmp_path, **kwargs) -> QueueManager:
@@ -199,7 +199,7 @@ def test_secrets_survive_claim_heartbeat_failure_retry_reload(tmp_path):
 def test_lock_timeout_raises_clear_domain_error(tmp_path):
     q = _mgr(tmp_path, lock_timeout=0.3)
     _add(q)
-    blocker = _QueueFileLock(tmp_path / "queue.json.lock")
+    blocker = FileLock(tmp_path / "queue.json.lock")
     blocker.acquire(timeout=5)
     try:
         with pytest.raises(QueueLockError, match="Could not lock the transfer queue"):

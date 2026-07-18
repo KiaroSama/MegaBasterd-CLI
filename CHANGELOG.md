@@ -3,6 +3,23 @@
 ## Unreleased
 
 ### Added
+- `mb config unset <key>` clears a nullable setting to JSON null; `config set <key> null|none` also stores null while any other string (including a URL or the literal `null-value`) is kept verbatim.
+- `mb queue reset` recovers from a corrupt queue by writing a fresh empty one (the corrupt original is preserved as `queue.json.corrupt.<timestamp>.json`).
+- Machine-mode failure records now carry a stable `error_code` plus sanitized identifying fields (`name`, `path`, redacted `source`, `account`).
+
+### Fixed
+- Machine (`--json`) output is now thread-safe: each JSONL record is sanitized and written as one atomic line under a lock, so parallel `-P N` download/upload output can never interleave into corrupt JSON. Every emitted value is passed through a central recursive secret sanitizer (MEGA link keys, SIDs, passwords, vault passphrases, MFA codes, ELC/API keys, proxy passwords, and secret query params — including inside `str(exc)` and nested structures); intentional `share_link` output keeps its public key.
+- `--auto-account` now runs truly in parallel for flat files with `-P N` (previously it silently downgraded to sequential): each transfer gets its own isolated `MegaAPIClient`/HTTP session, accounts log in once (no repeated MFA), the free-space ledger and account store are thread-safe, and quota-error re-planning is bounded per account.
+- The uploader resets all per-file state (`_stop_event`, byte/chunk counters, completion token, speed meter) at the start of every `upload_file`, so a failed or canceled file under `upload_directory(keep_going=True)` no longer poisons the next file (which previously aborted with "canceled while hashing").
+- `config show`/`get` redact `connect_proxy_password` and the nested `elc_accounts` credentials; `config set` never echoes the value; `config get`/`set`/`unset` exit non-zero on unknown keys, invalid values, and deprecated keys.
+- `ConfigStore` writes are now concurrent-safe (shared cross-process file lock, reload-before-write, unique fsync'd temp file), sharing the lock utility with `QueueManager`; the account vault save also uses a unique fsync'd temp file so parallel `--auto-account` quota refreshes cannot collide.
+- A malformed or invalid-schema `queue.json` (non-list root, non-object entries, missing required fields, unknown type/status, wrong field types) is treated as corruption: the original is preserved byte-for-byte and backed up once, mutations are blocked with a non-zero exit and a clear message, and no queue key is created while integrity is unknown.
+- API/HTTP sessions are closed on every failed-login path in normal and queued uploads (no leaked sessions/descriptors), and successful cached clients close exactly once.
+
+### Changed
+- An unknown job type/status in the queue file is now a schema violation (corruption) rather than a silently-run item.
+
+### Added (progress, resume, queue, config — earlier audit rounds)
 - Selective folder-link downloads (parity with the original MegaBasterd folder-link dialog): repeatable `--include`/`--exclude` glob filters over folder-relative paths, plus an interactive `--select` picker (`all` / `none` / `1,3-5`) on the `download` command.
 - One unified EVdlc-style progress system (`TransferProgress` controller + shared renderer) for every transfer mode: single/parallel/file-in-folder downloads, folder downloads, single/parallel/directory uploads, and queue runs. Single transfers render as a one-row group of the same view; huge folders paint a bounded set of rows without losing totals; quiet mode (`-q`) skips the live view.
 - Independent wall-clock `Elapsed` in every transfer mode: owned by the progress view's monotonic clock, refreshed by the renderer's own ticker even while producers are silent (stalls, retries, quota waits, finalization), frozen exactly at terminal state, and shown even on narrow terminals.

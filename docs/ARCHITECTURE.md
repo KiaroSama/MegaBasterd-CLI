@@ -137,16 +137,57 @@ start. The `SmartProxyPool` is the only intentionally shared object (every
 method takes its internal lock). The aggregate `TokenBucket` limiter is also
 shared by design and is thread-safe.
 
-## Queue Concurrency
+## Shared File Lock
 
-`QueueManager` serializes every read-modify-write behind an instance mutex
-plus a cross-platform file lock (`msvcrt`/`fcntl`, bounded timeout →
-`QueueLockError`). Mutations reload the newest queue from disk before
-writing, so a stale snapshot can never clobber newer statuses and a
-heartbeat can never revert a terminal state. `claim_next(run_id)` performs
-recovery + selection + leasing atomically under one lock acquisition, which
-makes concurrent `queue run` threads/instances/processes safe. Saves write a
-unique fsync'd temp file and `os.replace` it over `queue.json`.
+`utils/filelock.py` provides one bounded, cross-platform advisory lock
+(`msvcrt.locking` on Windows, `fcntl.flock` on POSIX) used by BOTH
+`QueueManager` and `ConfigStore`, so the locking code is written and tested
+once. Each store wraps it with an instance re-entrant mutex and translates a
+timeout into its own domain error (`QueueLockError` / `ConfigLockError`).
+
+## Queue Concurrency and Integrity
+
+`QueueManager` serializes every read-modify-write behind the instance mutex
+plus the shared file lock. Mutations reload the newest queue from disk before
+writing, so a stale snapshot can never clobber newer statuses and a heartbeat
+can never revert a terminal state. `claim_next(run_id)` performs recovery +
+selection + leasing atomically under one lock acquisition, which makes
+concurrent `queue run` threads/instances/processes safe. Saves write a unique
+fsync'd temp file and `os.replace` it over `queue.json`. On load, the file is
+schema-validated (list root; each entry a dict with typed required fields and
+known type/status); any violation is corruption — the original is preserved,
+backed up once as `queue.json.corrupt.<ts>.json`, mutations are blocked
+(`QueueCorruptionError`, non-zero CLI exit), and no queue key is created.
+
+## Config Concurrency and Secrets
+
+`ConfigStore` mirrors the queue contract: `set`/`unset`/`migrate` reload the
+newest config under the shared lock, apply only the requested change, and
+persist through a unique fsync'd temp file, so the CLI and EVdlc never lose
+each other's updates. `config show`/`get` redact secret values via
+`config.display_value` (which reuses the machine-output sanitizer), and
+`config set` never echoes a value. Nullable keys accept `null`/`none` to
+store JSON null; `config unset` clears them.
+
+## Machine Output and Redaction
+
+`utils/redaction.py` is the single secret-redaction authority: `sanitize()`
+recursively walks records (secret-named fields wholesale, embedded link keys
+and secret query params in every string, `share_link` kept). `MachineOutput`
+sanitizes each `--json` record and writes it as one atomic
+`dumps(...) + "\n"` under a lock, so parallel workers never interleave partial
+lines. `transfer_progress.redact_link` and `config.display_value` delegate to
+the same module.
+
+## Parallel `--auto-account`
+
+Flat-file auto-account uploads run concurrently under `-P N`: each file
+reserves bytes from the thread-safe `QuotaLedger` immediately before it
+starts, gets its own isolated worker client (via `MegaAPIClient.clone`/session
+reuse — one login per account, no repeated MFA), and closes it when done. The
+account store's `update_quota` and vault save are lock-protected so
+concurrent quota refreshes cannot corrupt the vault. `--keep-structure` trees
+remain one-account and sequential.
 
 ## Upload Resume Identity
 

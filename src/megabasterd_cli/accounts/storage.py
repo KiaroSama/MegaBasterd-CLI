@@ -111,9 +111,22 @@ class AccountStorage:
             "default_email": store.default_email,
             "accounts": [asdict(a) for a in store.accounts],
         }
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
+        # Unique temp file per save so concurrent writers (e.g. parallel
+        # --auto-account quota refreshes) never collide on one fixed name.
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=self.path.parent,
+            prefix=self.path.name + ".",
+            suffix=".tmp",
+            delete=False,
+        ) as f:
             json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+            tmp = f.name
         os.replace(tmp, self.path)
         # Permission hardening on POSIX
         with contextlib.suppress(OSError, AttributeError):

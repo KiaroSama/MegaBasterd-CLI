@@ -57,6 +57,8 @@ jobs:
           src/megabasterd_cli/utils/speed.py
           src/megabasterd_cli/utils/hooks.py
           src/megabasterd_cli/utils/selection.py
+          src/megabasterd_cli/utils/filelock.py
+          src/megabasterd_cli/utils/redaction.py
 
       - name: Type check with mypy (advisory, full tree)
         run: mypy src/megabasterd_cli --ignore-missing-imports
