@@ -210,6 +210,90 @@ def test_mutation_during_upload_detected_before_finalization(upload_env, monkeyp
     assert load_state(MegaUploader._upload_state_destination(source)) is None
 
 
+def test_change_anywhere_in_file_is_detected(tmp_path):
+    """MF7: the full streaming hash catches changes at ANY offset, including
+    regions the old sampled fingerprint never read, with size and mtime
+    preserved."""
+    size = 1024 * 1024
+    source = _make_source(tmp_path, size)
+    ident = MegaUploader._source_identity(source)
+    st = source.stat()
+    mutated = bytearray(source.read_bytes())
+    mutated[300 * 1024] ^= 0xFF  # single byte, mid-file, outside any sample window
+    source.write_bytes(bytes(mutated))
+    os.utime(source, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert not MegaUploader._identities_match(ident, MegaUploader._source_identity(source))
+
+
+def test_full_hash_streams_in_bounded_blocks(tmp_path, monkeypatch):
+    import builtins
+    import hashlib
+
+    data = b"\xab" * (5 * 1024 * 1024)
+    source = tmp_path / "big.bin"
+    source.write_bytes(data)
+    max_read = 0
+    real_open = builtins.open
+
+    class SpyFile:
+        def __init__(self, f):
+            self._f = f
+
+        def read(self, n=-1):
+            nonlocal max_read
+            assert n > 0, "the hash must stream fixed blocks, never the whole file"
+            max_read = max(max_read, n)
+            return self._f.read(n)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._f.close()
+
+    def spy_open(path, mode="r", *args, **kwargs):
+        f = real_open(path, mode, *args, **kwargs)
+        if "b" in str(mode) and str(path) == str(source):
+            return SpyFile(f)
+        return f
+
+    monkeypatch.setattr(builtins, "open", spy_open)
+    digest = MegaUploader._file_sha256(source, len(data))
+    assert digest == hashlib.sha256(data).hexdigest()
+    assert 0 < max_read <= 4 * 1024 * 1024
+
+
+def test_hashing_is_responsive_to_cancellation(tmp_path):
+    import threading
+
+    source = _make_source(tmp_path, 4 * 1024 * 1024)
+    stop = threading.Event()
+    stop.set()
+    with pytest.raises(TransferError, match="canceled while hashing"):
+        MegaUploader._file_sha256(source, 4 * 1024 * 1024, stop)
+
+
+def test_v1_sampled_identity_is_never_treated_as_strict(upload_env):
+    """A legacy sampled (v1) identity may match a changed file; it must be
+    discarded and the upload restarted from scratch."""
+    file_size = 256 * 1024
+    source = _make_source(upload_env.tmp_path, file_size)
+    chunks = list(iter_chunks(file_size))
+    st = source.stat()
+    legacy_identity = {
+        "v": 1,
+        "path": str(source.resolve()),
+        "size": file_size,
+        "mtime_ns": st.st_mtime_ns,
+        "fingerprint": "deadbeef",  # sampled digest format of the old version
+    }
+    _write_state(source, file_size, done_chunks=chunks, identity=legacy_identity)
+
+    uploader = MegaUploader(client=_dummy_client())
+    uploader.upload_file(source)
+    assert len(upload_env.posts) == len(chunks), "v1 state must restart fresh"
+
+
 def test_zero_byte_upload_single(upload_env):
     source = _make_source(upload_env.tmp_path, 0)
     api = _DummyAPI()
@@ -223,6 +307,56 @@ def test_zero_byte_upload_single(upload_env):
     assert upload_env.posts == [f"{UPLOAD_URL}/0"]
     assert api.completed, "finalization request must occur"
     assert reports and reports[-1].total_bytes == 0  # no division errors
+
+
+def test_zero_byte_becomes_nonzero_before_finalization_is_rejected(upload_env, monkeypatch):
+    """MF6: a zero-byte file that grows mid-flight must never be registered."""
+    source = _make_source(upload_env.tmp_path, 0)
+    api = _DummyAPI()
+
+    def mutating_post(url, data=b"", timeout=None, proxies=None, headers=None):
+        source.write_bytes(b"grew!")  # no longer zero bytes
+        return _FakeResponse(b"COMPLETION")
+
+    monkeypatch.setattr(uploader_module.requests, "post", mutating_post)
+    reports = []
+    uploader = MegaUploader(client=_dummy_client(api))
+    with pytest.raises(TransferError, match="changed while it was being uploaded"):
+        uploader.upload_file(source, on_progress=reports.append)
+    assert api.completed == [], "the remote node must not be registered"
+    assert reports == [], "progress must not report a completed zero-byte upload"
+
+
+def test_zero_byte_replaced_with_other_zero_byte_is_rejected(upload_env, monkeypatch):
+    source = _make_source(upload_env.tmp_path, 0)
+    api = _DummyAPI()
+
+    def replacing_post(url, data=b"", timeout=None, proxies=None, headers=None):
+        replacement = upload_env.tmp_path / "other-empty.bin"
+        replacement.write_bytes(b"")
+        os.replace(replacement, source)  # new inode/mtime, still zero bytes
+        return _FakeResponse(b"COMPLETION")
+
+    monkeypatch.setattr(uploader_module.requests, "post", replacing_post)
+    uploader = MegaUploader(client=_dummy_client(api))
+    with pytest.raises(TransferError, match="changed while it was being uploaded"):
+        uploader.upload_file(source)
+    assert api.completed == []
+
+
+def test_zero_byte_file_disappearing_is_rejected(upload_env, monkeypatch):
+    source = _make_source(upload_env.tmp_path, 0)
+    api = _DummyAPI()
+
+    def deleting_post(url, data=b"", timeout=None, proxies=None, headers=None):
+        source.unlink()
+        return _FakeResponse(b"COMPLETION")
+
+    monkeypatch.setattr(uploader_module.requests, "post", deleting_post)
+    uploader = MegaUploader(client=_dummy_client(api))
+    with pytest.raises(TransferError, match="disappeared during zero-byte upload"):
+        uploader.upload_file(source)
+    assert api.completed == []
 
 
 def test_zero_byte_file_in_directory_upload(upload_env):

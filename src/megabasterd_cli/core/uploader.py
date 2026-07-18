@@ -47,11 +47,13 @@ log = logging.getLogger(__name__)
 UPLOAD_URL_EXPIRY_STATUS = {403, 404, 410, 509}
 
 # Versioned identity of the local source file stored in upload resume state.
-# Resume is allowed only when every recorded property still matches, so a
-# same-size replaced/modified file can never mix stale uploaded chunks with
-# new content. Legacy states without an identity are never resumed.
-SOURCE_IDENTITY_VERSION = 1
-_FINGERPRINT_SAMPLE = 64 * 1024  # Bytes hashed from the start/middle/end.
+# v2 uses a FULL streaming SHA-256 of the content plus path/size/mtime_ns and
+# the platform file id, so resume/finalization detects any byte change
+# anywhere in the file. v1 (a sampled head/middle/tail fingerprint) is never
+# treated as a strict identity: v1 or missing identities restart fresh.
+SOURCE_IDENTITY_VERSION = 2
+_HASH_BLOCK = 1024 * 1024  # Streaming hash block size (bounded memory).
+_HASH_LOG_THRESHOLD = 256 * 1024 * 1024  # Log hashing cost above this size.
 
 
 @dataclass
@@ -168,15 +170,16 @@ class MegaUploader:
         nonce = os.urandom(8)
         upload_url: str | None = None
 
+        source_identity = self._source_identity(source, self._stop_event)
+
         if file_size == 0:
             # Zero-byte files have no chunks and therefore no chunk-response
             # completion token; MEGA's protocol uses a POST to `<url>/0` with
-            # an empty body instead.
+            # an empty body instead. The captured source identity is
+            # revalidated before the remote node is registered.
             return self._upload_empty_file(
-                source, upload_name, target, aes_key, nonce, on_progress, op_start
+                source, upload_name, target, aes_key, nonce, on_progress, op_start, source_identity
             )
-
-        source_identity = self._source_identity(source)
 
         # State for resume
         state_path = self._upload_state_destination(source)
@@ -356,9 +359,10 @@ class MegaUploader:
 
         # Re-check the source identity before finalization: if the local file
         # was modified/replaced during the transfer, the uploaded chunks are a
-        # mix of old and new content and must never be registered.
+        # mix of old and new content and must never be registered. The full
+        # streaming hash detects a change to ANY byte of the file.
         try:
-            current_identity = self._source_identity(source)
+            current_identity = self._source_identity(source, self._stop_event)
         except OSError as exc:
             clear_state(state_path)
             raise TransferError(
@@ -431,13 +435,17 @@ class MegaUploader:
         nonce: bytes,
         on_progress: Callable[[UploadProgress], None] | None,
         op_start: float,
+        source_identity: dict,
     ) -> UploadResult:
         """Upload a zero-byte file.
 
         MEGA still requires an upload slot; the completion token comes from a
         single POST of an empty body to `<upload_url>/0` (the same convention
         mega.py and the SDKs use). The file MAC of an empty file condenses to
-        [0, 0] because there are no chunk MACs to combine.
+        [0, 0] because there are no chunk MACs to combine. The source identity
+        captured at start is revalidated after the completion token arrives
+        and before the node is registered, so a file that changed, grew, was
+        replaced, or disappeared mid-flight is never registered.
         """
         upload_info = self.api.request_upload(0)
         upload_url = upload_info["p"]
@@ -473,6 +481,24 @@ class MegaUploader:
         if not token:
             raise TransferError(message="Zero-byte upload returned no completion token")
 
+        # Revalidate the source AFTER the completion token and BEFORE node
+        # registration: never register a node for a file that changed.
+        try:
+            current_identity = self._source_identity(source, self._stop_event)
+        except OSError as exc:
+            raise TransferError(
+                message=f"Local file disappeared during zero-byte upload: {source} ({exc})"
+            ) from exc
+        if current_identity.get("size") != 0 or not self._identities_match(
+            source_identity, current_identity
+        ):
+            raise TransferError(
+                message=(
+                    f"The local file changed while it was being uploaded: {source}. "
+                    "The zero-byte upload was not registered; retry to upload the new content."
+                )
+            )
+
         mac_iv = condense_mac(combine_chunk_macs([], aes_key))
         file_handle = self._register_node(upload_name, target, aes_key, nonce, mac_iv, token)
 
@@ -502,27 +528,32 @@ class MegaUploader:
         return data_dir() / "upload-state" / f"{sanitize_filename(source.name)}.{digest}.upload"
 
     @staticmethod
-    def _sampled_fingerprint(source: Path, size: int) -> str:
-        """Content fingerprint: SHA-256 over sampled head/middle/tail regions.
+    def _file_sha256(source: Path, size: int, stop_event: threading.Event | None = None) -> str:
+        """Full streaming SHA-256 of the file content in bounded memory.
 
-        Small files are hashed in full; larger files hash three 64 KiB regions
-        plus the size, which is strong enough to detect a same-size replacement
-        or in-place modification without reading multi-GB files end to end.
+        Reads fixed-size blocks (never the whole file), stays responsive to
+        `stop()` cancellation, and logs the cost for very large files so the
+        hashing phase is visible.
         """
+        if size >= _HASH_LOG_THRESHOLD:
+            log.info(
+                "Computing full-file hash of %s (%d bytes) for resume identity...",
+                source.name,
+                size,
+            )
         h = hashlib.sha256()
-        h.update(str(size).encode("ascii"))
         with open(source, "rb") as f:
-            if size <= 3 * _FINGERPRINT_SAMPLE:
-                for block in iter(lambda: f.read(65536), b""):
-                    h.update(block)
-            else:
-                for offset in (0, size // 2, size - _FINGERPRINT_SAMPLE):
-                    f.seek(offset)
-                    h.update(f.read(_FINGERPRINT_SAMPLE))
+            while True:
+                if stop_event is not None and stop_event.is_set():
+                    raise TransferError(message="Upload canceled while hashing the source file")
+                block = f.read(_HASH_BLOCK)
+                if not block:
+                    break
+                h.update(block)
         return h.hexdigest()
 
     @classmethod
-    def _source_identity(cls, source: Path) -> dict:
+    def _source_identity(cls, source: Path, stop_event: threading.Event | None = None) -> dict:
         """Snapshot the properties that must be unchanged to resume/finalize."""
         st = source.stat()
         identity: dict = {
@@ -530,7 +561,7 @@ class MegaUploader:
             "path": str(source.resolve()),
             "size": st.st_size,
             "mtime_ns": st.st_mtime_ns,
-            "fingerprint": cls._sampled_fingerprint(source, st.st_size),
+            "sha256": cls._file_sha256(source, st.st_size, stop_event),
         }
         # Platform file identity (inode / NTFS file index) when available.
         if getattr(st, "st_ino", 0):
@@ -542,8 +573,10 @@ class MegaUploader:
         if not isinstance(recorded, dict):
             return False
         if recorded.get("v") != SOURCE_IDENTITY_VERSION:
+            # v1 sampled fingerprints (or unknown versions) are NOT a strict
+            # identity; never treat them as proof of an unchanged file.
             return False
-        for field in ("path", "size", "mtime_ns", "fingerprint"):
+        for field in ("path", "size", "mtime_ns", "sha256"):
             if recorded.get(field) != current.get(field):
                 return False
         # Compare the platform file id only when both sides recorded one.

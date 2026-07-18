@@ -129,8 +129,8 @@ def test_mixed_direction_prefixes_names():
 
 
 def test_redact_link_strips_key_material():
-    url = "https://mega.nz/folder/Ek5HUYRC#JNRsbBycFpp-secret"
-    assert redact_link(url) == "https://mega.nz/folder/Ek5HUYRC#<key>"
+    url = "https://mega.nz/folder/PUBLICID0#FAKEKEYFAKEKEYFAKEKEY"
+    assert redact_link(url) == "https://mega.nz/folder/PUBLICID0#<key>"
     assert redact_link("plain") == "plain"
 
 
@@ -170,6 +170,63 @@ def test_visible_rows_are_bounded_for_huge_folders():
     assert hidden == 50 - progress_module.MAX_VISIBLE_FILE_ROWS
     shown = {pair[1].name for pair in visible}
     assert "f040.bin" in shown, "active rows win a visible slot"
+
+
+def test_failed_item_makes_overall_failed_without_exception():
+    """MF4: per-item errors are caught by commands, so the context exits
+    cleanly — the overall state must still be Failed."""
+    tp, view = _controller()
+    ok = tp.add_item("a.bin", 10)
+    bad = tp.add_item("b.bin", 10)
+    tp.update_item(ok, 10, 10)
+    tp.finish_item(ok, "complete")
+    tp.finish_item(bad, "failed")
+    with tp:
+        pass  # clean exit, no exception
+    assert tp.final_success() is False
+    assert view.closed == [False]
+    assert view.updates[-1]["status"] == "Failed"
+
+
+def test_all_complete_overall_complete():
+    tp, view = _controller()
+    a = tp.add_item("a.bin", 10)
+    tp.update_item(a, 10, 10)
+    tp.finish_item(a, "complete")
+    tp.close(success=True)
+    assert tp.final_success() is True
+    assert view.closed == [True]
+    assert view.updates[-1]["status"] == "Complete"
+
+
+def test_explicit_user_skip_alone_stays_successful():
+    tp, view = _controller()
+    a = tp.add_item("a.bin", 10)
+    tp.finish_item(a, "skipped")
+    tp.close(success=True)
+    assert tp.final_success() is True
+    assert view.closed == [True]
+
+
+def test_unfinished_active_item_prevents_overall_complete():
+    tp, view = _controller()
+    a = tp.add_item("a.bin", 10)
+    tp.update_item(a, 3, 10)  # still active at close time
+    tp.close(success=True)
+    assert tp.statuses()[a] == "canceled"
+    assert tp.final_success() is False, "an incomplete item must not read as success"
+    assert view.closed == [False]
+
+
+def test_close_is_idempotent_and_never_unfails():
+    tp, view = _controller()
+    a = tp.add_item("a.bin", 10)
+    tp.finish_item(a, "failed")
+    tp.close(success=True)
+    first = tp.final_success()
+    tp.close(success=True)  # repeated close: no-op
+    assert tp.final_success() is first is False
+    assert view.closed == [False], "close must run the view finalization once"
 
 
 def test_canceled_and_skipped_render_labels():

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import sys
 import threading
 from pathlib import Path
 
@@ -14,6 +16,7 @@ from ..core.api import MegaAPIClient
 from ..core.client import MegaClient
 from ..core.errors import MegaError, QuotaError
 from ..core.uploader import MegaUploader, UploadResult
+from ..ui.machine_output import MachineOutput
 from ..ui.prompts import ask, ask_password, print_error, print_info, print_success, print_warn
 from ..ui.transfer_progress import TransferProgress
 from ..utils.helpers import format_bytes
@@ -36,6 +39,7 @@ def finalize_upload_success(
     share: bool = False,
     share_password: str | None = None,
     notes: list[tuple[str, str]] | None = None,
+    machine: MachineOutput | None = None,
 ) -> str | None:
     """Centralized post-upload success pipeline used by EVERY upload mode
     (sequential, parallel, flat/structured directory, queue, auto-account).
@@ -76,31 +80,68 @@ def finalize_upload_success(
         public_link=link,
         account=client.session.email if client.session else None,
     )
+    if machine is not None:
+        machine.emit(
+            event="result",
+            type="upload",
+            status="success",
+            name=result.name,
+            path=str(local_path),
+            size=result.size,
+            elapsed_seconds=round(result.elapsed_seconds, 2),
+            handle=result.file_handle,
+            account=client.session.email if client.session else None,
+            share_link=link,
+        )
     run_post_transfer_command(cfg.run_command, local_path)
     return link
 
 
-def plan_auto_accounts(
-    jobs: list[tuple[Path, int]], ledger: dict[str, int]
-) -> tuple[dict[Path, str], list[Path]]:
-    """Assign each file to the stored account with the most known free space.
+class QuotaLedger:
+    """Thread-safe free-space ledger driving `--auto-account` selection.
 
-    The in-memory `ledger` (email -> free bytes) is decremented as files are
-    assigned, so later files spill over to other accounts and no account is
-    ever picked without enough known free space. Files no account can hold
-    are returned separately.
+    Files are NOT pre-bound to accounts: the account is chosen immediately
+    before each file starts via `reserve()`, which atomically deducts the
+    expected bytes so parallel reservations can never overcommit one
+    account. A successful upload keeps its reservation; a non-quota failure
+    `release()`s it; a `QuotaError` triggers `set_free()` with the account's
+    LIVE quota so the failed file and every not-yet-started file are
+    re-planned against fresh numbers instead of the stale cache.
     """
-    assignment: dict[Path, str] = {}
-    unassigned: list[Path] = []
-    for path, size in jobs:
-        candidates = [(free, email) for email, free in ledger.items() if free >= size]
-        if not candidates:
-            unassigned.append(path)
-            continue
-        free, email = max(candidates)
-        assignment[path] = email
-        ledger[email] = free - size
-    return assignment, unassigned
+
+    def __init__(self, free: dict[str, int]):
+        self._free = {email: max(0, int(amount)) for email, amount in free.items()}
+        self._lock = threading.Lock()
+
+    def reserve(self, size: int, exclude: set[str] | frozenset[str] = frozenset()) -> str | None:
+        """Pick the account with the most known free space >= size and
+        atomically deduct the reservation; None when no account fits."""
+        with self._lock:
+            candidates = [
+                (free, email)
+                for email, free in self._free.items()
+                if free >= size and email not in exclude
+            ]
+            if not candidates:
+                return None
+            free, email = max(candidates)
+            self._free[email] = free - size
+            return email
+
+    def release(self, email: str, size: int) -> None:
+        """Return a reservation after a non-quota failure."""
+        with self._lock:
+            if email in self._free:
+                self._free[email] += size
+
+    def set_free(self, email: str, free: int) -> None:
+        """Replace an account's balance with a freshly fetched live value."""
+        with self._lock:
+            self._free[email] = max(0, int(free))
+
+    def free_of(self, email: str) -> int | None:
+        with self._lock:
+            return self._free.get(email)
 
 
 def _tree_size(path: Path) -> int:
@@ -187,6 +228,13 @@ def _tree_size(path: Path) -> int:
     default=None,
     help="If set with --share, generate password-protected links.",
 )
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    help="Machine mode: emit one JSON result record per line on stdout; "
+    "human output and progress go to stderr.",
+)
 @click.pass_context
 def upload(
     ctx: click.Context,
@@ -204,6 +252,7 @@ def upload(
     parallel_transfers: int | None,
     auto_share: bool,
     share_password: str | None,
+    json_output: bool,
 ) -> None:
     """Upload files (or all files inside a directory) to MEGA.
 
@@ -212,6 +261,12 @@ def upload(
     """
     cfg = ctx.obj["config"]
     quiet = bool(ctx.obj.get("quiet"))
+    machine = MachineOutput(json_output)
+    if json_output:
+        quiet = True
+        redirect = contextlib.redirect_stdout(sys.stderr)
+        redirect.__enter__()
+        ctx.call_on_close(lambda: redirect.__exit__(None, None, None))
 
     mgr = AccountManager(accounts_file())
     if not mgr.list_accounts():
@@ -316,28 +371,18 @@ def upload(
             clients[acc.email] = client
         return client
 
-    assignment: dict[Path, str] = {}
-    ledger: dict[str, int] = {}
+    ledger: QuotaLedger | None = None
+    fixed_email: str | None = None
     if auto_account and not account:
-        for acc in mgr.list_accounts():
-            if acc.quota_total is not None and acc.quota_used is not None:
-                ledger[acc.email] = acc.quota_total - acc.quota_used
-        if not ledger:
+        free = {
+            acc.email: acc.quota_total - acc.quota_used
+            for acc in mgr.list_accounts()
+            if acc.quota_total is not None and acc.quota_used is not None
+        }
+        if not free:
             print_error("--auto-account needs cached quotas; run `mb account refresh-all` first.")
             ctx.exit(1)
-        assignment, unassigned = plan_auto_accounts(jobs, ledger)
-        for path in unassigned:
-            print_error(f"No stored account has enough free space for {path.name}; skipping.")
-            failures += 1
-        jobs = [(p, s) for p, s in jobs if p in assignment]
-        for path, email in assignment.items():
-            print_info(f"Using {email} for {path.name}")
-        for email in sorted(set(assignment.values())):
-            if _client_for_email(email) is None:
-                # Login failed: fail that account's files.
-                failed_paths = [p for p, e in assignment.items() if e == email]
-                failures += len(failed_paths)
-                jobs = [(p, s) for p, s in jobs if p not in failed_paths]
+        ledger = QuotaLedger(free)
     else:
         account_id = resolve_account_id(mgr, cfg.default_account, account)
         if not account_id:
@@ -345,24 +390,28 @@ def upload(
             ctx.exit(1)
         if _client_for_email(account_id) is None:
             ctx.exit(1)
-        only_email = next(iter(clients.keys()))
-        assignment = {p: only_email for p, _ in jobs}
+        fixed_email = next(iter(clients.keys()))
 
-    def _client_for_path(path: Path) -> MegaClient:
-        return clients[assignment[path]]
+    def _refresh_quota_after_error(email: str) -> None:
+        """After a QuotaError, replace the stale ledger balance with the
+        account's LIVE quota so re-planning never trusts old numbers."""
+        if ledger is None:
+            return
+        try:
+            quota = clients[email].get_quota()
+            live_free = quota.get("mstrg", 0) - quota.get("cstrg", 0)
+            ledger.set_free(email, live_free)
+            mgr.update_quota(email, quota.get("cstrg", 0), quota.get("mstrg", 0))
+        except MegaError:
+            # Cannot verify: treat the account as unavailable for this run.
+            ledger.set_free(email, 0)
 
-    def _on_upload_failure(path: Path, email: str, size: int, exc: Exception) -> None:
+    def _fail_item(message: str) -> None:
         nonlocal failures
         with fail_lock:
             failures += 1
-        if isinstance(exc, QuotaError) and email in ledger:
-            # Refresh the cached quota so later planning stops trusting it.
-            try:
-                quota = clients[email].get_quota()
-                ledger[email] = quota.get("mstrg", 0) - quota.get("cstrg", 0)
-                mgr.update_quota(email, quota.get("cstrg", 0), quota.get("mstrg", 0))
-            except MegaError:
-                ledger[email] = 0
+        notes.append(("error", message))
+        machine.emit(event="result", type="upload", status="failed", error=message)
 
     def _progress_cb(key: str):
         def _cb(p) -> None:
@@ -419,17 +468,16 @@ def upload(
                             share=auto_share,
                             share_password=share_password,
                             notes=notes,
+                            machine=machine,
                         )
                         progress.finish_item(item, "complete")
                     except MegaError as exc:
                         progress.finish_item(item, "failed")
-                        _on_upload_failure(file_path, assignment[file_path], size, exc)
-                        notes.append(("error", f"Upload failed: {file_path.name}: {exc}"))
+                        _fail_item(f"Upload failed: {file_path.name}: {exc}")
                     except Exception as exc:  # noqa: BLE001
                         log.exception("Unexpected error during upload")
                         progress.finish_item(item, "failed")
-                        _on_upload_failure(file_path, assignment[file_path], size, exc)
-                        notes.append(("error", f"Unexpected error: {file_path.name}: {exc}"))
+                        _fail_item(f"Unexpected error: {file_path.name}: {exc}")
                     finally:
                         # Close the worker's HTTP session WITHOUT logging out
                         # the shared server-side session.
@@ -439,67 +487,34 @@ def upload(
                     list(pool.map(_upload_one, jobs))
             else:
                 for file_path, size in jobs:
-                    client = _client_for_path(file_path)
-                    try:
-                        target_handle = _resolve_target_handle(client)
-                    except MegaError as exc:
-                        notes.append(("error", str(exc)))
-                        with fail_lock:
-                            failures += 1
-                        continue
-                    uploader = _make_uploader(client)
-
-                    if file_path.is_dir() and keep_structure:
-                        _upload_structured_directory(
-                            uploader,
-                            file_path,
-                            target_handle,
-                            progress,
-                            cfg,
-                            client,
-                            keep_going=keep_going,
-                            share=auto_share,
-                            share_password=share_password,
-                            notes=notes,
-                            on_failure=lambda exc, fp=file_path, sz=size: _on_upload_failure(
-                                fp, assignment[fp], sz, exc
-                            ),
-                        )
-                        continue
-
-                    item = progress.add_item(file_path.name, size)
-                    try:
-                        result = uploader.upload_file(
-                            file_path,
-                            target_handle=target_handle,
-                            rename_to=rename if single_file else None,
-                            on_progress=_progress_cb(item),
-                        )
-                        finalize_upload_success(
-                            cfg,
-                            client,
-                            result,
-                            file_path,
-                            share=auto_share,
-                            share_password=share_password,
-                            notes=notes,
-                        )
-                        progress.finish_item(item, "complete")
-                    except MegaError as exc:
-                        progress.finish_item(item, "failed")
-                        _on_upload_failure(file_path, assignment[file_path], size, exc)
-                        notes.append(("error", f"Upload failed: {file_path.name}: {exc}"))
-                    except Exception as exc:  # noqa: BLE001
-                        log.exception("Unexpected error during upload")
-                        progress.finish_item(item, "failed")
-                        _on_upload_failure(file_path, assignment[file_path], size, exc)
-                        notes.append(("error", f"Unexpected error: {file_path.name}: {exc}"))
+                    _upload_one_sequential(
+                        file_path,
+                        size,
+                        ledger=ledger,
+                        fixed_email=fixed_email,
+                        client_for_email=_client_for_email,
+                        refresh_quota=_refresh_quota_after_error,
+                        resolve_target=_resolve_target_handle,
+                        make_uploader=_make_uploader,
+                        progress=progress,
+                        cfg=cfg,
+                        keep_structure=keep_structure,
+                        keep_going=keep_going,
+                        auto_share=auto_share,
+                        share_password=share_password,
+                        rename_to=rename if single_file else None,
+                        notes=notes,
+                        fail_item=_fail_item,
+                        machine=machine,
+                    )
     finally:
         for client in clients.values():
             try:
                 client.logout()
             except Exception:  # noqa: BLE001
                 log.debug("Logout failed", exc_info=True)
+            finally:
+                client.api.close()
 
     printer = {"success": print_success, "info": print_info, "error": print_error}
     for kind, message in notes:
@@ -507,6 +522,156 @@ def upload(
     if failures:
         print_warn(f"{failures} upload item(s) failed.")
         ctx.exit(1)
+
+
+def _upload_one_sequential(
+    file_path: Path,
+    size: int,
+    *,
+    ledger: QuotaLedger | None,
+    fixed_email: str | None,
+    client_for_email,
+    refresh_quota,
+    resolve_target,
+    make_uploader,
+    progress: TransferProgress,
+    cfg,
+    keep_structure: bool,
+    keep_going: bool,
+    auto_share: bool,
+    share_password: str | None,
+    rename_to: str | None,
+    notes: list[tuple[str, str]],
+    fail_item,
+    machine: MachineOutput | None = None,
+) -> None:  # noqa: C901 - one cohesive per-file state machine
+    """Upload one sequential job, selecting the account at start time.
+
+    With `--auto-account` the account is reserved from the live ledger
+    immediately before the file starts. On `QuotaError` the account's quota
+    is refreshed and the SAME file is retried on another suitable account;
+    each account is tried at most once per file, so the retry is bounded.
+    A `--keep-structure` tree is reserved and uploaded as ONE unit on ONE
+    account; if it fails mid-tree the result is a clear failure (never a
+    silently distributed or partially-complete tree).
+    """
+    is_tree = file_path.is_dir() and keep_structure
+    # A tree gets a summary row without a byte total (its bytes are counted
+    # by the per-file manifest rows), so overall totals are never doubled.
+    row = progress.add_item(file_path.name, None if is_tree else size)
+    attempted: set[str] = set()
+    while True:
+        if ledger is not None:
+            email = ledger.reserve(size, exclude=attempted)
+            if email is None:
+                progress.finish_item(row, "failed")
+                fail_item(f"No stored account has enough known free space for {file_path.name}.")
+                return
+            client = client_for_email(email)
+            if client is None:
+                attempted.add(email)
+                ledger.release(email, size)
+                continue
+            notes.append(("info", f"Using {email} for {file_path.name}"))
+        else:
+            email = fixed_email
+            client = client_for_email(email) if email else None
+            if client is None:
+                progress.finish_item(row, "failed")
+                fail_item(f"No active session for {file_path.name}.")
+                return
+        assert email is not None  # narrowed by the branches above
+
+        try:
+            target_handle = resolve_target(client)
+        except MegaError as exc:
+            if ledger is not None:
+                ledger.release(email, size)
+            progress.finish_item(row, "failed")
+            fail_item(str(exc))
+            return
+
+        uploader = make_uploader(client)
+        try:
+            if is_tree:
+                tree_ok = _upload_structured_directory(
+                    uploader,
+                    file_path,
+                    target_handle,
+                    progress,
+                    cfg,
+                    client,
+                    keep_going=keep_going,
+                    share=auto_share,
+                    share_password=share_password,
+                    notes=notes,
+                    on_failure=lambda exc, em=email: fail_item(
+                        f"Directory upload incomplete on {em}: {file_path.name}"
+                    ),
+                    machine=machine,
+                )
+                if tree_ok:
+                    progress.finish_item(row, "complete")
+                else:
+                    # A partially created remote tree is a clear failure —
+                    # never re-planned to another account (that would leave
+                    # a silent partial tree) and never presented as complete.
+                    progress.finish_item(row, "failed")
+                    if ledger is not None:
+                        refresh_quota(email)
+                return
+            result = uploader.upload_file(
+                file_path,
+                target_handle=target_handle,
+                rename_to=rename_to,
+                on_progress=lambda p: progress.update_item(row, p.bytes_done, p.total_bytes),
+            )
+            finalize_upload_success(
+                cfg,
+                client,
+                result,
+                file_path,
+                share=auto_share,
+                share_password=share_password,
+                notes=notes,
+                machine=machine,
+            )
+            progress.finish_item(row, "complete")
+            return
+        except QuotaError as exc:
+            attempted.add(email)
+            refresh_quota(email)
+            if ledger is not None and not is_tree:
+                # Bounded re-plan: retry this file once per remaining account.
+                notes.append(
+                    ("error", f"Quota exhausted on {email}; re-planning {file_path.name}.")
+                )
+                continue
+            progress.finish_item(row, "failed")
+            fail_item(f"Upload failed: {file_path.name}: {exc}")
+            return
+        except MegaError as exc:
+            if ledger is not None:
+                # A failed single file consumed nothing: return the
+                # reservation. A partially-uploaded tree DID consume remote
+                # space, so refresh instead of blindly re-crediting.
+                if is_tree:
+                    refresh_quota(email)
+                else:
+                    ledger.release(email, size)
+            progress.finish_item(row, "failed")
+            fail_item(f"Upload failed: {file_path.name}: {exc}")
+            return
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Unexpected error during upload")
+            if ledger is not None:
+                if is_tree:
+                    refresh_quota(email)
+                else:
+                    ledger.release(email, size)
+            progress.finish_item(row, "failed")
+            fail_item(f"Unexpected error: {file_path.name}: {exc}")
+            return
 
 
 def _upload_structured_directory(
@@ -522,8 +687,11 @@ def _upload_structured_directory(
     share_password: str | None,
     notes: list[tuple[str, str]],
     on_failure,
-) -> None:
-    """Structured (--keep-structure) directory upload with real progress rows."""
+    machine: MachineOutput | None = None,
+) -> bool:
+    """Structured (--keep-structure) directory upload with real progress rows.
+
+    Returns True when every file in the tree uploaded successfully."""
     items: dict[Path, str] = {}
 
     def on_manifest(files: list[tuple[Path, int]]) -> None:
@@ -548,6 +716,7 @@ def _upload_structured_directory(
             share=share,
             share_password=share_password,
             notes=notes,
+            machine=machine,
         )
         key = items.get(local_path)
         if key is not None:
@@ -567,12 +736,12 @@ def _upload_structured_directory(
                 notes.append(("error", f"Failed: {line}"))
             for _ in uploader.last_directory_failures:
                 on_failure(MegaError(message="directory item failed"))
-        # Anything not finished (failed mid-file) is finalized by close().
         for path, key in items.items():
             if uploader.last_directory_failures and any(
                 line.startswith(str(path)) for line in uploader.last_directory_failures
             ):
                 progress.finish_item(key, "failed")
+        return not uploader.last_directory_failures
     except MegaError as exc:
         notes.append(("error", f"Upload failed: {exc}"))
         for line in uploader.last_directory_failures or [str(exc)]:
@@ -581,3 +750,4 @@ def _upload_structured_directory(
             if any(line.startswith(str(path)) for line in uploader.last_directory_failures):
                 progress.finish_item(key, "failed")
         on_failure(exc)
+        return False

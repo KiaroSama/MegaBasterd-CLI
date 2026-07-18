@@ -11,6 +11,9 @@ import contextlib
 import json
 import logging
 import os
+import tempfile
+import threading
+import time
 import uuid
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
@@ -19,6 +22,78 @@ from pathlib import Path
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 log = logging.getLogger(__name__)
+
+
+class QueueLockError(Exception):
+    """Raised when the cross-process queue lock cannot be acquired in time."""
+
+
+class _QueueFileLock:
+    """Cross-platform advisory file lock guarding queue read-modify-write.
+
+    Uses `msvcrt.locking` on Windows and `fcntl.flock` on POSIX. Both block
+    other processes AND other open descriptors in the same process, so two
+    `QueueManager` instances anywhere are serialized. Acquisition is bounded
+    by a timeout and never silently skipped.
+    """
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._fd: int | None = None
+
+    def acquire(self, timeout: float) -> None:
+        deadline = time.monotonic() + max(0.0, timeout)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(self.path), os.O_CREAT | os.O_RDWR)
+        try:
+            while True:
+                try:
+                    if os.name == "nt":
+                        import msvcrt
+
+                        os.lseek(fd, 0, os.SEEK_SET)
+                        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+
+                        fcntl.flock(  # type: ignore[attr-defined]
+                            fd,
+                            fcntl.LOCK_EX | fcntl.LOCK_NB,  # type: ignore[attr-defined]
+                        )
+                    self._fd = fd
+                    return
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise QueueLockError(
+                            f"Could not lock the transfer queue within {timeout:.0f}s; "
+                            f"another queue operation is holding {self.path.name}. "
+                            "Retry after it finishes."
+                        ) from None
+                    time.sleep(0.05)
+        except BaseException:
+            if self._fd is None:
+                os.close(fd)
+            raise
+
+    def release(self) -> None:
+        fd, self._fd = self._fd, None
+        if fd is None:
+            return
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                os.lseek(fd, 0, os.SEEK_SET)
+                with contextlib.suppress(OSError):
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                with contextlib.suppress(OSError):
+                    fcntl.flock(fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]
+        finally:
+            os.close(fd)
+
 
 # Associated data tag so a queue secret blob cannot be reused in another context.
 _QUEUE_SECRET_AAD = b"megabasterd-cli/queue-secret"
@@ -182,14 +257,47 @@ class QueueSecretBox:
 
 
 class QueueManager:
-    """JSON-file backed transfer queue."""
+    """JSON-file backed transfer queue.
 
-    def __init__(self, path: Path, secret_box: QueueSecretBox | None = None):
+    Locking contract: every read-modify-write mutation runs inside
+    `_locked()`, which holds (a) a per-instance re-entrant mutex and (b) the
+    cross-process/cross-instance file lock, reloads the newest queue from
+    disk, applies the mutation, and persists it. This makes mutations
+    last-reader-wins-free: a stale in-memory snapshot can never overwrite a
+    newer on-disk status, a heartbeat can never revert a terminal state, and
+    two runners (threads, instances, or processes) can never claim one job.
+    """
+
+    def __init__(
+        self,
+        path: Path,
+        secret_box: QueueSecretBox | None = None,
+        lock_timeout: float = 10.0,
+    ):
         self.path = path
         self.secret_box = secret_box or QueueSecretBox(path.parent / "queue.key")
         self.items: list[QueueItem] = []
+        self.lock_timeout = lock_timeout
         self._field_names = {f.name for f in fields(QueueItem)}
-        self._load()
+        self._mutex = threading.RLock()
+        self._file_lock = _QueueFileLock(path.parent / (path.name + ".lock"))
+        self._lock_depth = 0
+        with self._locked():
+            self._load()
+
+    @contextlib.contextmanager
+    def _locked(self):
+        """Hold the instance mutex plus the cross-process file lock (once)."""
+        with self._mutex:
+            if self._lock_depth == 0:
+                self._file_lock.acquire(timeout=self.lock_timeout)
+            self._lock_depth += 1
+            try:
+                yield
+            finally:
+                self._lock_depth -= 1
+                if self._lock_depth == 0:
+                    self._file_lock.release()
 
     def _deserialize(self, raw: dict) -> QueueItem:
         raw = dict(raw)
@@ -267,77 +375,127 @@ class QueueManager:
                 log.warning("Could not migrate legacy queue secrets: %s", exc)
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump([self._serialize(i) for i in self.items], f, indent=2)
-        os.replace(tmp, self.path)
+        with self._locked():
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            # Serialize BEFORE touching the filesystem so a serialization
+            # failure preserves the original file untouched.
+            payload = json.dumps([self._serialize(i) for i in self.items], indent=2)
+            # Unique temp file per save: concurrent savers can never collide
+            # on one temp name.
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=self.path.parent,
+                prefix=self.path.name + ".",
+                suffix=".tmp",
+                delete=False,
+            ) as tf:
+                tf.write(payload)
+                tf.flush()
+                os.fsync(tf.fileno())
+                tmp_path = tf.name
+            for attempt in range(5):
+                try:
+                    os.replace(tmp_path, self.path)
+                    break
+                except PermissionError:
+                    # Windows: transient lock by AV/another replace.
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
+            # Best effort: persist the directory entry on POSIX.
+            if hasattr(os, "O_DIRECTORY"):
+                with contextlib.suppress(OSError):
+                    dfd = os.open(str(self.path.parent), os.O_RDONLY)
+                    try:
+                        os.fsync(dfd)
+                    finally:
+                        os.close(dfd)
 
     def add(self, item: QueueItem) -> str:
         import datetime as dt
 
-        if not item.id:
-            item.id = QueueItem.new_id()
-        if not item.created_iso:
-            item.created_iso = dt.datetime.now(dt.timezone.utc).isoformat()
-        self.items.append(item)
-        self.save()
-        return item.id
+        with self._locked():
+            self._load()
+            if not item.id:
+                item.id = QueueItem.new_id()
+            if not item.created_iso:
+                item.created_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+            self.items.append(item)
+            self.save()
+            return item.id
 
     def remove(self, item_id: str) -> bool:
-        before = len(self.items)
-        self.items = [i for i in self.items if i.id != item_id]
-        if len(self.items) != before:
-            self.save()
-            return True
-        return False
+        with self._locked():
+            self._load()
+            before = len(self.items)
+            self.items = [i for i in self.items if i.id != item_id]
+            if len(self.items) != before:
+                self.save()
+                return True
+            return False
 
     def update_status(self, item_id: str, status: JobStatus, error: str | None = None) -> None:
         import datetime as dt
 
-        for item in self.items:
-            if item.id == item_id:
-                item.status = status.value
-                if error:
-                    item.error = error
-                if status in (JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELED):
-                    item.finished_iso = dt.datetime.now(dt.timezone.utc).isoformat()
-                    item.run_id = None
-                    item.heartbeat_iso = None
-                break
-        self.save()
+        with self._locked():
+            self._load()
+            for item in self.items:
+                if item.id == item_id:
+                    item.status = status.value
+                    if error:
+                        item.error = error
+                    if status in (JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELED):
+                        item.finished_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+                    if status in (
+                        JobStatus.DONE,
+                        JobStatus.FAILED,
+                        JobStatus.CANCELED,
+                        JobStatus.INTERRUPTED,
+                        JobStatus.PENDING,
+                    ):
+                        item.run_id = None
+                        item.heartbeat_iso = None
+                    break
+            self.save()
 
     def mark_active(self, item_id: str, run_id: str) -> None:
         """Lease a job to this run: active + owner + fresh heartbeat."""
         import datetime as dt
 
-        now = dt.datetime.now(dt.timezone.utc).isoformat()
-        for item in self.items:
-            if item.id == item_id:
-                item.status = JobStatus.ACTIVE.value
-                item.run_id = run_id
-                item.heartbeat_iso = now
-                break
-        self.save()
+        with self._locked():
+            self._load()
+            now = dt.datetime.now(dt.timezone.utc).isoformat()
+            for item in self.items:
+                if item.id == item_id:
+                    item.status = JobStatus.ACTIVE.value
+                    item.run_id = run_id
+                    item.heartbeat_iso = now
+                    break
+            self.save()
 
     def touch(self, item_id: str, run_id: str) -> None:
-        """Refresh the heartbeat of a job this run owns."""
+        """Refresh the heartbeat of a job this run owns and that is still active.
+
+        Reloads the newest state first, so a heartbeat can never revert a
+        DONE/FAILED/CANCELED status written by another thread or process.
+        """
         import datetime as dt
 
-        for item in self.items:
-            if item.id == item_id and item.run_id == run_id:
-                item.heartbeat_iso = dt.datetime.now(dt.timezone.utc).isoformat()
-                self.save()
-                break
+        with self._locked():
+            self._load()
+            for item in self.items:
+                if (
+                    item.id == item_id
+                    and item.run_id == run_id
+                    and item.status == JobStatus.ACTIVE.value
+                ):
+                    item.heartbeat_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+                    self.save()
+                    break
 
-    def recover_interrupted(self, lease_seconds: int = LEASE_SECONDS) -> list[QueueItem]:
-        """Mark abandoned active jobs (stale/missing heartbeat) as interrupted.
-
-        A live run keeps heartbeating its active job, so jobs inside the lease
-        window are never stolen. Jobs whose owner stopped heartbeating (crash,
-        reboot, kill) become INTERRUPTED and are re-run by `runnable()`.
-        Returns the recovered items.
-        """
+    def _recover_interrupted_locked(self, lease_seconds: int) -> list[QueueItem]:
+        """Recovery pass over the freshly loaded items; caller holds the lock."""
         import datetime as dt
 
         now = dt.datetime.now(dt.timezone.utc)
@@ -357,26 +515,69 @@ class QueueManager:
                 item.run_id = None
                 item.heartbeat_iso = None
                 recovered.append(item)
-        if recovered:
-            self.save()
         return recovered
+
+    def recover_interrupted(self, lease_seconds: int = LEASE_SECONDS) -> list[QueueItem]:
+        """Mark abandoned active jobs (stale/missing heartbeat) as interrupted.
+
+        A live run keeps heartbeating its active job, so jobs inside the lease
+        window are never stolen. Jobs whose owner stopped heartbeating (crash,
+        reboot, kill) become INTERRUPTED and are re-run by `claim_next`.
+        Returns the recovered items.
+        """
+        with self._locked():
+            self._load()
+            recovered = self._recover_interrupted_locked(lease_seconds)
+            if recovered:
+                self.save()
+            return recovered
+
+    def claim_next(self, run_id: str, lease_seconds: int = LEASE_SECONDS) -> QueueItem | None:
+        """Atomically claim the next runnable job for this run.
+
+        Under ONE lock acquisition: reload the newest queue, recover stale
+        active jobs, pick the first pending/interrupted job, lease it
+        (active + owner + heartbeat), persist, and return it. Two competing
+        runners (threads, instances, or processes) can never claim the same
+        job because the whole read-modify-write is serialized by the file
+        lock.
+        """
+        import datetime as dt
+
+        with self._locked():
+            self._load()
+            recovered = self._recover_interrupted_locked(lease_seconds)
+            chosen: QueueItem | None = None
+            for item in self.items:
+                if item.status in (JobStatus.PENDING.value, JobStatus.INTERRUPTED.value):
+                    chosen = item
+                    break
+            if chosen is not None:
+                chosen.status = JobStatus.ACTIVE.value
+                chosen.run_id = run_id
+                chosen.heartbeat_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+            if chosen is not None or recovered:
+                self.save()
+            return chosen
 
     def retry(self, item_id: str) -> bool:
         """Return a failed/interrupted/canceled job to pending."""
-        for item in self.items:
-            if item.id == item_id and item.status in (
-                JobStatus.FAILED.value,
-                JobStatus.INTERRUPTED.value,
-                JobStatus.CANCELED.value,
-            ):
-                item.status = JobStatus.PENDING.value
-                item.error = None
-                item.finished_iso = None
-                item.run_id = None
-                item.heartbeat_iso = None
-                self.save()
-                return True
-        return False
+        with self._locked():
+            self._load()
+            for item in self.items:
+                if item.id == item_id and item.status in (
+                    JobStatus.FAILED.value,
+                    JobStatus.INTERRUPTED.value,
+                    JobStatus.CANCELED.value,
+                ):
+                    item.status = JobStatus.PENDING.value
+                    item.error = None
+                    item.finished_iso = None
+                    item.run_id = None
+                    item.heartbeat_iso = None
+                    self.save()
+                    return True
+            return False
 
     def pending(self) -> list[QueueItem]:
         return [i for i in self.items if i.status == JobStatus.PENDING.value]
@@ -390,12 +591,14 @@ class QueueManager:
         ]
 
     def clear_done(self) -> int:
-        before = len(self.items)
-        self.items = [
-            i
-            for i in self.items
-            if i.status not in (JobStatus.DONE.value, JobStatus.CANCELED.value)
-        ]
-        if len(self.items) != before:
-            self.save()
-        return before - len(self.items)
+        with self._locked():
+            self._load()
+            before = len(self.items)
+            self.items = [
+                i
+                for i in self.items
+                if i.status not in (JobStatus.DONE.value, JobStatus.CANCELED.value)
+            ]
+            if len(self.items) != before:
+                self.save()
+            return before - len(self.items)

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import sys
 from pathlib import Path
 
 import click
@@ -20,6 +22,7 @@ from ..core.links import (
     resolve_megacrypter_link,
     resolve_password_link,
 )
+from ..ui.machine_output import MachineOutput
 from ..ui.prompts import print_error, print_info, print_success
 from ..ui.transfer_progress import TransferProgress, redact_link
 from ..utils.helpers import format_bytes
@@ -141,6 +144,13 @@ def _read_links_file(path: Path) -> list[str]:
     help="Folder links: list the files and interactively choose which to download "
     "(e.g. 1,3-5 | all | none).",
 )
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    help="Machine mode: emit one JSON result record per line on stdout; "
+    "human output and progress go to stderr.",
+)
 @click.pass_context
 def download(
     ctx: click.Context,
@@ -160,6 +170,7 @@ def download(
     include_patterns: tuple[str, ...],
     exclude_patterns: tuple[str, ...],
     select_files: bool,
+    json_output: bool,
 ) -> None:
     """Download one or more MEGA links.
 
@@ -168,6 +179,15 @@ def download(
     """
     cfg = ctx.obj["config"]
     quiet = bool(ctx.obj.get("quiet"))
+    # Machine mode: JSONL records own stdout; humans read stderr; the live
+    # progress view is disabled. The emitter grabs the real stdout BEFORE the
+    # redirect below.
+    machine = MachineOutput(json_output)
+    if json_output:
+        quiet = True
+        redirect = contextlib.redirect_stdout(sys.stderr)
+        redirect.__enter__()
+        ctx.call_on_close(lambda: redirect.__exit__(None, None, None))
     proxies = {"http": proxy, "https": proxy} if proxy else None
     failures = 0
 
@@ -213,23 +233,32 @@ def download(
 
     proxy_pool = effective_pool_for_cmd(cfg, proxy)
 
-    api = MegaAPIClient(
-        timeout=cfg.timeout_seconds,
-        proxies=proxies,
-        proxy_pool=proxy_pool,
-        force_proxy=cfg.force_smart_proxy,
-        user_agent=cfg.user_agent,
-    )
+    def _new_api() -> MegaAPIClient:
+        """One isolated API client (own Session + sequence) per transfer.
+
+        `MegaAPIClient` owns a mutable `requests.Session`, sequence counter,
+        and SID; independent parallel transfers must never share one. The
+        proxy pool below IS shared — it is explicitly thread-safe.
+        """
+        return MegaAPIClient(
+            timeout=cfg.timeout_seconds,
+            proxies=proxies,
+            proxy_pool=proxy_pool,
+            force_proxy=cfg.force_smart_proxy,
+            user_agent=cfg.user_agent,
+        )
 
     # ONE limiter per command: `speed_limit_kbps` (or --limit) is an aggregate
     # cap shared by every parallel transfer, not a per-file value.
     shared_limiter = make_limiter(speed_limit_kbps)
 
     # Each parallel slot gets its own MegaDownloader because the downloader
-    # holds per-transfer state (CDN URL, generation counter).
+    # holds per-transfer state (CDN URL, generation counter) — and its own
+    # API client (see `_new_api`). The helpers below close that API client
+    # on every path.
     def _new_downloader() -> MegaDownloader:
         return MegaDownloader(
-            api=api,
+            api=_new_api(),
             max_workers=workers,
             speed_limit_kbps=speed_limit_kbps,
             verify_integrity=verify,
@@ -376,6 +405,7 @@ def download(
                                 progress,
                                 password=password,
                                 rename_to=rename_to,
+                                machine=machine,
                             )
                             else 1
                         )
@@ -391,6 +421,7 @@ def download(
                             progress,
                             password=password,
                             rename_to=rename_to,
+                            machine=machine,
                         )
 
                     with ThreadPoolExecutor(max_workers=parallel) as pool:
@@ -414,6 +445,7 @@ def download(
                             output_dir,
                             progress,
                             file_filter=folder_file_filter,
+                            machine=machine,
                         )
                         failures += 0 if outcome else 1
                 else:
@@ -426,6 +458,7 @@ def download(
                             output_dir,
                             progress,
                             file_filter=folder_file_filter,
+                            machine=machine,
                         )
 
                     with ThreadPoolExecutor(max_workers=parallel) as pool:
@@ -447,6 +480,7 @@ def download(
             parallel_files=parallel,
             file_filter=folder_file_filter,
             quiet=quiet,
+            machine=machine,
         ):
             failures += 1
 
@@ -502,7 +536,9 @@ def _download_file(
     progress: TransferProgress,
     password=None,
     rename_to=None,
+    machine: MachineOutput | None = None,
 ) -> bool:
+    machine = machine or MachineOutput(False)
     item = progress.add_item(redact_link(url), status="active")
 
     def on_progress(p):
@@ -522,22 +558,56 @@ def _download_file(
         print_success(
             f"{result.path.name} ({format_bytes(result.size)}) " f"in {result.elapsed_seconds:.1f}s"
         )
+        machine.emit(
+            event="result",
+            type="download",
+            status="success",
+            name=result.path.name,
+            path=str(result.path),
+            size=result.size,
+            elapsed_seconds=round(result.elapsed_seconds, 2),
+            integrity_ok=result.integrity_ok,
+        )
         _run_hook_for(result.path)
         return True
     except MegaError as e:
         progress.finish_item(item, "failed")
         print_error(f"Download failed: {e}")
+        machine.emit(
+            event="result",
+            type="download",
+            status="failed",
+            source=redact_link(url),
+            error=str(e),
+        )
         return False
     except Exception as e:
         log.exception("Unexpected error during download")
         progress.finish_item(item, "failed")
         print_error(f"Unexpected error: {e}")
+        machine.emit(
+            event="result",
+            type="download",
+            status="failed",
+            source=redact_link(url),
+            error=str(e),
+        )
         return False
+    finally:
+        if downloader.api is not None:
+            downloader.api.close()
 
 
 def _download_folder(
-    downloader, url, output_dir, parallel_files: int = 1, file_filter=None, quiet: bool = False
+    downloader,
+    url,
+    output_dir,
+    parallel_files: int = 1,
+    file_filter=None,
+    quiet: bool = False,
+    machine: MachineOutput | None = None,
 ) -> bool:
+    machine = machine or MachineOutput(False)
     folder_dl = MegaFolderDownloader(downloader)
     items: dict[str, str] = {}  # destination str -> progress item key
     progress = TransferProgress(
@@ -575,9 +645,26 @@ def _download_folder(
 
     def on_file_done(result):
         progress.finish_item(_item_for(result.path), "complete")
+        machine.emit(
+            event="result",
+            type="download",
+            status="success",
+            name=result.path.name,
+            path=str(result.path),
+            size=result.size,
+            elapsed_seconds=round(result.elapsed_seconds, 2),
+            integrity_ok=result.integrity_ok,
+        )
 
     def on_file_failed(path: Path, exc: Exception):
         progress.finish_item(_item_for(path), "failed")
+        machine.emit(
+            event="result",
+            type="download",
+            status="failed",
+            path=str(path),
+            error=str(exc),
+        )
 
     try:
         with progress:
@@ -593,6 +680,14 @@ def _download_folder(
             )
         total_bytes = sum(r.size for r in results)
         print_success(f"Folder complete: {len(results)} files, {format_bytes(total_bytes)} total")
+        machine.emit(
+            event="summary",
+            type="download",
+            status="success",
+            source=redact_link(url),
+            files=len(results),
+            total_bytes=total_bytes,
+        )
         for result in results:
             _run_hook_for(result.path)
         return True
@@ -600,19 +695,43 @@ def _download_folder(
         # Documented behavior: answering "none" skips the folder and is NOT a
         # failure (exit stays zero if nothing else failed).
         print_info(f"Selection cancelled; skipped folder: {redact_link(url)}")
+        machine.emit(event="result", type="download", status="skipped", source=redact_link(url))
         return True
     except MegaError as e:
         print_error(f"Folder download failed: {e}")
+        machine.emit(
+            event="summary",
+            type="download",
+            status="failed",
+            source=redact_link(url),
+            error=str(e),
+        )
         return False
     except Exception as e:
         log.exception("Unexpected error during folder download")
         print_error(f"Unexpected error: {e}")
+        machine.emit(
+            event="summary",
+            type="download",
+            status="failed",
+            source=redact_link(url),
+            error=str(e),
+        )
         return False
+    finally:
+        if downloader.api is not None:
+            downloader.api.close()
 
 
 def _download_folder_file(
-    downloader, url, output_dir, progress: TransferProgress, file_filter=None
+    downloader,
+    url,
+    output_dir,
+    progress: TransferProgress,
+    file_filter=None,
+    machine: MachineOutput | None = None,
 ) -> bool:
+    machine = machine or MachineOutput(False)
     folder_dl = MegaFolderDownloader(downloader)
     items: dict[str, str] = {}
 
@@ -627,9 +746,26 @@ def _download_folder_file(
 
     def on_file_done(result):
         progress.finish_item(_item_for(result.path), "complete")
+        machine.emit(
+            event="result",
+            type="download",
+            status="success",
+            name=result.path.name,
+            path=str(result.path),
+            size=result.size,
+            elapsed_seconds=round(result.elapsed_seconds, 2),
+            integrity_ok=result.integrity_ok,
+        )
 
     def on_file_failed(path: Path, exc: Exception):
         progress.finish_item(_item_for(path), "failed")
+        machine.emit(
+            event="result",
+            type="download",
+            status="failed",
+            path=str(path),
+            error=str(exc),
+        )
 
     try:
         results = folder_dl.download_node_in_folder(
@@ -658,11 +794,29 @@ def _download_folder_file(
         return True
     except SelectionCancelled:
         print_info(f"Selection cancelled; skipped folder node: {redact_link(url)}")
+        machine.emit(event="result", type="download", status="skipped", source=redact_link(url))
         return True
     except MegaError as e:
         print_error(f"Download failed: {e}")
+        machine.emit(
+            event="result",
+            type="download",
+            status="failed",
+            source=redact_link(url),
+            error=str(e),
+        )
         return False
     except Exception as e:
         log.exception("Unexpected error during folder-file download")
         print_error(f"Unexpected error: {e}")
+        machine.emit(
+            event="result",
+            type="download",
+            status="failed",
+            source=redact_link(url),
+            error=str(e),
+        )
         return False
+    finally:
+        if downloader.api is not None:
+            downloader.api.close()

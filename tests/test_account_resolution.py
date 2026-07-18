@@ -1,12 +1,12 @@
-"""Unified default-account resolution and auto-account quota planning."""
+"""Unified default-account resolution and the auto-account quota ledger."""
 
 from __future__ import annotations
 
-from pathlib import Path
+import threading
 
 import megabasterd_cli.accounts.manager as manager_module
 from megabasterd_cli.accounts.manager import AccountManager, resolve_account_id
-from megabasterd_cli.commands.upload_cmd import plan_auto_accounts
+from megabasterd_cli.commands.upload_cmd import QuotaLedger
 
 
 def _mgr(tmp_path, default_email=None) -> AccountManager:
@@ -45,36 +45,65 @@ def test_conflict_warns_once(tmp_path, monkeypatch, caplog):
 
 
 # ---------------------------------------------------------------------------
-# --auto-account planning ledger
+# --auto-account quota ledger (per-file reservation at execution time)
 # ---------------------------------------------------------------------------
 
 
-def test_per_file_sizes_drive_selection_and_ledger_decrements():
-    ledger = {"big@example.com": 1000, "small@example.com": 300}
-    jobs = [(Path("a.bin"), 600), (Path("b.bin"), 500)]
-    assignment, unassigned = plan_auto_accounts(jobs, ledger)
-    # First file goes to the roomiest account; the ledger decrement forces the
-    # second file elsewhere even though big@ had the most space initially.
-    assert assignment[Path("a.bin")] == "big@example.com"
-    assert ledger["big@example.com"] == 400
-    # 500 no longer fits big@ (400 left) nor small@ (300): unassigned.
-    assert unassigned == [Path("b.bin")]
-    assert Path("b.bin") not in assignment
+def test_reserve_picks_roomiest_and_decrements():
+    ledger = QuotaLedger({"big@example.com": 1000, "small@example.com": 300})
+    assert ledger.reserve(600) == "big@example.com"
+    assert ledger.free_of("big@example.com") == 400
+    # 500 no longer fits big@ (400 left) nor small@ (300): no account.
+    assert ledger.reserve(500) is None
 
 
 def test_later_files_move_to_another_account_when_required():
-    ledger = {"a@example.com": 700, "b@example.com": 600}
-    jobs = [(Path("f1"), 500), (Path("f2"), 500)]
-    assignment, unassigned = plan_auto_accounts(jobs, ledger)
-    assert not unassigned
-    assert assignment[Path("f1")] == "a@example.com"
-    assert assignment[Path("f2")] == "b@example.com"
-    assert ledger == {"a@example.com": 200, "b@example.com": 100}
+    ledger = QuotaLedger({"a@example.com": 700, "b@example.com": 600})
+    assert ledger.reserve(500) == "a@example.com"
+    assert ledger.reserve(500) == "b@example.com"
+    assert ledger.free_of("a@example.com") == 200
+    assert ledger.free_of("b@example.com") == 100
 
 
 def test_never_picks_account_with_insufficient_known_space():
-    ledger = {"tiny@example.com": 10}
-    assignment, unassigned = plan_auto_accounts([(Path("big"), 100)], ledger)
-    assert assignment == {}
-    assert unassigned == [Path("big")]
-    assert ledger["tiny@example.com"] == 10, "failed planning must not consume quota"
+    ledger = QuotaLedger({"tiny@example.com": 10})
+    assert ledger.reserve(100) is None
+    assert ledger.free_of("tiny@example.com") == 10, "failed reserve must not consume quota"
+
+
+def test_release_and_set_free_reconcile_reservations():
+    ledger = QuotaLedger({"a@example.com": 500})
+    assert ledger.reserve(400) == "a@example.com"
+    ledger.release("a@example.com", 400)  # non-quota failure: give it back
+    assert ledger.free_of("a@example.com") == 500
+    ledger.set_free("a@example.com", 42)  # QuotaError refresh with live value
+    assert ledger.free_of("a@example.com") == 42
+    assert ledger.reserve(100) is None, "stale quota must not be trusted after refresh"
+
+
+def test_exclude_prevents_infinite_account_cycling():
+    ledger = QuotaLedger({"a@example.com": 1000, "b@example.com": 1000})
+    first = ledger.reserve(10, exclude=set())
+    second = ledger.reserve(10, exclude={"a@example.com", "b@example.com"})
+    assert first is not None
+    assert second is None, "excluding every attempted account bounds the retry loop"
+
+
+def test_parallel_reservations_cannot_overcommit():
+    ledger = QuotaLedger({"a@example.com": 1000})
+    wins: list[str] = []
+    barrier = threading.Barrier(8)
+
+    def worker() -> None:
+        barrier.wait()
+        if ledger.reserve(300) is not None:
+            wins.append("x")
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+        assert not t.is_alive()
+    assert len(wins) == 3, "1000 free admits exactly three 300-byte reservations"
+    assert ledger.free_of("a@example.com") == 100
