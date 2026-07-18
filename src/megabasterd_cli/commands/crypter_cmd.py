@@ -8,6 +8,7 @@ import click
 
 from ..core.crypter import CrypterError, decrypt_file, encrypt_file
 from ..core.links import LinkType, decrypt_dlc_container, parse_link, resolve_elc_links
+from ..proxy.selector import ProxySelector
 from ..ui.prompts import ask_password, print_error, print_info, print_success
 from ..utils.helpers import format_bytes
 
@@ -148,8 +149,12 @@ def crypter_make_link(
         payload["max_downloads"] = max_downloads
 
     api_url = f"https://{server}/api"
+    selector = ProxySelector.from_config(cfg)
     try:
-        resp = requests.post(api_url, json=payload, timeout=cfg.timeout_seconds)
+        request_proxies, _picked = selector.select()
+        resp = requests.post(
+            api_url, json=payload, timeout=cfg.timeout_seconds, proxies=request_proxies
+        )
         resp.raise_for_status()
         body = resp.json()
     except Exception as exc:
@@ -190,6 +195,7 @@ def crypter_resolve(ctx: click.Context, mc_url: str, password: str | None) -> No
             parsed,
             timeout=cfg.timeout_seconds,
             password=password,
+            selector=ProxySelector.from_config(cfg),
         )
     except ValueError as exc:
         print_error(f"Resolve failed: {exc}")
@@ -229,6 +235,7 @@ def crypter_elc_resolve(
             user=elc_user,
             api_key=elc_api_key,
             timeout=cfg.timeout_seconds,
+            selector=ProxySelector.from_config(cfg),
         )
     except Exception as exc:  # noqa: BLE001
         print_error(f"ELC resolve failed: {exc}")
@@ -244,7 +251,11 @@ def crypter_dlc_resolve(ctx: click.Context, path: Path) -> None:
     """Print the URLs contained in a DLC file."""
     cfg = ctx.obj["config"]
     try:
-        links = decrypt_dlc_container(path.read_bytes(), timeout=cfg.timeout_seconds)
+        links = decrypt_dlc_container(
+            path.read_bytes(),
+            timeout=cfg.timeout_seconds,
+            selector=ProxySelector.from_config(cfg),
+        )
     except Exception as exc:  # noqa: BLE001
         print_error(f"DLC resolve failed: {exc}")
         return

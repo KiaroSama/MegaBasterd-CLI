@@ -24,6 +24,7 @@ from ..core.links import (
     resolve_megacrypter_link,
     resolve_password_link,
 )
+from ..proxy.selector import ProxySelector
 from ..ui.prompts import print_error
 from ..ui.theme import make_console
 from ..utils.helpers import format_bytes
@@ -61,6 +62,7 @@ def info_cmd(
                 user=elc_user,
                 api_key=elc_api_key,
                 timeout=cfg.timeout_seconds,
+                selector=ProxySelector.from_config(cfg),
             )
         except Exception as exc:  # noqa: BLE001
             print_error(f"ELC resolution failed: {exc}")
@@ -99,6 +101,7 @@ def info_cmd(
                 parsed,
                 timeout=cfg.timeout_seconds,
                 password=password,
+                selector=ProxySelector.from_config(cfg),
             )
         except ValueError as exc:
             try:
@@ -106,6 +109,7 @@ def info_cmd(
                     parsed,
                     timeout=cfg.timeout_seconds,
                     password=password,
+                    selector=ProxySelector.from_config(cfg),
                 )
             except ValueError:
                 print_error(str(exc))
@@ -128,12 +132,9 @@ def info_cmd(
             _console.print(table)
             return
 
-    from ..proxy.runtime import effective_pool
-
-    proxy_pool = effective_pool(cfg)
     api = MegaAPIClient(
         timeout=cfg.timeout_seconds,
-        proxy_pool=proxy_pool,
+        proxy_pool=ProxySelector.from_config(cfg).pool,
         force_proxy=cfg.force_smart_proxy,
     )
     table = Table(show_header=False, title="Link info", border_style="mb.table.border")

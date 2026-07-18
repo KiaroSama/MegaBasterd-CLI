@@ -141,6 +141,12 @@ the fly, and serves media players through normal HTTP Range requests.
 | `--elc-user TEXT` | ELC account user. |
 | `--elc-api-key TEXT` | ELC API key. |
 
+Upstream responses are strictly validated: a partial request must be answered
+with HTTP 206 and a `Content-Range` matching the requested bytes, or the
+request fails with 502. This prevents a proxy or CDN that ignores `Range` from
+having its full-file response decrypted at the wrong AES-CTR offset and served
+as valid data.
+
 A loopback bind (`127.0.0.1`/`::1`/`localhost`) runs without authentication.
 Any non-loopback bind requires a token: if you do not pass `--token`, a strong
 one is generated and shown once on the console (never written to logs).
@@ -314,7 +320,8 @@ Use `config path` to see the exact config file used on the current machine.
 
 A malformed `config.json` (bad JSON, invalid UTF-8, or a root that is not an
 object) is treated as corruption: the original is preserved byte-for-byte, one
-timestamped copy is kept as `config.json.corrupt.<ts>.json`, and every mutation
+timestamped, content-addressed copy is kept as
+`config.json.corrupt.<ts>-<hash>.json`, and every mutation
 (`set`, `unset`, `migrate`, `reset`) refuses with a non-zero exit instead of
 overwriting it. `config recover` reports that state; `config recover --reset`
 writes a fresh default config and keeps the backup. Read-only commands keep

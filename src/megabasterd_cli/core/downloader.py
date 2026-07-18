@@ -28,6 +28,7 @@ from typing import Callable, cast
 import requests
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from ..proxy.selector import ProxySelector
 from ..utils.helpers import (
     claim_destination,
     ensure_within_directory,
@@ -128,6 +129,9 @@ class MegaDownloader:
         # back so the pool can cool down or promote entries.
         self.proxy_pool = proxy_pool
         self.force_proxy = force_proxy
+        # One shared selection authority (see proxy/selector.py); the old
+        # per-class copy of this logic is gone.
+        self._selector = ProxySelector(pool=proxy_pool, static=proxies, force=force_proxy)
         # When a shared limiter is supplied, all downloaders of one command
         # drain the same bucket, so `speed_limit_kbps` acts as an aggregate
         # cap instead of multiplying per parallel file.
@@ -161,26 +165,8 @@ class MegaDownloader:
         self._url_resolver: Callable[[], str] | None = None
 
     def _proxies_for_request(self) -> tuple[dict[str, str] | None, str | None]:
-        """Return (proxies_dict, proxy_url_for_reporting) for one chunk request.
-
-        Precedence:
-          1. Pool pick (smart proxy)
-          2. Static proxies (manual --proxy)
-          3. Refuse if force_proxy is on, else direct
-        """
-        if self.proxy_pool is not None:
-            entry = self.proxy_pool.pick()
-            if entry is not None:
-                proxy_url = entry.url
-                return {"http": proxy_url, "https": proxy_url}, proxy_url
-        if self.proxies:
-            return self.proxies, None
-        if self.force_proxy:
-            raise TransferError(
-                message="force_smart_proxy is on but no proxy is available "
-                "(pool empty, no --proxy)"
-            )
-        return None, None
+        """Per-request proxy decision, delegated to the shared selector."""
+        return self._selector.select()
 
     def stop(self) -> None:
         """Signal all worker threads to stop."""
@@ -280,7 +266,7 @@ class MegaDownloader:
                     mc_parsed,
                     timeout=self.timeout,
                     password=password,
-                    proxies=self.proxies,
+                    selector=self._selector,
                 )
                 if not mc_info.key or mc_info.size is None:
                     raise ValueError("MegaCrypter metadata is missing key or size") from exc
@@ -289,7 +275,7 @@ class MegaDownloader:
                     info=mc_info,
                     timeout=self.timeout,
                     password=password,
-                    proxies=self.proxies,
+                    selector=self._selector,
                 )
                 key_a32 = str_to_a32(mc_info.key)
                 aes_key, nonce, mac_iv_a32 = unpack_file_key(key_a32)
@@ -306,7 +292,7 @@ class MegaDownloader:
                         info=mc_info,
                         timeout=self.timeout,
                         password=password,
-                        proxies=self.proxies,
+                        selector=self._selector,
                     )
 
                 return self._run_download(

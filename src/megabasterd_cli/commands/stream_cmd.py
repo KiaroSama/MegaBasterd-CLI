@@ -6,6 +6,7 @@ import click
 
 from ..core.api import MegaAPIClient
 from ..core.links import LinkType, parse_link, resolve_elc_links
+from ..proxy.selector import ProxySelector
 from ..streaming.server import StreamingServer
 from ..ui.prompts import print_error, print_info
 
@@ -56,6 +57,7 @@ def stream(
         print_error(str(e))
         return
     proxies = {"http": proxy, "https": proxy} if proxy else None
+    selector = ProxySelector.from_config(cfg, proxy)
     if parsed.type == LinkType.ELC_CONTAINER:
         try:
             links = resolve_elc_links(
@@ -64,7 +66,7 @@ def stream(
                 user=elc_user,
                 api_key=elc_api_key,
                 timeout=cfg.timeout_seconds,
-                proxies=proxies,
+                selector=selector,
             )
         except Exception as exc:  # noqa: BLE001
             print_error(f"ELC resolution failed: {exc}")
@@ -104,20 +106,17 @@ def stream(
             "into logs and history. Prefer the Authorization: Bearer header."
         )
 
-    from ..proxy.runtime import effective_pool_for_cmd
-
-    proxy_pool = effective_pool_for_cmd(cfg, proxy)
     api = MegaAPIClient(
         timeout=cfg.timeout_seconds,
         proxies=proxies,
-        proxy_pool=proxy_pool,
+        proxy_pool=selector.pool,
         force_proxy=cfg.force_smart_proxy,
     )
     server = StreamingServer(
         api=api,
         host=host,
         port=port,
-        proxies=proxies,
+        selector=selector,
         auth_token=auth_token,
         allow_query_token=allow_query_token,
     )

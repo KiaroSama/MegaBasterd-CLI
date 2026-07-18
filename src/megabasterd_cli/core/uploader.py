@@ -27,6 +27,7 @@ from typing import Callable
 import requests
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from ..proxy.selector import ProxySelector
 from ..utils.helpers import sanitize_filename
 from ..utils.speed import RollingSpeedMeter, make_limiter
 from .chunks import Chunk, chunk_mac, combine_chunk_macs, condense_mac, iter_chunks
@@ -123,20 +124,10 @@ class MegaUploader:
         self.last_directory_failures: list[str] = []
 
     def _proxies_for_request(self) -> tuple[dict[str, str] | None, str | None]:
-        """Same precedence as MegaDownloader: pool, then static, then force/direct."""
-        if self.proxy_pool is not None:
-            entry = self.proxy_pool.pick()
-            if entry is not None:
-                proxy_url = entry.url
-                return {"http": proxy_url, "https": proxy_url}, proxy_url
-        if self.proxies:
-            return self.proxies, None
-        if self.force_proxy:
-            raise TransferError(
-                message="force_smart_proxy is on but no proxy is available "
-                "(pool empty, no --proxy)"
-            )
-        return None, None
+        """Per-request proxy decision, delegated to the shared selector."""
+        return ProxySelector(
+            pool=self.proxy_pool, static=self.proxies, force=self.force_proxy
+        ).select()
 
     def stop(self) -> None:
         self._stop_event.set()

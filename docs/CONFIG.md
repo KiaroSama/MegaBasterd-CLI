@@ -51,8 +51,10 @@ key per process; `mb config migrate` rewrites the file without them.
 
 A `config.json` that is not valid UTF-8 JSON, or whose root is not an object,
 is treated as corruption rather than silently replaced by defaults. The
-original is preserved byte-for-byte and copied once to
-`config.json.corrupt.<timestamp>.json`; `set`, `unset`, `migrate`, and `reset`
+original is preserved byte-for-byte and copied to
+`config.json.corrupt.<timestamp>-<hash>.json`. Backups are deduplicated by
+content, so re-reading the same broken file does not pile up copies while a
+LATER, different corruption still gets its own backup; `set`, `unset`, `migrate`, and `reset`
 then refuse with a sanitized message and a non-zero exit. `mb config recover`
 reports the state, and `mb config recover --reset` writes a fresh default
 config while keeping the backup. Corruption messages never include values read
@@ -90,7 +92,7 @@ from the corrupt file.
 | --- | --- | --- |
 | `smart_proxy_enabled` | `false` | Enable rotating proxy pool. |
 | `smart_proxy_url` | `null` | One proxy URL or a comma-separated URL list. |
-| `force_smart_proxy` | `false` | Refuse direct connections. |
+| `force_smart_proxy` | `false` | Refuse direct connections. Enforced on EVERY outbound request - API calls, chunk transfers, streaming CDN reads, MegaCrypter/DLC/ELC resolution, and `proxy fetch` - and the refusal happens before a socket is opened, with no direct fallback after a proxy failure. |
 
 ### Deprecated keys
 

@@ -495,7 +495,7 @@ def resolve_elc_links(
     user: str | None = None,
     api_key: str | None = None,
     timeout: int = 30,
-    proxies: dict[str, str] | None = None,
+    selector=None,  # ProxySelector | None
 ) -> list[str]:
     """Resolve an ELC container to normal MEGA URLs.
 
@@ -513,6 +513,11 @@ def resolve_elc_links(
     if not user or not api_key:
         raise ValueError(f"No ELC credentials configured for host {host!r}")
 
+    from ..proxy.selector import ProxySelector
+
+    selector = selector if selector is not None else ProxySelector()
+    request_proxies, picked = selector.select()
+
     response = requests.post(
         payload.service_url,
         data={
@@ -523,8 +528,9 @@ def resolve_elc_links(
         },
         headers={"User-Agent": "MegaBasterd-CLI/1.0"},
         timeout=timeout,
-        proxies=proxies,
+        proxies=request_proxies,
     )
+    selector.report_success(picked)
     response.raise_for_status()
     try:
         body = response.json()
@@ -628,7 +634,7 @@ def _dlc_post(
     body: str,
     headers: dict[str, str],
     timeout: int,
-    proxies: dict[str, str] | None,
+    selector=None,  # ProxySelector | None
     max_redirects: int = MAX_DLC_REDIRECTS,
 ):
     """POST to the DLC service, following only same-origin HTTPS redirects.
@@ -650,16 +656,21 @@ def _dlc_post(
     _validate_dlc_target(service_url, approved_host, approved_port)
     if (approved_host, approved_port) not in _APPROVED_DLC_ORIGINS:
         raise ValueError("Refusing DLC request to an unapproved service endpoint")
+    from ..proxy.selector import ProxySelector
+
+    selector = selector if selector is not None else ProxySelector()
     current = service_url
     for _ in range(max_redirects + 1):
         # Validate before connecting: covers the initial URL and every redirect.
         _validate_dlc_target(current, approved_host, approved_port)
+        # Select per hop, so a redirect can never downgrade to a direct request.
+        request_proxies, _picked = selector.select()
         resp = requests.post(
             current,
             data=body,
             headers=headers,
             timeout=timeout,
-            proxies=proxies,
+            proxies=request_proxies,
             allow_redirects=False,
         )
         status = getattr(resp, "status_code", 200)
@@ -681,7 +692,7 @@ def decrypt_dlc_container(
     data: str | bytes,
     timeout: int = 30,
     service_url: str = DLC_SERVICE_URL,
-    proxies: dict[str, str] | None = None,
+    selector=None,  # ProxySelector | None
 ) -> list[str]:
     """Decrypt a JDownloader DLC container and return the contained URLs."""
     from Crypto.Cipher import AES
@@ -706,7 +717,7 @@ def decrypt_dlc_container(
             "rev": DLC_REV,
         },
         timeout,
-        proxies,
+        selector,
     )
     response.raise_for_status()
     # Treat the third-party response as untrusted: bound its size before parsing.
@@ -746,16 +757,22 @@ def _post_megacrypter(
     parsed: ParsedLink,
     payload: dict[str, object],
     timeout: int,
-    proxies: dict[str, str] | None = None,
+    selector=None,  # ProxySelector | None
 ) -> dict:
     import requests
+
+    from ..proxy.selector import ProxySelector
+
+    selector = selector if selector is not None else ProxySelector()
+    request_proxies, picked = selector.select()
 
     response = requests.post(
         _megacrypter_api_url(parsed),
         json=payload,
         timeout=timeout,
-        proxies=proxies,
+        proxies=request_proxies,
     )
+    selector.report_success(picked)
     response.raise_for_status()
     body = response.json()
     if not isinstance(body, dict):
@@ -845,14 +862,14 @@ def get_megacrypter_info(
     timeout: int = 30,
     password: str | None = None,
     reverse: str | None = None,
-    proxies: dict[str, str] | None = None,
+    selector=None,  # ProxySelector | None
 ) -> MegaCrypterInfo:
     """Fetch and decrypt MegaCrypter metadata."""
     link = _megacrypter_link(parsed)
     payload: dict[str, object] = {"m": "info", "link": link}
     if reverse:
         payload["reverse"] = reverse
-    body = _post_megacrypter(parsed, payload, timeout=timeout, proxies=proxies)
+    body = _post_megacrypter(parsed, payload, timeout=timeout, selector=selector)
 
     inline_url = _inline_url_from_body(body)
     body, pass_hash = _decrypt_megacrypter_password_info(body, password)
@@ -892,12 +909,12 @@ def get_megacrypter_download_url(
     password: str | None = None,
     sid: str | None = None,
     reverse: str | None = None,
-    proxies: dict[str, str] | None = None,
+    selector=None,  # ProxySelector | None
 ) -> str:
     """Ask MegaCrypter for the temporary CDN URL, decrypting it if needed."""
     if info is None:
         info = get_megacrypter_info(
-            parsed, timeout=timeout, password=password, reverse=reverse, proxies=proxies
+            parsed, timeout=timeout, password=password, reverse=reverse, selector=selector
         )
     payload: dict[str, object] = {"m": "dl", "link": _megacrypter_link(parsed)}
     if info.noexpire_token:
@@ -907,7 +924,7 @@ def get_megacrypter_download_url(
     if reverse:
         payload["reverse"] = reverse
 
-    body = _post_megacrypter(parsed, payload, timeout=timeout, proxies=proxies)
+    body = _post_megacrypter(parsed, payload, timeout=timeout, selector=selector)
     dl_url = body.get("url")
     if not dl_url:
         raise ValueError(f"MegaCrypter did not return a download URL: {body}")
@@ -929,8 +946,11 @@ def resolve_megacrypter_link(
     parsed: ParsedLink,
     timeout: int = 30,
     password: str | None = None,
+    selector=None,  # ProxySelector | None
 ) -> ParsedLink:
     """Resolve a MegaCrypter link when the server exposes an underlying MEGA URL."""
+    from ..proxy.selector import ProxyRequiredError
+
     if parsed.type != LinkType.MEGACRYPTER:
         raise ValueError("Not a MegaCrypter link")
 
@@ -941,7 +961,12 @@ def resolve_megacrypter_link(
             payload["password"] = password
             payload["pass"] = password
         try:
-            body = _post_megacrypter(parsed, payload, timeout=timeout)
+            body = _post_megacrypter(parsed, payload, timeout=timeout, selector=selector)
+        except ProxyRequiredError:
+            # A force-mode refusal is a policy decision, not a server error:
+            # swallowing it here would let the caller fall back to another
+            # (possibly unproxied) resolution path.
+            raise
         except Exception as exc:  # noqa: BLE001
             last_body = f"{type(exc).__name__}: {exc}"
             continue

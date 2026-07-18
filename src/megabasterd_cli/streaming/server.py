@@ -17,6 +17,7 @@ import hmac
 import ipaddress
 import logging
 import mimetypes
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
@@ -32,6 +33,7 @@ from ..core.crypto import (
     unpack_file_key,
 )
 from ..core.links import parse_link
+from ..proxy.selector import ProxyRequiredError, ProxySelector
 from ..utils.helpers import sanitize_filename
 
 log = logging.getLogger(__name__)
@@ -70,6 +72,60 @@ def _content_disposition(filename: str) -> str:
     return f'inline; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(cleaned, safe="")}'
 
 
+class RangeNotHonoredError(Exception):
+    """The upstream response does not match the requested byte range."""
+
+
+# `bytes <start>-<end>/<total>`; a `*` in either position is not acceptable
+# for a range we are about to decrypt at a specific counter.
+_CONTENT_RANGE_RE = re.compile(r"^bytes\s+(\d+)\s*-\s*(\d+)\s*/\s*(\d+|\*)$", re.IGNORECASE)
+
+
+def validate_range_response(status: int, headers, start: int, end: int, size: int) -> None:
+    """Raise RangeNotHonored unless the body is exactly bytes `start`..`end`.
+
+    A nonzero range decrypted with a nonzero AES-CTR counter is only correct
+    if the server actually honored the range. A proxy or CDN that ignores
+    `Range` and replies 200 with the whole body from byte 0 would otherwise
+    produce garbage plaintext that looks like a successful stream.
+
+    HTTP 200 is accepted for one case only: the request covers the whole file,
+    where the counter starts at zero anyway.
+    """
+    wants_whole_file = start == 0 and end == size - 1
+    if status == 200:
+        if wants_whole_file:
+            return
+        raise RangeNotHonoredError(
+            f"HTTP 200 (full body) for a partial request of bytes {start}-{end}"
+        )
+    if status != 206:
+        raise RangeNotHonoredError(f"expected HTTP 206 for bytes {start}-{end}, got {status}")
+    raw = headers.get("Content-Range")
+    if not raw:
+        raise RangeNotHonoredError("206 response without a Content-Range header")
+    match = _CONTENT_RANGE_RE.match(str(raw).strip())
+    if match is None:
+        raise RangeNotHonoredError(f"unparsable Content-Range {raw!r}")
+    got_start, got_end, total = int(match.group(1)), int(match.group(2)), match.group(3)
+    if got_start != start or got_end != end:
+        raise RangeNotHonoredError(
+            f"Content-Range covers {got_start}-{got_end}, requested {start}-{end}"
+        )
+    if total != "*" and int(total) != size:
+        raise RangeNotHonoredError(f"Content-Range total {total} does not match file size {size}")
+    declared = headers.get("Content-Length")
+    if declared is not None:
+        try:
+            declared_len = int(declared)
+        except (TypeError, ValueError):
+            raise RangeNotHonoredError(f"unparsable Content-Length {declared!r}") from None
+        if declared_len != end - start + 1:
+            raise RangeNotHonoredError(
+                f"Content-Length {declared_len} does not match the {end - start + 1}-byte range"
+            )
+
+
 class _StreamSource:
     """Resolved MEGA file ready to be streamed."""
 
@@ -78,7 +134,7 @@ class _StreamSource:
         url: str,
         api,
         password: str | None = None,
-        proxies: dict[str, str] | None = None,
+        selector=None,  # ProxySelector | None
     ):
         from ..core.crypto import a32_to_bytes, aes_key_wrap_decrypt, bytes_to_a32
         from ..core.links import (
@@ -104,22 +160,22 @@ class _StreamSource:
             parsed = resolve_encrypted_container_link(parsed)
         elif parsed.type == LinkType.MEGACRYPTER:
             try:
-                parsed = resolve_megacrypter_link(parsed, password=password)
+                parsed = resolve_megacrypter_link(parsed, password=password, selector=selector)
             except ValueError as exc:
-                mc_info = get_megacrypter_info(parsed, password=password, proxies=proxies)
+                mc_info = get_megacrypter_info(parsed, password=password, selector=selector)
                 if not mc_info.key or mc_info.size is None:
                     raise RuntimeError("MegaCrypter metadata is missing key or size") from exc
                 self.cdn_url = get_megacrypter_download_url(
                     parsed,
                     info=mc_info,
                     password=password,
-                    proxies=proxies,
+                    selector=selector,
                 )
                 self._resolver = lambda: get_megacrypter_download_url(
                     parsed,
                     info=mc_info,
                     password=password,
-                    proxies=proxies,
+                    selector=selector,
                 )
                 self.size = mc_info.size
                 self.aes_key, self.nonce, _ = unpack_file_key(str_to_a32(mc_info.key))
@@ -383,16 +439,33 @@ class _StreamingRequestHandler(BaseHTTPRequestHandler):
     def _open_upstream(
         self, source: _StreamSource, start: int, end: int
     ) -> requests.Response | None:
+        """Open a validated upstream range, or send a 502 and return None.
+
+        Two guarantees for the caller, which decrypts the body with an
+        AES-CTR counter derived from `start`:
+          * the request is proxied whenever force mode demands it (the
+            selector raises before any socket is opened, and a proxy failure
+            never falls back to a direct retry);
+          * the response really is the requested byte range, so plaintext can
+            never silently correspond to a different offset.
+        """
+        selector = self.server.selector
         for attempt in range(2):
+            try:
+                request_proxies, picked = selector.select()
+            except ProxyRequiredError as exc:
+                self.send_error(502, f"Upstream error: {exc}")
+                return None
             try:
                 resp = requests.get(
                     source.current_cdn_url(),
                     headers={"Range": f"bytes={start}-{end}"},
                     stream=True,
                     timeout=60,
-                    proxies=self.server.proxies,
+                    proxies=request_proxies,
                 )
             except requests.RequestException as e:
+                selector.report_failure(picked)
                 self.send_error(502, f"Upstream error: {e}")
                 return None
             if resp.status_code in URL_EXPIRY_STATUS and attempt == 0:
@@ -406,8 +479,18 @@ class _StreamingRequestHandler(BaseHTTPRequestHandler):
             if resp.status_code not in (200, 206):
                 status = resp.status_code
                 resp.close()
+                selector.report_failure(picked)
                 self.send_error(502, f"Upstream HTTP {status}")
                 return None
+            try:
+                validate_range_response(resp.status_code, resp.headers, start, end, source.size)
+            except RangeNotHonoredError as exc:
+                resp.close()
+                selector.report_failure(picked)
+                # Never serve a body that does not match the CTR counter.
+                self.send_error(502, f"Upstream ignored the requested range: {exc}")
+                return None
+            selector.report_success(picked)
             return resp
         self.send_error(502, "Upstream CDN URL expired")
         return None
@@ -421,14 +504,16 @@ class StreamingServer(ThreadingHTTPServer):
         api,
         host: str = "127.0.0.1",
         port: int = 8080,
-        proxies: dict[str, str] | None = None,
+        selector=None,  # ProxySelector | None
         auth_token: str | None = None,
         allow_query_token: bool = False,
     ):
         super().__init__((host, port), _StreamingRequestHandler)
         self.api = api
         self.source: _StreamSource | None = None
-        self.proxies = proxies
+        # Every upstream request selects its proxies here, so force mode is
+        # enforced on the CDN path too (it used to pass proxies=None).
+        self.selector = selector if selector is not None else ProxySelector()
         # When set, every request (GET/HEAD, including Range) must present this
         # token. Required for non-loopback binds; None means no authentication.
         self.auth_token = auth_token
@@ -437,7 +522,7 @@ class StreamingServer(ThreadingHTTPServer):
         self.allow_query_token = allow_query_token
 
     def set_source(self, url: str, password: str | None = None) -> None:
-        self.source = _StreamSource(url, self.api, password=password, proxies=self.proxies)
+        self.source = _StreamSource(url, self.api, password=password, selector=self.selector)
 
     def serve_forever_in_thread(self) -> threading.Thread:
         t = threading.Thread(target=self.serve_forever, daemon=True)

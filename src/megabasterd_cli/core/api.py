@@ -18,9 +18,74 @@ import random
 from typing import Any
 
 import requests
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from ..proxy.selector import ProxySelector
 from .errors import MegaError, RateLimitError, raise_for_code
+
+# --- Retry policy -----------------------------------------------------------
+# Actions whose replay has no side effects. Everything NOT listed here is
+# treated as MUTATING, so a newly added command can never accidentally inherit
+# unsafe retries by omission.
+READ_ONLY_ACTIONS = frozenset(
+    {
+        "ug",  # user info
+        "uq",  # quota / storage usage
+        "g",  # file download URL (public or owned)
+        "f",  # folder / node listing
+        "us0",  # pre-login salt lookup
+        # `us` (login) is retryable on purpose: it creates no user-visible
+        # state, returns the same credentials for the same inputs, and a
+        # flaky network would otherwise fail logins that are safe to repeat.
+        "us",
+    }
+)
+# Deliberately NOT read-only, so they take the mutating path:
+#   p   register uploaded node / create folder   d   delete (to trash)
+#   m   move node                                a   rename / set attributes
+#   l   export or unexport a public link         u   request an upload slot
+#   sml log out (destroys the session)
+
+
+# Bounded backoff shared by both retry paths. Read at call time so tests can
+# neutralize the sleeps without touching the policy itself.
+RETRY_ATTEMPTS = 5
+RETRY_WAIT = wait_exponential(multiplier=2, min=2, max=30)
+
+
+def _retrying(retry_on: tuple) -> Retrying:
+    return Retrying(
+        retry=retry_if_exception_type(retry_on),
+        stop=stop_after_attempt(RETRY_ATTEMPTS),
+        wait=RETRY_WAIT,
+        reraise=True,
+    )
+
+
+class AmbiguousMutationError(MegaError):
+    """A state-changing request failed after it may already have been applied.
+
+    Raised instead of silently replaying the command. The caller must reconcile
+    the remote state (or ask the user) before issuing another mutation.
+    """
+
+
+def _actions_of(commands) -> set[str]:
+    payload = commands if isinstance(commands, list) else [commands]
+    actions = set()
+    for command in payload:
+        if isinstance(command, dict):
+            action = command.get("a")
+            actions.add(action if isinstance(action, str) else "<unknown>")
+        else:
+            actions.add("<unknown>")
+    return actions
+
+
+def is_mutating(commands) -> bool:
+    """True unless EVERY action in the batch is known to be side-effect free."""
+    return not _actions_of(commands) <= READ_ONLY_ACTIONS
+
 
 log = logging.getLogger(__name__)
 
@@ -95,25 +160,10 @@ class MegaAPIClient:
         return dup
 
     def _request_proxies(self) -> tuple[dict[str, str] | None, str | None]:
-        """Per-request proxy decision for API calls (mirrors downloader logic).
-
-        Precedence:
-          1. Pool pick (smart proxy)
-          2. Static proxies (from manual --proxy)
-          3. Refuse if force_proxy is on, else direct
-        """
-        if self.proxy_pool is not None:
-            entry = self.proxy_pool.pick()
-            if entry is not None:
-                return {"http": entry.url, "https": entry.url}, entry.url
-        if self._static_proxies:
-            return self._static_proxies, None
-        if self.force_proxy:
-            raise MegaError(
-                message="force_smart_proxy is on but no proxy is available "
-                "for an API call (pool empty, no --proxy)"
-            )
-        return None, None
+        """Per-request proxy decision, delegated to the shared selector."""
+        return ProxySelector(
+            pool=self.proxy_pool, static=self._static_proxies, force=self.force_proxy
+        ).select()
 
     # ------------------------------------------------------------------
     # Session
@@ -150,13 +200,71 @@ class MegaAPIClient:
                 params.append(f"{k}={v}")
         return f"{self.api_base}/cs?" + "&".join(params)
 
-    @retry(
-        retry=retry_if_exception_type((RateLimitError, requests.ConnectionError, requests.Timeout)),
-        stop=stop_after_attempt(5),
-        wait=wait_exponential(multiplier=2, min=2, max=30),
-        reraise=True,
-    )
     def request(
+        self,
+        commands: list[dict[str, Any]] | dict[str, Any],
+        extra_params: dict[str, str] | None = None,
+    ) -> Any:
+        """Send an API request under the retry policy its actions deserve.
+
+        Read-only actions keep bounded retries on any transport error. A
+        MUTATING action is never blindly replayed after the server may already
+        have committed it: see `_send_mutating`.
+        """
+        if is_mutating(commands):
+            return self._send_mutating(commands, extra_params)
+        return self._send_retrying(commands, extra_params)
+
+    def _send_mutating(
+        self,
+        commands: list[dict[str, Any]] | dict[str, Any],
+        extra_params: dict[str, str] | None = None,
+    ) -> Any:
+        """Send a state-changing request with provably-safe retries only.
+
+        Retried:
+          * RateLimitError - MEGA rate-limiting (-4) means the server DECLINED to
+            process the command, so nothing was committed;
+          * ConnectTimeout - the connection was never established, so the
+            request was never sent.
+
+        Not retried: a read timeout or a connection dropped mid-flight. Those
+        are ambiguous - the server may have applied the change already - and
+        replaying them is how duplicate nodes, double imports and double moves
+        happen. The caller gets AmbiguousMutationError and decides.
+        """
+        try:
+            return _retrying((RateLimitError, requests.ConnectTimeout))(
+                self._send, commands, extra_params
+            )
+        except requests.ConnectTimeout:
+            raise
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            action = ",".join(sorted(_actions_of(commands)))
+            log.warning(
+                "Mutating request %r failed ambiguously (%s); not retrying",
+                action,
+                type(exc).__name__,
+            )
+            raise AmbiguousMutationError(
+                message=(
+                    f"The connection failed while a state-changing request ({action}) was "
+                    "in flight, so MEGA may or may not have applied it. It was NOT retried "
+                    "automatically; re-check the remote state before trying again."
+                )
+            ) from exc
+
+    def _send_retrying(
+        self,
+        commands: list[dict[str, Any]] | dict[str, Any],
+        extra_params: dict[str, str] | None = None,
+    ) -> Any:
+        """Bounded retries for read-only actions: replay is free of side effects."""
+        return _retrying((RateLimitError, requests.ConnectionError, requests.Timeout))(
+            self._send, commands, extra_params
+        )
+
+    def _send(
         self,
         commands: list[dict[str, Any]] | dict[str, Any],
         extra_params: dict[str, str] | None = None,

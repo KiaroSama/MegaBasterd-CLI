@@ -25,32 +25,36 @@ def test_stream_source_tolerates_missing_file_attrs():
     assert source.size == 1
 
 
-def test_megacrypter_stream_refresh_uses_configured_proxies(monkeypatch):
+def test_megacrypter_stream_refresh_uses_the_configured_proxy_selector(monkeypatch):
+    """Every MegaCrypter call - including each CDN-URL refresh - must carry the
+    command's ProxySelector, so proxy config AND force policy reach them."""
     import megabasterd_cli.core.links as links
+    from megabasterd_cli.proxy.selector import ProxySelector
 
     calls = []
-    proxies = {"https": "socks5://127.0.0.1:9050"}
+    selector = ProxySelector(static={"https": "socks5://127.0.0.1:9050"}, force=True)
 
-    def fake_resolve(parsed, password=None):
+    def fake_resolve(parsed, password=None, selector=None, timeout=30):
         raise ValueError("no inline link")
 
-    def fake_info(parsed, password=None, proxies=None):
-        calls.append(("info", proxies))
+    def fake_info(parsed, password=None, selector=None):
+        calls.append(("info", selector))
         return MegaCrypterInfo(name="video.mkv", size=1, key=b64_url_encode(b"\0" * 32))
 
-    def fake_download_url(parsed, info=None, password=None, proxies=None):
-        calls.append(("download", proxies))
+    def fake_download_url(parsed, info=None, password=None, selector=None):
+        calls.append(("download", selector))
         return "https://example.invalid/cdn"
 
     monkeypatch.setattr(links, "resolve_megacrypter_link", fake_resolve)
     monkeypatch.setattr(links, "get_megacrypter_info", fake_info)
     monkeypatch.setattr(links, "get_megacrypter_download_url", fake_download_url)
 
-    source = _StreamSource("mc://example.invalid/token", api=object(), proxies=proxies)
+    source = _StreamSource("mc://example.invalid/token", api=object(), selector=selector)
     source.refresh_cdn_url()
 
     assert calls == [
-        ("info", proxies),
-        ("download", proxies),
-        ("download", proxies),
+        ("info", selector),
+        ("download", selector),
+        ("download", selector),
     ]
+    assert selector.select()[0] == {"https": "socks5://127.0.0.1:9050"}

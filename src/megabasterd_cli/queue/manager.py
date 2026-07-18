@@ -7,7 +7,9 @@ them up across runs. Each item is one download or upload job.
 from __future__ import annotations
 
 import base64
+import binascii
 import contextlib
+import datetime as dt
 import json
 import logging
 import os
@@ -21,6 +23,7 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from ..utils.corruption import preserve_corrupt_file
 from ..utils.filelock import FileLock, FileLockError
 
 log = logging.getLogger(__name__)
@@ -69,6 +72,38 @@ class JobType(str, Enum):
     UPLOAD = "upload"
 
 
+# Statuses that own a finish time. `update_status` writes `finished_iso` for
+# exactly these.
+_TERMINAL_STATUSES = frozenset(
+    {JobStatus.DONE.value, JobStatus.FAILED.value, JobStatus.CANCELED.value}
+)
+
+
+def _validate_iso_timestamp(name: str, value) -> None:
+    """Require a timezone-aware ISO-8601 timestamp, or the legacy empty string.
+
+    Everything this CLI writes is `datetime.now(timezone.utc).isoformat()`, so
+    a naive or unparsable value means the file was hand-edited or damaged. The
+    empty string stays valid: files written before `created_iso` existed carry
+    it, and the next save fills it in.
+    """
+    if value is None or value == "":
+        return
+    if not isinstance(value, str):
+        raise QueueCorruptionError(f"queue entry field {name!r} must be a string")
+    text = value[:-1] + "+00:00" if value.endswith(("Z", "z")) else value
+    try:
+        parsed = dt.datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise QueueCorruptionError(
+            f"queue entry field {name!r} is not a valid ISO-8601 timestamp"
+        ) from exc
+    if parsed.tzinfo is None:
+        raise QueueCorruptionError(
+            f"queue entry field {name!r} must be timezone-aware (got a naive timestamp)"
+        )
+
+
 @dataclass
 class QueueItem:
     id: str
@@ -88,6 +123,13 @@ class QueueItem:
     # proved it was alive. Absent in legacy queue files (safe default None).
     run_id: str | None = None
     heartbeat_iso: str | None = None
+
+    def __post_init__(self) -> None:
+        # Fields written by a NEWER version, carried through untouched so a
+        # round trip never silently drops them. Not persisted as a field
+        # itself: `QueueManager._serialize` re-emits the contents.
+        self._extra: dict = {}
+        self._enc_password: str | None = None
 
     @staticmethod
     def new_id() -> str:
@@ -234,6 +276,7 @@ class QueueManager:
         # Set by `_load` when the on-disk queue is malformed/invalid-schema.
         self._corrupt = False
         self._corrupt_reason = ""
+        self._corrupt_backup: Path | None = None
         with self._locked():
             self._load()
 
@@ -264,13 +307,16 @@ class QueueManager:
         enc = raw.pop("enc_password", None)
         legacy_plaintext = raw.pop("password", None)
         item = QueueItem(**{k: v for k, v in raw.items() if k in self._field_names})
+        # Forward compatibility: fields written by a NEWER version are carried
+        # through untouched instead of being silently dropped on the next save.
+        item._extra = {k: v for k, v in raw.items() if k not in self._field_names}  # noqa: SLF001
         # Preserve the raw encrypted token so an unrecoverable secret is never
         # silently dropped when the queue is rewritten.
-        item._enc_password = enc  # type: ignore[attr-defined]
+        item._enc_password = enc
         if enc:
             try:
                 item.password = self.secret_box.decrypt(enc)
-                item._enc_password = None  # type: ignore[attr-defined]
+                item._enc_password = None
             except Exception:  # noqa: BLE001 - never expose the secret/key error
                 log.warning(
                     "Could not unlock the stored password for queue item %s; "
@@ -296,6 +342,9 @@ class QueueManager:
         else:
             # Pass through an unrecoverable token unchanged rather than losing it.
             data["enc_password"] = getattr(item, "_enc_password", None)
+        # Re-emit unknown fields last so they cannot shadow a known one.
+        for key, value in getattr(item, "_extra", {}).items():
+            data.setdefault(key, value)
         return data
 
     def _mark_corrupt(self, reason: str, data: bytes | None) -> None:
@@ -307,27 +356,32 @@ class QueueManager:
         is created while integrity is unknown.
         """
         self._corrupt = True
-        self._corrupt_reason = (
-            f"The transfer queue file is corrupt and was preserved: {reason}. "
-            f"A backup was saved next to {self.path.name}; resolve it with "
-            "`mb queue reset` (discards jobs) or restore a good copy."
-        )
         self._had_encrypted_secrets = True  # refuse any key creation
         self.items = []
-        # Back up once: skip if a corrupt-copy already exists for this file.
-        existing = list(self.path.parent.glob(self.path.name + ".corrupt.*"))
-        if existing or data is None:
-            return
-        stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
-        backup = self.path.parent / f"{self.path.name}.corrupt.{stamp}.json"
-        with contextlib.suppress(OSError):
-            backup.write_bytes(data)  # byte-for-byte, encrypted blobs intact
-            log.warning("Preserved corrupt queue as %s", backup.name)
+        # Preserve THIS episode's bytes (deduplicated by content hash, so a
+        # backup from an earlier, different corruption never suppresses it).
+        # `_load` always runs under the file lock, so concurrent detectors
+        # cannot duplicate or lose the backup.
+        self._corrupt_backup = preserve_corrupt_file(self.path, data) if data is not None else None
+        if self._corrupt_backup is not None:
+            self._corrupt_reason = (
+                f"The transfer queue file is corrupt and was preserved: {reason}. "
+                f"A backup was saved as {self._corrupt_backup.name}; resolve it with "
+                "`mb queue reset` (discards jobs) or restore a good copy."
+            )
+        else:
+            # Never claim a backup that was not written.
+            self._corrupt_reason = (
+                f"The transfer queue file is corrupt and was preserved: {reason}. "
+                "A backup could NOT be written; fix the permissions or move the file "
+                "aside, then run `mb queue reset`."
+            )
 
     def _load(self) -> None:
         self._needs_migration = False
         self._corrupt = False
         self._corrupt_reason = ""
+        self._corrupt_backup = None
         # Conservative default: assume secrets may exist until we have parsed
         # the file, so we never auto-create a key over a malformed queue.
         self._had_encrypted_secrets = False
@@ -350,6 +404,7 @@ class QueueManager:
             return
         try:
             validated = [self._validate_raw_item(entry) for entry in data]
+            self._validate_unique_ids(validated)
         except QueueCorruptionError as exc:
             self._mark_corrupt(str(exc), raw)
             return
@@ -424,14 +479,56 @@ class QueueManager:
         size = entry.get("size", 0)
         if isinstance(size, bool) or not isinstance(size, int) or size < 0:
             raise QueueCorruptionError("queue entry field 'size' must be an integer >= 0")
-        created = entry.get("created_iso", "")
-        if not isinstance(created, str):
-            raise QueueCorruptionError("queue entry field 'created_iso' must be a string")
         for name in self._OPTIONAL_STR_ITEM_FIELDS:
             value = entry.get(name)
             if value is not None and not isinstance(value, str):
                 raise QueueCorruptionError(f"queue entry field {name!r} must be a string or null")
+        # `source` is operationally required: a job with no URL/path can never
+        # run and the CLI never writes one. `destination` is NOT checked - an
+        # empty destination is a documented, CLI-written value meaning "use
+        # config download_path" (upload jobs always store it empty).
+        if not entry["source"].strip():
+            raise QueueCorruptionError("queue entry field 'source' must not be blank")
+        # Timestamps: strict timezone-aware ISO-8601. The empty string is the
+        # documented legacy value (older files predate created_iso) and is
+        # migrated on the next save; anything else malformed is corruption.
+        for name in ("created_iso", "finished_iso", "heartbeat_iso"):
+            _validate_iso_timestamp(name, entry.get(name))
+        # State consistency: a lease belongs to an ACTIVE job only. Every
+        # writer (`update_status`, `retry`, `claim_next`) already clears these
+        # on any other status, so their presence means the file was edited or
+        # damaged. An active job with no lease is NOT rejected: that is the
+        # legacy/crashed-owner shape that `recover_interrupted` handles.
+        if status != JobStatus.ACTIVE.value:
+            for name in ("run_id", "heartbeat_iso"):
+                if entry.get(name) is not None:
+                    raise QueueCorruptionError(
+                        f"queue entry with status {status!r} must not carry {name!r}"
+                    )
+        if status not in _TERMINAL_STATUSES and entry.get("finished_iso") is not None:
+            raise QueueCorruptionError(
+                f"queue entry with status {status!r} must not carry 'finished_iso'"
+            )
+        enc = entry.get("enc_password")
+        if enc is not None:
+            try:
+                base64.b64decode(enc, validate=True)
+            except (ValueError, binascii.Error) as exc:
+                raise QueueCorruptionError(
+                    "queue entry field 'enc_password' is not valid base64"
+                ) from exc
         return entry
+
+    @staticmethod
+    def _validate_unique_ids(entries: list[dict]) -> None:
+        """Job ids address jobs: `remove`/`retry`/`update_status` would act on
+        an arbitrary one of a duplicated pair, so duplicates are corruption."""
+        seen: set[str] = set()
+        for entry in entries:
+            item_id = entry["id"]
+            if item_id in seen:
+                raise QueueCorruptionError(f"queue contains duplicate job id {item_id!r}")
+            seen.add(item_id)
 
     def save(self) -> None:
         with self._locked():
@@ -669,6 +766,11 @@ class QueueManager:
     @property
     def is_corrupt(self) -> bool:
         return self._corrupt
+
+    @property
+    def corrupt_backup(self) -> Path | None:
+        """Backup holding THIS episode's bytes, or None if none was written."""
+        return self._corrupt_backup
 
     def reset(self) -> None:
         """Explicit recovery: discard a corrupt/current queue and start empty.

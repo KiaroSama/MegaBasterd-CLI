@@ -227,3 +227,164 @@ def test_store_reset_raises_config_lock_error(tmp_path, monkeypatch):
     _lock_stuck(monkeypatch)
     with pytest.raises(ConfigLockError):
         store.reset()
+
+
+# ---------------------------------------------------------------------------
+# The write bypass: save() on a FRESH store, before any explicit load().
+#
+# save() used to call _ensure_writable() while `_corrupt` was still False
+# (nothing had been loaded yet); reading `self.config` then lazily loaded the
+# corrupt file and returned defaults, which were written over the original.
+# ---------------------------------------------------------------------------
+
+
+def test_fresh_store_save_cannot_overwrite_a_corrupt_file(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_bytes(MALFORMED)
+    store = ConfigStore(path=path, lock_timeout=0.5)  # never load()ed
+    with pytest.raises(ConfigCorruptionError):
+        store.save()
+    assert path.read_bytes() == MALFORMED
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda s: s.save(),
+        lambda s: s.set("max_workers", "4"),
+        lambda s: s.unset("default_account"),
+        lambda s: s.migrate(),
+        lambda s: s.reset(),
+    ],
+    ids=["save", "set", "unset", "migrate", "reset"],
+)
+def test_every_entry_point_refuses_on_a_fresh_store(tmp_path, mutate):
+    path = tmp_path / "config.json"
+    path.write_bytes(MALFORMED)
+    store = ConfigStore(path=path, lock_timeout=0.5)
+    with pytest.raises(ConfigCorruptionError):
+        mutate(store)
+    assert path.read_bytes() == MALFORMED
+
+
+def test_save_re_reads_the_file_written_by_another_process(tmp_path):
+    """A store built while the file was valid must not blindly overwrite a
+    file that a second process corrupted in the meantime."""
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"max_workers": 7}), encoding="utf-8")
+    store = ConfigStore(path=path, lock_timeout=0.5)
+    store.load()
+    assert not store.is_corrupt
+    path.write_bytes(MALFORMED)  # another process corrupts it
+    with pytest.raises(ConfigCorruptionError):
+        store.save()
+    assert path.read_bytes() == MALFORMED
+
+
+def test_serialization_failure_leaves_the_original_intact(tmp_path):
+    path = tmp_path / "config.json"
+    original = json.dumps({"max_workers": 7})
+    path.write_text(original, encoding="utf-8")
+    store = ConfigStore(path=path, lock_timeout=0.5)
+    store.load()
+    # A value json.dumps cannot encode: serialization must fail BEFORE the
+    # filesystem is touched.
+    store.config.user_agent = {1, 2, 3}  # a set is not JSON-serializable
+    with pytest.raises(TypeError):
+        store.save()
+    assert path.read_text(encoding="utf-8") == original
+    assert not list(tmp_path.glob("config.json.*.tmp")), "no temp file may be left behind"
+
+
+# ---------------------------------------------------------------------------
+# Issue 11 re-verification: every mutation entry point, library AND CLI, must
+# turn a lock timeout into a controlled domain error - never a traceback, a
+# partial write, or a misleading success message.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda s: s.save(),
+        lambda s: s.set("max_workers", "4"),
+        lambda s: s.unset("default_account"),
+        lambda s: s.migrate(),
+        lambda s: s.reset(),
+        lambda s: s.recover(),
+    ],
+    ids=["save", "set", "unset", "migrate", "reset", "recover"],
+)
+def test_library_entry_points_raise_config_lock_error(tmp_path, monkeypatch, mutate):
+    path = tmp_path / "config.json"
+    original = json.dumps({"max_workers": 7})
+    path.write_text(original, encoding="utf-8")
+    store = ConfigStore(path=path, lock_timeout=0.1)
+    _lock_stuck(monkeypatch)
+    with pytest.raises(ConfigLockError):
+        mutate(store)
+    assert path.read_text(encoding="utf-8") == original, "no partial write may happen"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["config", "set", "max_workers", "4"],
+        ["config", "unset", "default_account"],
+        ["config", "migrate"],
+        ["config", "reset"],
+        ["config", "recover", "--reset"],
+    ],
+)
+def test_cli_entry_points_exit_non_zero_on_lock_timeout(valid_env, monkeypatch, args):
+    before = valid_env.read_bytes()
+    _lock_stuck(monkeypatch)
+    result = _runner().invoke(cli, args, input="y\n")
+    combined = result.output + (result.stderr or "")
+    assert result.exit_code != 0
+    assert "Traceback" not in combined
+    assert (
+        "updated" not in combined and "reset to defaults" not in combined
+    ), "a lock failure must not print a success message"
+    assert valid_env.read_bytes() == before
+
+
+def test_backup_creation_survives_lock_contention(tmp_path, monkeypatch):
+    """A read path may not die because the backup lock is contended, and the
+    corrupt original must still be preserved untouched."""
+    path = tmp_path / "config.json"
+    path.write_bytes(MALFORMED)
+    store = ConfigStore(path=path, lock_timeout=0.1)
+    _lock_stuck(monkeypatch)
+    store.load()  # must not raise
+    assert store.is_corrupt
+    assert path.read_bytes() == MALFORMED
+
+
+def test_concurrent_recovery_leaves_one_valid_config(tmp_path):
+    """Several threads recovering the same corrupt file must serialize."""
+    import threading
+
+    path = tmp_path / "config.json"
+    path.write_bytes(MALFORMED)
+    stores = [ConfigStore(path=path, lock_timeout=10.0) for _ in range(5)]
+    barrier = threading.Barrier(len(stores))
+    errors: list[BaseException] = []
+
+    def recover(store):
+        try:
+            barrier.wait()
+            store.recover()
+        except BaseException as exc:  # noqa: BLE001 - recorded and asserted below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=recover, args=(s,)) for s in stores]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, f"concurrent recovery raised: {errors}"
+    assert json.loads(path.read_text(encoding="utf-8"))["max_workers"] == 8
+    backups = list(tmp_path.glob("config.json.corrupt.*"))
+    assert len(backups) == 1 and backups[0].read_bytes() == MALFORMED

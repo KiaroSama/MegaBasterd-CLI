@@ -205,7 +205,10 @@ def proxy_serve(ctx: click.Context, port: int | None, password: str | None, any_
     help="Maximum number of proxies to add from the fetched list.",
 )
 @click.option("--timeout", type=int, default=20, show_default=True)
-def proxy_fetch(protocol: str, source: str | None, limit: int, timeout: int) -> None:
+@click.pass_context
+def proxy_fetch(
+    ctx: click.Context, protocol: str, source: str | None, limit: int, timeout: int
+) -> None:
     """Pull a list of free proxies from a public source and add them to the pool."""
     import requests
 
@@ -215,12 +218,22 @@ def proxy_fetch(protocol: str, source: str | None, limit: int, timeout: int) -> 
         return
 
     pool = _load_pool()
+    # Fetching the proxy list is itself outbound traffic, so it obeys the same
+    # policy: under force mode it routes through an already-known proxy and is
+    # refused when none exists (bootstrap a first proxy with `mb proxy add`).
+    from ..proxy.selector import ProxyRequiredError, ProxySelector
+
+    selector = ProxySelector.from_config(ctx.obj["config"])
     added = 0
     errors: list[str] = []
     for url in sources:
         try:
-            resp = requests.get(url, timeout=timeout)
+            request_proxies, _picked = selector.select()
+            resp = requests.get(url, timeout=timeout, proxies=request_proxies)
             resp.raise_for_status()
+        except ProxyRequiredError as exc:
+            print_error(str(exc))
+            ctx.exit(1)
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{url}: {exc}")
             continue

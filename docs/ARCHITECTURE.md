@@ -137,6 +137,67 @@ start. The `SmartProxyPool` is the only intentionally shared object (every
 method takes its internal lock). The aggregate `TokenBucket` limiter is also
 shared by design and is thread-safe.
 
+## Proxy Selection and Force Mode
+
+`proxy/selector.py` is the single per-request proxy authority. `ProxySelector`
+picks (1) a SmartProxyPool entry, (2) the static `--proxy` dict, or (3) refuses
+with `ProxyRequiredError` when `force_smart_proxy` is on and nothing is
+available - before any socket is opened, and with no direct fallback after a
+proxy failure. Every outbound path selects here: API calls, chunk transfers,
+the streaming CDN reads, MegaCrypter/DLC/ELC resolution, and `proxy fetch`.
+`MegaAPIClient`, `MegaDownloader`, and `MegaUploader` delegate to it instead of
+each keeping a private copy of the precedence rules.
+
+## Streaming Range Validation
+
+A nonzero Range decrypted at a nonzero AES-CTR counter is only correct if the
+server honored the range. `streaming/server.validate_range_response` therefore
+requires HTTP 206 with a `Content-Range` whose start, end, and total match the
+request (and a `Content-Length` that matches the span) before a byte is
+streamed. HTTP 200 is accepted only for a whole-file request, where the counter
+starts at zero anyway. Anything else fails with 502 rather than serving
+plaintext that belongs to a different offset.
+
+## API Retry Policy
+
+`core/api.py` classifies every request: actions in `READ_ONLY_ACTIONS` keep
+bounded retries on any transport error, and everything else - including any
+action not yet listed, so new commands fail safe - is MUTATING. A mutating
+request is retried only when the failure is provably pre-commit (MEGA
+rate-limiting, which means the server declined it, or a `ConnectTimeout`, which
+means it was never sent). An ambiguous read timeout or mid-flight disconnect
+raises `AmbiguousMutationError` instead of replaying a command the server may
+already have applied.
+
+## Resume State Integrity
+
+`core/state.py` validates a `.mbstate` document before trusting it: object
+root, known `transfer_type`, non-negative sizes, integer non-duplicate chunk
+indexes (rejecting bools), fixed-length valid hex MACs with no orphan entries,
+and an object `metadata`. Invalid hex is rejected at load time rather than
+escaping later as a raw `ValueError` during verification. An untrustworthy file
+is quarantined byte-for-byte and the transfer restarts fresh, which is the same
+outcome `auto_resume = false` produces. Saves hold both the in-process mutex
+and a cross-process advisory lock.
+
+## Destination Reservation
+
+`utils/helpers.claim_destination` reserves one destination for exactly one
+transfer across PROCESSES, not just threads: it holds an advisory lock on a
+`.mbclaim` sidecar for the transfer's lifetime and re-checks existence under
+that lock (closing the TOCTOU window). Because the lock is advisory, the OS
+drops it if the owner crashes, so a stale reservation can never permanently
+block a valid future transfer.
+
+## Corrupt-File Preservation
+
+`utils/corruption.preserve_corrupt_file` is shared by the config store, the
+queue, and resume state. Backups are deduplicated by CONTENT HASH, not by "a
+backup already exists", so a second, different corruption episode is never
+suppressed by an older one; the filename carries a timestamp plus the digest,
+the file is created with `O_CREAT|O_EXCL`, and the caller is told `None` when
+nothing could be written so no message claims a backup that does not exist.
+
 ## Shared File Lock
 
 `utils/filelock.py` provides one bounded, cross-platform advisory lock
