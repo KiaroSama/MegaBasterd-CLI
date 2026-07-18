@@ -20,6 +20,20 @@ from megabasterd_cli.core.uploader import MegaUploader, UploadResult
 FILE_URL = "https://mega.nz/file/abc123#supersecretkey"
 
 
+def _runner() -> CliRunner:
+    """CliRunner with stdout/stderr separated across click versions.
+
+    click < 8.2 (installed on Python 3.9) mixes stderr into stdout by
+    default, which would fold the human progress lines into the JSONL
+    stream; `mix_stderr=False` restores the real-terminal separation.
+    click >= 8.2 removed the parameter (streams are always separate).
+    """
+    try:
+        return CliRunner(mix_stderr=False)
+    except TypeError:
+        return CliRunner()
+
+
 @pytest.fixture()
 def cli_env(tmp_path, monkeypatch):
     monkeypatch.setenv("MEGABASTERD_USER_DIR", str(tmp_path / "user"))
@@ -42,7 +56,7 @@ def test_download_json_success_record(cli_env, monkeypatch):
         return DownloadResult(path=path, size=2, elapsed_seconds=1.25, integrity_ok=True)
 
     monkeypatch.setattr(MegaDownloader, "download_link", ok)
-    runner = CliRunner()
+    runner = _runner()
     result = runner.invoke(cli, ["download", "--json", FILE_URL, "-o", str(cli_env / "out")])
     assert result.exit_code == 0, result.output
     records = _records(result.stdout)
@@ -62,7 +76,7 @@ def test_download_json_failure_record_and_exit_code(cli_env, monkeypatch):
         raise TransferError(message="simulated failure")
 
     monkeypatch.setattr(MegaDownloader, "download_link", boom)
-    runner = CliRunner()
+    runner = _runner()
     result = runner.invoke(cli, ["download", "--json", FILE_URL, "-o", str(cli_env / "out")])
     assert result.exit_code == 1
     records = _records(result.stdout)
@@ -79,7 +93,7 @@ def test_download_json_human_messages_go_to_stderr(cli_env, monkeypatch):
         return DownloadResult(path=path, size=1, elapsed_seconds=0.1, integrity_ok=True)
 
     monkeypatch.setattr(MegaDownloader, "download_link", ok)
-    runner = CliRunner()
+    runner = _runner()
     result = runner.invoke(cli, ["download", "--json", FILE_URL, "-o", str(cli_env / "out")])
     assert result.exit_code == 0
     # stdout is pure JSONL (parse would fail otherwise); the human success
@@ -113,7 +127,7 @@ def test_upload_json_success_record_with_share_link(cli_env, monkeypatch, tmp_pa
     monkeypatch.setattr(MegaUploader, "upload_file", ok)
     src = tmp_path / "up.bin"
     src.write_bytes(b"data")
-    runner = CliRunner()
+    runner = _runner()
     result = runner.invoke(
         cli,
         [
@@ -161,7 +175,7 @@ def test_upload_json_failure_record(cli_env, monkeypatch, tmp_path):
     monkeypatch.setattr(MegaUploader, "upload_file", boom)
     src = tmp_path / "up.bin"
     src.write_bytes(b"data")
-    runner = CliRunner()
+    runner = _runner()
     result = runner.invoke(
         cli,
         ["upload", "--json", str(src), "--vault-passphrase", "pp", "-a", "acc@example.com"],
@@ -178,7 +192,7 @@ def test_human_mode_remains_backward_compatible(cli_env, monkeypatch):
         return DownloadResult(path=path, size=1, elapsed_seconds=0.1, integrity_ok=True)
 
     monkeypatch.setattr(MegaDownloader, "download_link", ok)
-    runner = CliRunner()
+    runner = _runner()
     result = runner.invoke(cli, ["-q", "download", FILE_URL, "-o", str(cli_env / "out")])
     assert result.exit_code == 0
     # Human mode: no JSONL records on stdout.
