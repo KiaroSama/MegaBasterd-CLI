@@ -12,6 +12,21 @@ from ..streaming.server import StreamingServer
 from ..ui.prompts import print_error, print_info
 
 
+def _dialable_url(bound_host: str, port: int) -> str:
+    """Build a URL a client can actually open.
+
+    Two traps: a wildcard bind ("0.0.0.0" / "::") is a listen address, not a
+    destination, and an IPv6 literal must be bracketed or the port digits fuse
+    into the address ("http://::1:8080/").
+    """
+    host = bound_host.strip().strip("[]") or "0.0.0.0"
+    if host in ("0.0.0.0", "::"):
+        host = "::1" if host == "::" else "127.0.0.1"
+    if ":" in host:
+        host = f"[{host}]"
+    return f"http://{host}:{port}/"
+
+
 @click.command("stream", short_help="Stream a MEGA file over a local HTTP server.")
 @click.argument("url")
 @click.option("-p", "--port", type=int, default=None, help="Local HTTP port.")
@@ -129,9 +144,11 @@ def stream(
         api.close()
         return
 
-    bound_host, bound_port = server.server_address
-    display_host = host if bound_host in ("0.0.0.0", "::") else bound_host
-    base_url = f"http://{display_host}:{bound_port}/"
+    # An AF_INET6 server_address is a 4-tuple, so never unpack it as a pair.
+    bound_host, bound_port = server.server_address[0], server.server_address[1]
+    base_url = _dialable_url(str(bound_host), int(bound_port))
+    if str(bound_host).strip("[]") in ("0.0.0.0", "::"):
+        print_info("Bound to all interfaces; reachable on this host's LAN addresses too.")
     if auth_token and allow_query_token:
         print_info(f"Streaming at {base_url}?token={auth_token}  (Ctrl+C to stop)")
     else:

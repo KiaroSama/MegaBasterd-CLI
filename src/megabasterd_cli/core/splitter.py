@@ -16,16 +16,62 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+
+# Same temp-file-then-os.replace helper the Crypter uses, including its Windows
+# PermissionError retry and its BaseException cleanup. Reused rather than copied
+# so both paths keep the same durability guarantees.
+from .crypter import _atomic_output
 
 _PART_RE = re.compile(r"^(?P<base>.+)\.part(?P<idx>\d+)-(?P<total>\d+)$")
 
 
 class SplitterError(Exception):
     pass
+
+
+class SplitterAliasError(SplitterError):
+    """An output path is (or resolves to) one of the input files.
+
+    Refused before anything is written: merging into one of its own parts
+    truncated that part and then fed the merge its own tail, destroying the
+    input and growing the file without bound.
+    """
+
+
+def _is_same_file(a: Path, b: Path) -> bool:
+    """True when `a` and `b` name the same file, even if one does not exist yet.
+
+    `os.path.samefile` is the authoritative test - it sees through hard links,
+    symlinks and case-insensitive filesystems - but it needs both paths to
+    exist, and a merge target usually does not. Fall back to comparing fully
+    resolved paths in that case.
+    """
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+def _reject_aliases(outputs: Iterable[Path], inputs: Iterable[Path], action: str) -> None:
+    """Refuse, before writing anything, to use one of our inputs as an output.
+
+    Truncating an input and then reading it back is a self-feeding loop: the
+    merge appends to the very file it is still reading, so the file grows
+    without bound until the disk fills, and the original part is gone.
+    """
+    sources = list(inputs)
+    for out in outputs:
+        for src in sources:
+            if _is_same_file(out, src):
+                raise SplitterAliasError(
+                    f"{action} refused: output {out} is the same file as input {src}"
+                )
 
 
 @dataclass
@@ -60,14 +106,18 @@ def split_file(
     out_dir = output_dir or source.parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    parts = [out_dir / f"{source.name}.part{idx}-{num_parts}" for idx in range(1, num_parts + 1)]
+    sha_path = out_dir / f"{source.name}.sha1"
+    _reject_aliases([*parts, sha_path], [source], "split")
+
     sha = hashlib.sha1()
-    parts: list[Path] = []
     written = 0
     with open(source, "rb") as fin:
-        for idx in range(1, num_parts + 1):
+        for part_path in parts:
             remaining = bytes_per_part
-            part_path = out_dir / f"{source.name}.part{idx}-{num_parts}"
-            with open(part_path, "wb") as fout:
+            # Atomic: an interrupt must not leave a truncated part that looks
+            # exactly like a complete one.
+            with _atomic_output(part_path) as fout:
                 while remaining > 0:
                     block = fin.read(min(1 << 20, remaining))
                     if not block:
@@ -78,10 +128,10 @@ def split_file(
                     remaining -= len(block)
                     if on_progress:
                         on_progress(written, total)
-            parts.append(part_path)
 
     digest = sha.hexdigest()
-    (out_dir / f"{source.name}.sha1").write_text(digest + "\n", encoding="ascii")
+    with _atomic_output(sha_path) as fout:
+        fout.write((digest + "\n").encode("ascii"))
     return SplitResult(parts=parts, sha1=digest, total_bytes=total)
 
 
@@ -114,12 +164,17 @@ def merge_parts(
         parts.append(part)
 
     target = output or part_dir / base
-    target.parent.mkdir(parents=True, exist_ok=True)
+    sha_file = part_dir / f"{base}.sha1"
+    _reject_aliases([target], [*parts, sha_file], "merge")
+
+    expected: str | None = None
+    if verify_sha1 and sha_file.is_file():
+        expected = sha_file.read_text(encoding="ascii").strip().split()[0].lower()
 
     sha = hashlib.sha1()
     total_size = sum(p.stat().st_size for p in parts)
     written = 0
-    with open(target, "wb") as fout:
+    with _atomic_output(target) as fout:
         for part in parts:
             with open(part, "rb") as fin:
                 while True:
@@ -132,12 +187,12 @@ def merge_parts(
                     if on_progress:
                         on_progress(written, total_size)
 
-    sha_file = part_dir / f"{base}.sha1"
-    if verify_sha1 and sha_file.is_file():
-        expected = sha_file.read_text(encoding="ascii").strip().split()[0].lower()
-        got = sha.hexdigest().lower()
-        if expected != got:
-            raise SplitterError(f"SHA-1 mismatch: expected {expected}, got {got}")
+        # Inside the atomic block on purpose: a bad checksum must abort the
+        # replace, so a pre-existing target survives a failed merge intact.
+        if expected is not None:
+            got = sha.hexdigest().lower()
+            if expected != got:
+                raise SplitterError(f"SHA-1 mismatch: expected {expected}, got {got}")
 
     if delete_parts:
         for part in parts:

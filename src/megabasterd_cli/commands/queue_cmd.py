@@ -5,23 +5,46 @@ from __future__ import annotations
 import contextlib
 import logging
 import threading
+import time
 import uuid
+from typing import Protocol
 
 import click
 
 from ..config import data_dir
 from ..queue.manager import (
+    LEASE_SECONDS,
     JobStatus,
     JobType,
     QueueCorruptionError,
     QueueItem,
+    QueueLeaseLostError,
     QueueLockError,
     QueueManager,
+    QueueOwnershipError,
 )
 from ..ui.prompts import confirm, print_error, print_success
 from ..ui.tables import render_queue
 
+
+class _Stoppable(Protocol):
+    """The slice of MegaDownloader/MegaUploader the heartbeat needs.
+
+    `list[object]` compiled but threw the contract away, so the required mypy
+    gate could not see that `.stop()` is the whole reason this handle is held.
+    """
+
+    def stop(self) -> None: ...
+
+
 log = logging.getLogger(__name__)
+
+# How often a run proves it is still alive on its active job.
+_HEARTBEAT_SECONDS = 30.0
+# How long heartbeats may keep failing before the run must assume it has lost
+# the lease. Well inside LEASE_SECONDS, so we always stop the transfer BEFORE
+# another run is allowed to re-claim the job — the two can never overlap.
+_HEARTBEAT_GRACE_SECONDS = LEASE_SECONDS / 2
 
 
 def _queue(ctx: click.Context | None = None) -> QueueManager:
@@ -294,21 +317,6 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
         client_cache[account_id] = upload_client
         return upload_client
 
-    # Heartbeat: prove this run is alive so a parallel `queue run` (or the
-    # recovery pass of the next run) never steals a live lease.
-    heartbeat_stop = threading.Event()
-    current_item_id: list[str | None] = [None]
-
-    def _heartbeat_loop() -> None:
-        while not heartbeat_stop.wait(30.0):
-            item_id = current_item_id[0]
-            if item_id:
-                with contextlib.suppress(Exception):
-                    q.touch(item_id, run_id)
-
-    heartbeat = threading.Thread(target=_heartbeat_loop, name="queue-heartbeat", daemon=True)
-    heartbeat.start()
-
     failures = 0
     notes: list[tuple[str, str]] = []
     progress = TransferProgress(
@@ -322,21 +330,89 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
     def _fail(item, row: str, message: str) -> None:
         nonlocal failures
         message = redact_text(message)
-        q.update_status(item.id, JobStatus.FAILED, error=message)
+        try:
+            q.update_status(
+                item.id,
+                JobStatus.FAILED,
+                error=message,
+                run_id=run_id,
+                lease_epoch=item.lease_epoch,
+            )
+        except QueueOwnershipError as exc:
+            # We lost the lease: another run owns this job now and its result
+            # is authoritative. Report, but never overwrite it.
+            message = f"{message} (status not recorded: {exc})"
         progress.finish_item(row, "failed")
         notes.append(("error", f"Job {item.id} failed: {message}"))
         failures += 1
 
+    # Heartbeat: prove this run is alive so a parallel `queue run` (or the
+    # recovery pass of the next run) never steals a live lease. A heartbeat
+    # that keeps failing is NOT harmless — it means the lease is about to
+    # expire under us, so the in-flight transfer is stopped rather than left
+    # racing whichever run re-claims the job.
+    heartbeat_stop = threading.Event()
+    lease_lost = threading.Event()
+    current_job: list[QueueItem | None] = [None]
+    current_transfer: list[_Stoppable | None] = [None]
+
+    def _lose_lease(job_id: str, reason: str) -> None:
+        if lease_lost.is_set():
+            return
+        lease_lost.set()
+        log.error("Lost the queue lease for job %s: %s", job_id, reason)
+        notes.append(
+            (
+                "error",
+                f"Stopped job {job_id}: {reason}. Another run may have taken it over; "
+                "this run will not claim further jobs.",
+            )
+        )
+        transfer = current_transfer[0]
+        if transfer is not None:
+            # Both MegaDownloader and MegaUploader expose stop().
+            with contextlib.suppress(Exception):
+                transfer.stop()
+
+    def _heartbeat_loop() -> None:
+        last_ok = time.monotonic()
+        while not heartbeat_stop.wait(_HEARTBEAT_SECONDS):
+            job = current_job[0]
+            if job is None:
+                last_ok = time.monotonic()
+                continue
+            try:
+                owned = q.touch(job.id, run_id, lease_epoch=job.lease_epoch)
+            except (QueueLockError, QueueCorruptionError) as exc:
+                stalled = time.monotonic() - last_ok
+                log.warning(
+                    "Queue heartbeat for job %s failed after %.0fs: %s", job.id, stalled, exc
+                )
+                if stalled >= _HEARTBEAT_GRACE_SECONDS:
+                    _lose_lease(job.id, f"the queue lease could not be renewed for {stalled:.0f}s")
+                continue
+            if not owned:
+                _lose_lease(job.id, "the job is no longer leased to this run")
+                continue
+            last_ok = time.monotonic()
+
+    heartbeat = threading.Thread(target=_heartbeat_loop, name="queue-heartbeat", daemon=True)
+    heartbeat.start()
+
     try:
         with progress:
             while True:
+                if lease_lost.is_set():
+                    # Heartbeating is broken: claiming more work would only
+                    # produce more jobs we cannot prove we still own.
+                    break
                 # Atomic claim: reload + stale recovery + lease under ONE
                 # cross-process lock, so a second `queue run` (thread,
                 # instance, or process) can never take the same job.
                 item = q.claim_next(run_id)
                 if item is None:
                     break
-                current_item_id[0] = item.id
+                current_job[0] = item
                 # The progress row exists BEFORE any branch runs; every
                 # outcome below finalizes it exactly once so queue JSON and
                 # the visible row always agree.
@@ -358,6 +434,12 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
                         def cb(p, t=row):
                             progress.update_item(t, p.bytes_done, p.total_bytes)
 
+                        # Arm the aborter BEFORE starting, and re-check: a
+                        # lease lost in between must not start a transfer that
+                        # races the new owner.
+                        current_transfer[0] = downloader
+                        if lease_lost.is_set():
+                            raise QueueLeaseLostError("the queue lease was lost before starting")
                         result = downloader.download_link(
                             item.source,
                             out,
@@ -366,7 +448,9 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
                         )
                         progress.set_item_name(row, f"↓ {result.path.name}")
                         progress.finish_item(row, "complete")
-                        q.update_status(item.id, JobStatus.DONE)
+                        q.update_status(
+                            item.id, JobStatus.DONE, run_id=run_id, lease_epoch=item.lease_epoch
+                        )
                     elif item.type == JobType.UPLOAD.value:
                         manager = _manager()
                         account_id = item.account or (
@@ -401,6 +485,9 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
                         def cb_up(p, t=row):
                             progress.update_item(t, p.bytes_done, p.total_bytes)
 
+                        current_transfer[0] = uploader
+                        if lease_lost.is_set():
+                            raise QueueLeaseLostError("the queue lease was lost before starting")
                         upload_result = uploader.upload_file(local_path, on_progress=cb_up)
                         finalize_upload_success(
                             cfg,
@@ -410,23 +497,38 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
                             note=lambda kind, msg: notes.append((kind, msg)),
                         )
                         progress.finish_item(row, "complete")
-                        q.update_status(item.id, JobStatus.DONE)
+                        q.update_status(
+                            item.id, JobStatus.DONE, run_id=run_id, lease_epoch=item.lease_epoch
+                        )
                     else:
                         _fail(item, row, f"Unknown job type: {item.type}")
                 except KeyboardInterrupt:
                     # User cancellation: release the lease so the next run
                     # resumes this job, and finalize the row as canceled.
                     progress.finish_item(row, "canceled")
-                    with contextlib.suppress(Exception):
-                        q.update_status(item.id, JobStatus.INTERRUPTED)
+                    try:
+                        q.update_status(
+                            item.id,
+                            JobStatus.INTERRUPTED,
+                            run_id=run_id,
+                            lease_epoch=item.lease_epoch,
+                        )
+                    except (QueueOwnershipError, QueueLockError, QueueCorruptionError) as exc:
+                        # Never reset a job another run has taken over.
+                        log.warning("Could not release job %s on cancel: %s", item.id, exc)
                     raise
+                except QueueLeaseLostError as e:
+                    progress.finish_item(row, "canceled")
+                    notes.append(("error", f"Job {item.id} stopped: {e}"))
+                    failures += 1
                 except MegaError as e:
                     _fail(item, row, str(e))
                 except Exception as e:  # noqa: BLE001
                     log.exception("Unexpected error while running queue job %s", item.id)
                     _fail(item, row, str(e))
                 finally:
-                    current_item_id[0] = None
+                    current_job[0] = None
+                    current_transfer[0] = None
     except QueueLockError as exc:
         print_error(str(exc))
         failures += 1

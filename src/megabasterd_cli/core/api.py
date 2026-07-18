@@ -94,6 +94,53 @@ API_BASE_URL = "https://g.api.mega.co.nz"
 DEFAULT_TIMEOUT = 30
 DEFAULT_APP_KEY = "BdARkQSQ"
 
+# A MEGA `f` listing for a huge account is the largest legitimate response and
+# stays well under this. Anything bigger is a proxy error page, a redirect
+# chain or a hostile body, and must not be handed to the JSON parser.
+MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+
+# HTTP statuses that are the PROXY's own refusal rather than MEGA's answer.
+# Every other 4xx/5xx came from the origin and says nothing about proxy health:
+# blaming the proxy for those is how three MEGA-side 503s used to put a
+# blameless proxy on a 60s cooldown (and, under force_smart_proxy, turned the
+# next call into a ProxyRequiredError).
+PROXY_FAULT_STATUSES = frozenset({407})
+
+
+def _parse_body(response) -> Any:
+    """Return the parsed JSON body, or raise MegaError if it is not usable.
+
+    Guards the boundary in the order that costs least: declared size, then
+    content type, then the actual parse. A captive portal answering HTTP 200
+    with an HTML login page fails here with a typed, actionable error instead
+    of surfacing later as `Error: 'p'` from the CLI catch-all.
+    """
+    headers = getattr(response, "headers", None) or {}
+    declared = str(headers.get("Content-Length") or "")
+    if declared.isdigit() and int(declared) > MAX_RESPONSE_BYTES:
+        raise MegaError(
+            message=f"MEGA API response too large ({declared} bytes); refusing to parse it"
+        )
+    content_type = str(headers.get("Content-Type") or "")
+    if content_type and "json" not in content_type.lower():
+        raise MegaError(
+            message=(
+                f"MEGA API returned {content_type!r} instead of JSON "
+                "(a proxy or captive portal may have replaced the response)"
+            )
+        )
+    # ponytail: requests has already buffered the body by now, so this bounds
+    # the PARSE, not the download. Passing stream=True would bound the download
+    # too, but the request goes through session doubles whose post() does not
+    # accept the kwarg; upgrade both together.
+    body = getattr(response, "content", None)
+    if body is not None and len(body) > MAX_RESPONSE_BYTES:
+        raise MegaError(message="MEGA API response too large; refusing to parse it")
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise MegaError(message="MEGA API returned a body that is not valid JSON") from exc
+
 
 def default_user_agent() -> str:
     """Default User-Agent derived from the package version (no drift)."""
@@ -305,32 +352,56 @@ class MegaAPIClient:
                 break
             response.raise_for_status()
         except (requests.ConnectionError, requests.Timeout):
-            if picked_proxy and self.proxy_pool is not None:
-                self.proxy_pool.report_failure(picked_proxy)
+            self._blame_proxy(picked_proxy)
             raise
-        except requests.HTTPError:
-            if picked_proxy and self.proxy_pool is not None:
-                self.proxy_pool.report_failure(picked_proxy)
+        except requests.HTTPError as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status in PROXY_FAULT_STATUSES:
+                self._blame_proxy(picked_proxy)
+            raise
+
+        # The proxy is only credited once the body is proven usable: a captive
+        # portal answering 200 with HTML was otherwise rewarded on every
+        # request, and SmartProxyPool.pick weights by success ratio - so the
+        # broken proxy became progressively PREFERRED.
+        try:
+            data = _parse_body(response)
+        except MegaError:
+            self._blame_proxy(picked_proxy)
             raise
         if picked_proxy and self.proxy_pool is not None:
             self.proxy_pool.report_success(picked_proxy)
 
-        data = response.json()
         log.debug("MEGA API response: %s", data)
 
         # Top-level negative integer = global error
-        if isinstance(data, int):
+        if isinstance(data, int) and not isinstance(data, bool):
             raise_for_code(data)
             raise MegaError(data)
+
+        if not isinstance(data, list):
+            raise MegaError(
+                message=(
+                    "MEGA API returned a "
+                    f"{type(data).__name__} where an array of results was expected"
+                )
+            )
 
         # Each element may be a negative integer error.
         results = []
         for item in data:
-            if isinstance(item, int) and item < 0:
+            if isinstance(item, int) and not isinstance(item, bool) and item < 0:
                 raise_for_code(item)
             results.append(item)
 
+        if single and not results:
+            raise MegaError(message="MEGA API returned an empty result array")
         return results[0] if single else results
+
+    def _blame_proxy(self, picked_proxy: str | None) -> None:
+        """Count a failure against the proxy that actually caused it."""
+        if picked_proxy and self.proxy_pool is not None:
+            self.proxy_pool.report_failure(picked_proxy)
 
     # ------------------------------------------------------------------
     # Convenience methods for common API actions

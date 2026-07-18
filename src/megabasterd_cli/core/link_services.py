@@ -49,14 +49,82 @@ def _require_selector(selector, caller: str):
     return selector
 
 
+class PayloadTooLargeError(ValueError):
+    """An untrusted payload or response exceeded the size we are willing to buffer."""
+
+
+# A real ELC link carries a few KB of gzip. Both ends are bounded because the
+# ratio between them is attacker-chosen: deflate reaches ~1029:1, so capping the
+# input alone still allows a 1 MiB link to inflate to a gigabyte.
+MAX_ELC_COMPRESSED_BYTES = 1 << 20  # 1 MiB taken straight from the pasted link
+MAX_ELC_DECOMPRESSED_BYTES = 8 << 20  # 8 MiB after inflation
+# Real ELC / MegaCrypter replies are a few KB.
+MAX_SERVICE_RESPONSE_BYTES = 2_000_000
+
+
+def _read_bounded(response, limit: int, what: str) -> str:
+    """Return the body as text, refusing to buffer more than `limit` bytes.
+
+    Must be used with `stream=True`. Touching `response.text` or
+    `response.json()` first is useless as a defence - by then `requests` has
+    already read the whole body AND transparently inflated any
+    `Content-Encoding: gzip`, which makes every response its own decompression
+    bomb. `iter_content` yields the DECODED bytes, so the cap applies to what
+    actually lands in memory.
+    """
+    total = 0
+    parts: list[bytes] = []
+    for block in response.iter_content(chunk_size=65536):
+        total += len(block)
+        if total > limit:
+            close = getattr(response, "close", None)
+            if close is not None:
+                close()
+            raise PayloadTooLargeError(f"{what} response is unexpectedly large")
+        parts.append(block)
+    encoding = getattr(response, "encoding", None) or "utf-8"
+    return b"".join(parts).decode(encoding, errors="replace")
+
+
+def _read_bounded_json(response, limit: int, what: str):
+    text = _read_bounded(response, limit, what)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{what} returned non-JSON data: {text[:120]}") from exc
+
+
+def _gunzip_bounded(payload: bytes) -> bytes:
+    """Inflate a gzip member, giving up once the OUTPUT passes the cap.
+
+    `gzip.decompress` decides how much memory to allocate from data the link
+    supplies, so a 544 KB link expanded to 400 MiB before any credential was
+    even looked up. `decompressobj().decompress(data, max_length)` stops at the
+    limit instead and parks the rest in `unconsumed_tail`, which is how an
+    over-large member is detected without ever materialising it.
+    """
+    import zlib
+
+    if len(payload) > MAX_ELC_COMPRESSED_BYTES:
+        raise PayloadTooLargeError("Compressed ELC payload is unexpectedly large")
+    decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    try:
+        out = decompressor.decompress(payload, MAX_ELC_DECOMPRESSED_BYTES)
+    except zlib.error as exc:
+        raise ValueError(f"Corrupt ELC payload: {exc}") from exc
+    if decompressor.unconsumed_tail:
+        raise PayloadTooLargeError("ELC payload expands beyond the allowed size")
+    if not decompressor.eof:
+        raise ValueError("Truncated ELC payload")
+    return out
+
+
 def decode_elc_payload(parsed: ParsedLink) -> ElcPayload:
     """Decode the local envelope of a `mega://elc?...` link.
 
     The envelope contains encrypted MEGA link fragments, the ELC service URL,
     and a token that must be sent to that service with the user's ELC account.
     """
-    import gzip
-
     from .crypto import b64_url_decode
 
     if parsed.type != LinkType.ELC_CONTAINER or not parsed.elc_blob:
@@ -70,7 +138,7 @@ def decode_elc_payload(parsed: ParsedLink) -> ElcPayload:
         raise ValueError("Bad ELC marker")
     payload = raw[1:]
     if marker == 0x70:
-        payload = gzip.decompress(payload)
+        payload = _gunzip_bounded(payload)
 
     offset = 0
 
@@ -135,13 +203,11 @@ def resolve_elc_links(
         headers={"User-Agent": "MegaBasterd-CLI/1.0"},
         timeout=timeout,
         proxies=request_proxies,
+        stream=True,
     )
     selector.report_success(picked)
     response.raise_for_status()
-    try:
-        body = response.json()
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"ELC server returned non-JSON data: {response.text[:120]}") from exc
+    body = _read_bounded_json(response, MAX_SERVICE_RESPONSE_BYTES, "ELC server")
 
     dec_pass = body.get("d") if isinstance(body, dict) else None
     if not dec_pass:
@@ -313,6 +379,7 @@ def _dlc_post(
             timeout=timeout,
             proxies=request_proxies,
             allow_redirects=False,
+            stream=True,
         )
         status = getattr(resp, "status_code", 200)
         if status in (301, 302, 303, 307, 308):
@@ -363,10 +430,11 @@ def decrypt_dlc_container(
         selector,
     )
     response.raise_for_status()
-    # Treat the third-party response as untrusted: bound its size before parsing.
-    if len(response.text) > MAX_DLC_RESPONSE_BYTES:
-        raise ValueError("DLC service response is unexpectedly large")
-    m = re.search(r"<\s*rc\s*>(.+?)<\s*/\s*rc\s*>", response.text, re.IGNORECASE | re.DOTALL)
+    # Treat the third-party response as untrusted: bound it WHILE reading. The
+    # previous `len(response.text) > MAX` check was inert - `response.text` had
+    # already buffered and gzip-inflated the entire body before it ran.
+    text = _read_bounded(response, MAX_DLC_RESPONSE_BYTES, "DLC service")
+    m = re.search(r"<\s*rc\s*>(.+?)<\s*/\s*rc\s*>", text, re.IGNORECASE | re.DOTALL)
     if not m:
         raise ValueError("DLC service did not return a key")
 
@@ -417,10 +485,11 @@ def _post_megacrypter(
         json=payload,
         timeout=timeout,
         proxies=request_proxies,
+        stream=True,
     )
     selector.report_success(picked)
     response.raise_for_status()
-    body = response.json()
+    body = _read_bounded_json(response, MAX_SERVICE_RESPONSE_BYTES, "MegaCrypter server")
     if not isinstance(body, dict):
         raise ValueError(f"Unexpected MegaCrypter response: {body!r}")
     err = body.get("error") or body.get("err")

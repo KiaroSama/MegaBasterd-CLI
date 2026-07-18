@@ -25,7 +25,7 @@ class _FakeResponse:
 
 class _DummyAPI:
     def request_upload(self, size: int) -> dict:
-        return {"p": "http://fake.invalid/upload"}
+        return {"p": "https://gfs270n123.userstorage.mega.co.nz/ul/fake"}
 
     def complete_upload(self, **kwargs) -> dict:
         return {"f": [{"h": "H"}]}

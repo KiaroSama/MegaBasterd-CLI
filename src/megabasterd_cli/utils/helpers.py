@@ -10,6 +10,22 @@ from pathlib import Path
 from typing import Callable
 
 _INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+# NAME_MAX is 255 *bytes* on ext4/APFS, not 255 characters. Cap below it so the
+# name still fits once a filesystem appends nothing and paths stay workable.
+_MAX_FILENAME_BYTES = 240
+
+
+def _truncate_utf8(text: str, limit: int) -> str:
+    """Cut `text` so its UTF-8 encoding fits `limit` bytes, never mid-character.
+
+    Decoding with errors="ignore" drops a trailing partial sequence, which is
+    exactly the byte-boundary behaviour we want (a naive slice would emit an
+    undecodable name).
+    """
+    encoded = text.encode("utf-8")
+    if len(encoded) <= limit:
+        return text
+    return encoded[:limit].decode("utf-8", "ignore")
 
 
 def sanitize_filename(name: str, replacement: str = "_") -> str:
@@ -35,13 +51,20 @@ def sanitize_filename(name: str, replacement: str = "_") -> str:
     base = cleaned.split(".")[0].upper()
     if base in reserved:
         cleaned = "_" + cleaned
-    # Cap at 240 chars to leave room for paths
-    if len(cleaned) <= 240:
+    # Cap by encoded BYTE length: 240 CJK/emoji characters are ~720-960 bytes,
+    # well past the 255-byte NAME_MAX, so a character cap yields ENAMETOOLONG.
+    if len(cleaned.encode("utf-8")) <= _MAX_FILENAME_BYTES:
         return cleaned
     suffix = Path(cleaned).suffix
-    if suffix and len(suffix) < 32:
-        return cleaned[: 240 - len(suffix)] + suffix
-    return cleaned[:240]
+    suffix_bytes = len(suffix.encode("utf-8"))
+    if suffix and suffix_bytes < 32:
+        stem = _truncate_utf8(cleaned, _MAX_FILENAME_BYTES - suffix_bytes)
+        cleaned = stem.rstrip(" .") + suffix
+    else:
+        cleaned = _truncate_utf8(cleaned, _MAX_FILENAME_BYTES)
+    # Truncation can re-expose a trailing dot/space the strip above removed, or
+    # leave nothing at all; re-apply both guards on the final value.
+    return cleaned.rstrip(" .") or "unnamed"
 
 
 def format_bytes(num: int) -> str:

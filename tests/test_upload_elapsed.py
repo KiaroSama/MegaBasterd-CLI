@@ -14,7 +14,7 @@ import megabasterd_cli.config as config_module
 import megabasterd_cli.core.uploader as uploader_module
 from megabasterd_cli.core.uploader import MegaUploader
 
-UPLOAD_URL = "http://fake.invalid/upload"
+UPLOAD_URL = "https://gfs270n123.userstorage.mega.co.nz/ul/fake"
 
 
 class _FakeResponse:

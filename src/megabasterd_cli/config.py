@@ -520,14 +520,22 @@ class ConfigStore:
             tf.flush()
             os.fsync(tf.fileno())
             tmp_path = tf.name
-        for attempt in range(5):
-            try:
-                os.replace(tmp_path, self.path)
-                break
-            except PermissionError:
-                if attempt == 4:
-                    raise
-                time.sleep(0.05 * (attempt + 1))
+        try:
+            for attempt in range(5):
+                try:
+                    os.replace(tmp_path, self.path)
+                    return
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
+        except BaseException:
+            # Includes KeyboardInterrupt. Antivirus holding config.json open on
+            # Windows makes replace fail; without this every `config set` left a
+            # config.json.*.tmp orphan behind. Cleanup must not mask the cause.
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise
 
     def _is_nullable(self, key: str) -> bool:
         return key in _OPTIONAL_STR_KEYS

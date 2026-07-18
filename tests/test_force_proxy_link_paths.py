@@ -12,6 +12,8 @@ came back afterwards.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from megabasterd_cli.core import link_services as links
@@ -34,6 +36,10 @@ class _Resp:
 
     def json(self):
         return self._payload
+
+    def iter_content(self, chunk_size=65536):
+        # The resolvers now read service replies as a bounded stream.
+        yield json.dumps(self._payload).encode()
 
     def raise_for_status(self):
         return None

@@ -10,6 +10,7 @@ A MEGA folder share gives access to a tree of nodes under a folder key. We:
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -25,7 +26,7 @@ from .crypto import (
     unpack_file_key,
 )
 from .downloader import DownloadProgress, DownloadResult, MegaDownloader
-from .errors import TransferError
+from .errors import NonRetryableTransferError, TransferError
 from .links import LinkType, parse_link
 
 log = logging.getLogger(__name__)
@@ -275,6 +276,14 @@ class MegaFolderDownloader:
             def _worker(job):
                 node, destination = job
                 worker_api = self.api.clone()
+                # Every MegaDownloader option must be mirrored here, or the
+                # parallel path silently behaves differently from the
+                # sequential one (--no-resume was ignored, a custom user agent
+                # was replaced by the default). Only `api` (per-worker clone),
+                # `speed_limit_kbps` (superseded by the shared limiter, which
+                # must not be multiplied per worker) and `limiter` (assigned
+                # just below) differ on purpose; a test asserts the rest
+                # against the constructor signature.
                 worker_dl = MegaDownloader(
                     api=worker_api,
                     max_workers=self.downloader.max_workers,
@@ -288,6 +297,8 @@ class MegaFolderDownloader:
                     quota_max_wait_loops=self.downloader.quota_max_wait_loops,
                     keep_state_files_on_error=self.downloader.keep_state_files_on_error,
                     overwrite=self.downloader.overwrite,
+                    auto_resume=self.downloader.auto_resume,
+                    user_agent=self.downloader.user_agent,
                 )
                 worker_dl.limiter = self.downloader.limiter
                 sub_folder = MegaFolderDownloader(worker_dl)
@@ -428,6 +439,33 @@ class MegaFolderDownloader:
             path_for_handle[node.handle] = child_path
         return path_for_handle
 
+    @staticmethod
+    def _parent_chain(
+        by_handle: dict[str, FolderNode], start: FolderNode | None
+    ) -> Iterator[FolderNode]:
+        """Yield `start` then each ancestor, refusing to loop forever.
+
+        The listing comes from a link the user did not author: two folders can
+        name each other as parent, so a naive `while cur:` walk never
+        terminates and its accumulator grows without bound. Every parent-pointer
+        walk in this module goes through here so the visited set cannot be
+        forgotten in one of them. A repeated handle means a folder is its own
+        ancestor - a malformed remote graph that no retry can repair.
+        """
+        seen: set[str] = set()
+        cur = start
+        while cur is not None:
+            if cur.handle in seen:
+                raise NonRetryableTransferError(
+                    message=(
+                        f"Folder share has a cyclic parent chain at node {cur.handle!r}; "
+                        "the remote folder structure is malformed"
+                    )
+                )
+            seen.add(cur.handle)
+            yield cur
+            cur = by_handle.get(cur.parent)
+
     @classmethod
     def _local_path_for_node(
         cls,
@@ -439,30 +477,38 @@ class MegaFolderDownloader:
         """Return the exact local path for a single node inside a folder share."""
         by_handle = {item.handle: item for item in nodes}
         parts = [sanitize_filename(node.name)]
-        current = by_handle.get(node.parent)
-        while current is not None:
-            parts.append(sanitize_filename(current.name))
-            if current.handle == root_handle:
+        reached_root = False
+        for ancestor in cls._parent_chain(by_handle, by_handle.get(node.parent)):
+            parts.append(sanitize_filename(ancestor.name))
+            if ancestor.handle == root_handle:
+                reached_root = True
                 break
-            current = by_handle.get(current.parent)
+        if not reached_root and node.handle != root_handle:
+            log.warning(
+                "Node %s never reaches root %s; placing it at the top of the output dir",
+                node.handle,
+                root_handle,
+            )
         destination = output_dir.joinpath(*reversed(parts))
         ensure_within_directory(output_dir, destination)
         return destination
 
-    @staticmethod
-    def _sort_by_depth(nodes: list[FolderNode], root: str) -> list[FolderNode]:
+    @classmethod
+    def _sort_by_depth(cls, nodes: list[FolderNode], root: str) -> list[FolderNode]:
         """Topologically sort nodes so parents come before children."""
         depth: dict[str, int] = {root: 0}
         by_handle = {n.handle: n for n in nodes}
         for n in nodes:
             if n.handle in depth:
                 continue
-            chain = []
-            cur = n
-            while cur and cur.handle not in depth:
-                chain.append(cur)
-                cur = by_handle.get(cur.parent)
-            base = depth.get(cur.handle, 0) if cur else 0
+            chain: list[FolderNode] = []
+            anchor: FolderNode | None = None
+            for ancestor in cls._parent_chain(by_handle, n):
+                if ancestor.handle in depth:
+                    anchor = ancestor
+                    break
+                chain.append(ancestor)
+            base = depth[anchor.handle] if anchor else 0
             for i, c in enumerate(reversed(chain)):
                 depth[c.handle] = base + i + 1
         return sorted(nodes, key=lambda n: depth.get(n.handle, 0))

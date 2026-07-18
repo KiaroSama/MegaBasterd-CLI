@@ -22,7 +22,7 @@ from megabasterd_cli.core.errors import TransferError
 from megabasterd_cli.core.state import TransferState, load_state, save_state
 from megabasterd_cli.core.uploader import MegaUploader
 
-UPLOAD_URL = "http://fake.invalid/upload"
+UPLOAD_URL = "https://gfs270n123.userstorage.mega.co.nz/ul/fake"
 
 
 class _FakeResponse:

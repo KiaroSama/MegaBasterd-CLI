@@ -25,7 +25,7 @@ body:
         - Windows 11
         - Windows 10
         - Linux
-        - macOS
+        - macOS (untested platform)
         - Other
     validations:
       required: true

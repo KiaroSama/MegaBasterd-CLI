@@ -13,11 +13,15 @@ entire file first.
 
 from __future__ import annotations
 
+import contextlib
 import hmac
+import io
 import ipaddress
 import logging
 import mimetypes
+import socket
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
 from urllib.parse import parse_qs, quote, urlsplit
@@ -35,10 +39,54 @@ from ..core.links import parse_link
 from ..core.range_validation import RangeNotHonoredError, validate_range_response
 from ..proxy.selector import ProxyRequiredError, ProxySelector
 from ..utils.helpers import sanitize_filename
+from ..utils.redaction import redact_text
 
 log = logging.getLogger(__name__)
 
 URL_EXPIRY_STATUS = {403, 410, 509}
+
+# Defaults for the three resource bounds. A media player opens a handful of
+# parallel Range connections, so the cap is generous while still finite.
+DEFAULT_MAX_CONNECTIONS = 16
+DEFAULT_HANDLER_TIMEOUT = 60.0  # per socket operation, once a request is parsed
+DEFAULT_HEADER_TIMEOUT = 15.0  # TOTAL budget for one request line + headers
+_REJECT_LINGER = 0.3  # graceful-close budget for a refused connection
+_MAX_REJECT_THREADS = 4  # capped: a refusal must never become its own thread bomb
+
+_OVER_CAPACITY_BODY = b"Too many active connections"
+_OVER_CAPACITY_RESPONSE = (
+    b"HTTP/1.1 503 Service Unavailable\r\n"
+    b"Content-Type: text/plain; charset=utf-8\r\n"
+    b"Content-Length: " + str(len(_OVER_CAPACITY_BODY)).encode() + b"\r\n"
+    b"Retry-After: 5\r\n"
+    b"Connection: close\r\n"
+    b"\r\n" + _OVER_CAPACITY_BODY
+)
+
+
+class ShortUpstreamBodyError(RuntimeError):
+    """The CDN delivered fewer bytes than the range it acknowledged.
+
+    The client has already been promised ``Content-Length``, so the only
+    honest signal left is to abort the connection instead of letting a
+    truncated file look complete.
+    """
+
+
+def address_family_for_host(host: str) -> int:
+    """Pick AF_INET6 for an IPv6 literal, AF_INET for everything else.
+
+    Without this the server hardcoded AF_INET and an IPv6 bind was impossible.
+    Hostnames keep the historical AF_INET behaviour.
+    """
+    try:
+        return (
+            socket.AF_INET6
+            if ipaddress.ip_address(host.strip().strip("[]")).version == 6
+            else socket.AF_INET
+        )
+    except ValueError:
+        return socket.AF_INET
 
 
 def is_loopback_host(host: str) -> bool:
@@ -210,8 +258,65 @@ class _StreamSource:
             return self.cdn_url
 
 
+class _DeadlineRawIO(io.RawIOBase):
+    """Raw socket reader whose every `recv` is bounded by a total deadline.
+
+    A per-operation socket timeout cannot stop a slowloris on its own: one
+    `rfile.readline()` loops over many `recv` calls internally, and each
+    dribbled byte renews the timeout. Bounding the socket at the RAW level
+    means the shrinking remainder of the budget applies to every recv, so
+    the request line + headers can never outlive it however slowly they
+    trickle in.
+    """
+
+    def __init__(self, handler: _StreamingRequestHandler):
+        self._handler = handler
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer):  # type: ignore[override]
+        handler = self._handler
+        deadline = handler.header_deadline
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("header read deadline exceeded")
+            handler.connection.settimeout(remaining)
+        return handler.connection.recv_into(buffer)
+
+
 class _StreamingRequestHandler(BaseHTTPRequestHandler):
     server: StreamingServer  # type: ignore[assignment]
+
+    # socketserver only calls settimeout() when this is non-None, so leaving it
+    # at None (the base default) made every client socket fully blocking.
+    timeout = DEFAULT_HANDLER_TIMEOUT
+    header_deadline: float | None = None
+
+    def setup(self) -> None:
+        super().setup()
+        self.connection.settimeout(self.server.handler_timeout)
+        self.rfile.close()  # only decrefs the socket's io refs, never the fd
+        self.rfile = io.BufferedReader(_DeadlineRawIO(self))  # type: ignore[assignment]
+
+    def handle_one_request(self) -> None:
+        self.header_deadline = time.monotonic() + self.server.header_timeout
+        try:
+            # TimeoutError from the deadline reader is socket.timeout's alias,
+            # which the base implementation already turns into a clean close.
+            super().handle_one_request()
+        finally:
+            self.header_deadline = None
+
+    def parse_request(self) -> bool:
+        parsed = bool(super().parse_request())
+        # Headers are in: hand the socket back its plain per-operation timeout
+        # so a long body write is not cut short by the shrinking header budget.
+        self.header_deadline = None
+        with contextlib.suppress(OSError):  # the socket may already be torn down
+            self.connection.settimeout(self.server.handler_timeout)
+        return parsed
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002
         # Never log the raw request path: it may carry a ?token= access token.
@@ -334,26 +439,52 @@ class _StreamingRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
         try:
-            sent = 0
-            for block in resp.iter_content(chunk_size=65536):
-                if not block:
-                    continue
-                decrypted = cipher.decrypt(block)
-                if block_skip:
-                    decrypted = decrypted[block_skip:]
-                    block_skip = 0
-                if sent + len(decrypted) > length:
-                    decrypted = decrypted[: length - sent]
-                if not decrypted:
-                    continue
-                self.wfile.write(decrypted)
-                sent += len(decrypted)
-                if sent >= length:
-                    break
+            self._pump(resp, cipher, block_skip, length, start, end)
         except (BrokenPipeError, ConnectionResetError):
             log.debug("Client disconnected")
+        except ShortUpstreamBodyError as exc:
+            # The promised Content-Length is already on the wire, so the status
+            # cannot be changed. Dropping the connection makes the client raise
+            # an incomplete-read error instead of accepting a truncated file.
+            self.close_connection = True
+            log.error("Truncated stream for %s: %s", redact_text(source.filename), exc)
         finally:
             resp.close()
+
+    def _pump(
+        self,
+        resp: requests.Response,
+        cipher,
+        block_skip: int,
+        length: int,
+        start: int,
+        end: int,
+    ) -> None:
+        """Decrypt the upstream body to the client, verifying the byte count.
+
+        The old loop simply ended when the upstream body ran out, so a short
+        response was served as a complete file under the full Content-Length.
+        """
+        sent = 0
+        for block in resp.iter_content(chunk_size=65536):
+            if not block:
+                continue
+            decrypted = cipher.decrypt(block)
+            if block_skip:
+                decrypted = decrypted[block_skip:]
+                block_skip = 0
+            if sent + len(decrypted) > length:
+                decrypted = decrypted[: length - sent]
+            if not decrypted:
+                continue
+            self.wfile.write(decrypted)
+            sent += len(decrypted)
+            if sent >= length:
+                break
+        if sent != length:
+            raise ShortUpstreamBodyError(
+                f"upstream delivered {sent} of {length} promised bytes for range {start}-{end}"
+            )
 
     def _parse_range(self, size: int) -> tuple[int, int, bool]:
         range_header = self.headers.get("Range", "")
@@ -380,6 +511,18 @@ class _StreamingRequestHandler(BaseHTTPRequestHandler):
             raise IndexError("Unsatisfiable range")
         return start, min(end, size - 1), True
 
+    def _send_upstream_error(self, code: int, reason: str, detail: object) -> None:
+        """Answer an upstream failure without echoing the exception string.
+
+        `requests` embeds the full URL in its exception text: the ephemeral
+        MEGA CDN URL, and for a ProxyError the proxy URL *including*
+        `user:pass@`. The client gets a fixed reason (also redacted, and free
+        of CR/LF so it cannot split the response); the detail stays in the
+        server log, redacted there too.
+        """
+        log.error("%s: %s", reason, redact_text(str(detail)))
+        self.send_error(code, redact_text(reason))
+
     def _open_upstream(
         self, source: _StreamSource, start: int, end: int
     ) -> requests.Response | None:
@@ -398,7 +541,7 @@ class _StreamingRequestHandler(BaseHTTPRequestHandler):
             try:
                 request_proxies, picked = selector.select()
             except ProxyRequiredError as exc:
-                self.send_error(502, f"Upstream error: {exc}")
+                self._send_upstream_error(502, "Upstream proxy unavailable", exc)
                 return None
             try:
                 resp = requests.get(
@@ -410,21 +553,21 @@ class _StreamingRequestHandler(BaseHTTPRequestHandler):
                 )
             except requests.RequestException as e:
                 selector.report_failure(picked)
-                self.send_error(502, f"Upstream error: {e}")
+                self._send_upstream_error(502, "Upstream request failed", e)
                 return None
             if resp.status_code in URL_EXPIRY_STATUS and attempt == 0:
                 resp.close()
                 try:
                     source.refresh_cdn_url()
                 except Exception as exc:  # noqa: BLE001
-                    self.send_error(502, f"CDN URL refresh failed: {exc}")
+                    self._send_upstream_error(502, "CDN URL refresh failed", exc)
                     return None
                 continue
             if resp.status_code not in (200, 206):
                 status = resp.status_code
                 resp.close()
                 selector.report_failure(picked)
-                self.send_error(502, f"Upstream HTTP {status}")
+                self._send_upstream_error(502, f"Upstream HTTP {status}", status)
                 return None
             try:
                 validate_range_response(resp.status_code, resp.headers, start, end, source.size)
@@ -432,7 +575,7 @@ class _StreamingRequestHandler(BaseHTTPRequestHandler):
                 resp.close()
                 selector.report_failure(picked)
                 # Never serve a body that does not match the CTR counter.
-                self.send_error(502, f"Upstream ignored the requested range: {exc}")
+                self._send_upstream_error(502, "Upstream ignored the requested range", exc)
                 return None
             selector.report_success(picked)
             return resp
@@ -451,10 +594,25 @@ class StreamingServer(ThreadingHTTPServer):
         selector=None,  # ProxySelector | None
         auth_token: str | None = None,
         allow_query_token: bool = False,
+        max_connections: int = DEFAULT_MAX_CONNECTIONS,
+        handler_timeout: float = DEFAULT_HANDLER_TIMEOUT,
+        header_timeout: float = DEFAULT_HEADER_TIMEOUT,
     ):
-        super().__init__((host, port), _StreamingRequestHandler)
+        # Must be set before super().__init__(): that is where the socket is
+        # created. AF_INET was hardcoded, so an IPv6 bind could never work.
+        self.address_family = address_family_for_host(host)
+        super().__init__((host.strip().strip("[]"), port), _StreamingRequestHandler)
         self.api = api
         self.source: _StreamSource | None = None
+        # One unbounded thread per connection was a trivial DoS. Past the cap
+        # a connection is answered with 503 and closed instead of queued.
+        self.max_connections = max_connections
+        self._slots = threading.BoundedSemaphore(max_connections)
+        self._reject_slots = threading.BoundedSemaphore(_MAX_REJECT_THREADS)
+        # Client sockets were fully blocking: socketserver only calls
+        # settimeout() when the handler's `timeout` attribute is non-None.
+        self.handler_timeout = handler_timeout
+        self.header_timeout = header_timeout
         # Every upstream request selects its proxies here, so force mode is
         # enforced on the CDN path too (it used to pass proxies=None).
         self.selector = selector if selector is not None else ProxySelector()
@@ -464,6 +622,61 @@ class StreamingServer(ThreadingHTTPServer):
         # Bearer header is always accepted; query-string tokens only when this
         # is explicitly enabled (they leak into logs/history).
         self.allow_query_token = allow_query_token
+
+    def process_request(self, request, client_address) -> None:
+        """Serve only while a slot is free; reject cleanly once the cap is hit."""
+        if not self._slots.acquire(blocking=False):
+            self._reject_over_capacity(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()  # the handler thread never started
+            raise
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+    def _reject_over_capacity(self, request) -> None:
+        """Refuse a connection without ever blocking the accept loop.
+
+        Once the cap is reached the refusal becomes the hot path (a flood hits
+        it on every connection), so it may not linger here. It is handed to a
+        small, capped pool of short-lived closers instead; past that the socket
+        is dropped outright, which is the right answer deep in a flood.
+        """
+        log.warning("Streaming connection cap of %d reached; rejecting", self.max_connections)
+        if not self._reject_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            threading.Thread(target=self._refuse, args=(request,), daemon=True).start()
+        except RuntimeError:  # out of threads: drop rather than leak the slot
+            self._reject_slots.release()
+            self.shutdown_request(request)
+
+    def _refuse(self, request) -> None:
+        """Write the 503 and close gracefully.
+
+        Closing while the peer's request bytes are still unread makes the OS
+        answer with an RST, which discards the 503 the client has not read
+        yet - so the refusal has to linger briefly for the peer's FIN.
+        """
+        try:
+            request.settimeout(_REJECT_LINGER)
+            request.sendall(_OVER_CAPACITY_RESPONSE)
+            request.shutdown(socket.SHUT_WR)
+            deadline = time.monotonic() + _REJECT_LINGER
+            while time.monotonic() < deadline and request.recv(65536):
+                pass  # drain until FIN so the close is graceful, never forever
+        except OSError:
+            pass  # peer went away; nothing left to deliver
+        finally:
+            self.shutdown_request(request)
+            self._reject_slots.release()
 
     def set_source(self, url: str, password: str | None = None) -> None:
         self.source = _StreamSource(url, self.api, password=password, selector=self.selector)
