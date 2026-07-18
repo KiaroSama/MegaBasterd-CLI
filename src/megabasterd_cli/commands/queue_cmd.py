@@ -10,15 +10,43 @@ import uuid
 import click
 
 from ..config import data_dir
-from ..queue.manager import JobStatus, JobType, QueueItem, QueueLockError, QueueManager
+from ..queue.manager import (
+    JobStatus,
+    JobType,
+    QueueCorruptionError,
+    QueueItem,
+    QueueLockError,
+    QueueManager,
+)
 from ..ui.prompts import confirm, print_error, print_success
 from ..ui.tables import render_queue
 
 log = logging.getLogger(__name__)
 
 
-def _queue() -> QueueManager:
-    return QueueManager(data_dir() / "queue.json")
+def _queue(ctx: click.Context | None = None) -> QueueManager:
+    """Build a QueueManager; on a corrupt queue, report and exit non-zero.
+
+    A corrupt file is preserved and backed up by the manager; the command
+    exits with a clear error rather than acting on an empty queue.
+    """
+    q = QueueManager(data_dir() / "queue.json")
+    if q.is_corrupt and ctx is not None:
+        print_error(q._corrupt_reason)
+        ctx.exit(1)
+    return q
+
+
+def _guard(ctx: click.Context, fn):
+    """Run a queue mutation; map corruption/lock errors to non-zero exits."""
+    try:
+        return fn()
+    except QueueCorruptionError as exc:
+        print_error(str(exc))
+        ctx.exit(1)
+    except QueueLockError as exc:
+        print_error(str(exc))
+        ctx.exit(1)
 
 
 @click.group("queue", short_help="Manage the transfer queue.")
@@ -27,8 +55,9 @@ def queue() -> None:
 
 
 @queue.command("list", short_help="Show all queued transfers.")
-def queue_list() -> None:
-    q = _queue()
+@click.pass_context
+def queue_list(ctx: click.Context) -> None:
+    q = _queue(ctx)
     render_queue(
         [
             {
@@ -47,8 +76,9 @@ def queue_list() -> None:
 @click.argument("url")
 @click.option("-o", "--output", default="", help="Destination directory.")
 @click.option("-p", "--password", default=None)
-def queue_add_download(url: str, output: str, password: str | None) -> None:
-    q = _queue()
+@click.pass_context
+def queue_add_download(ctx: click.Context, url: str, output: str, password: str | None) -> None:
+    q = _queue(ctx)
     item = QueueItem(
         id=QueueItem.new_id(),
         type=JobType.DOWNLOAD.value,
@@ -56,15 +86,16 @@ def queue_add_download(url: str, output: str, password: str | None) -> None:
         destination=output,
         password=password,
     )
-    q.add(item)
+    _guard(ctx, lambda: q.add(item))
     print_success(f"Queued download {item.id}: {url}")
 
 
 @queue.command("add-upload", short_help="Add an upload to the queue.")
 @click.argument("path", type=click.Path(exists=True, dir_okay=False))
 @click.option("-a", "--account", default=None)
-def queue_add_upload(path: str, account: str | None) -> None:
-    q = _queue()
+@click.pass_context
+def queue_add_upload(ctx: click.Context, path: str, account: str | None) -> None:
+    q = _queue(ctx)
     item = QueueItem(
         id=QueueItem.new_id(),
         type=JobType.UPLOAD.value,
@@ -72,48 +103,70 @@ def queue_add_upload(path: str, account: str | None) -> None:
         destination="",
         account=account,
     )
-    q.add(item)
+    _guard(ctx, lambda: q.add(item))
     print_success(f"Queued upload {item.id}: {path}")
 
 
 @queue.command("remove", short_help="Remove an item by id.")
 @click.argument("item_id")
-def queue_remove(item_id: str) -> None:
-    q = _queue()
-    if q.remove(item_id):
+@click.pass_context
+def queue_remove(ctx: click.Context, item_id: str) -> None:
+    q = _queue(ctx)
+    if _guard(ctx, lambda: q.remove(item_id)):
         print_success(f"Removed {item_id}")
     else:
         click.echo(f"Not found: {item_id}", err=True)
+        ctx.exit(2)
 
 
 @queue.command("retry", short_help="Return failed/interrupted items to pending.")
 @click.argument("item_id")
-def queue_retry(item_id: str) -> None:
+@click.pass_context
+def queue_retry(ctx: click.Context, item_id: str) -> None:
     """Retry a failed, interrupted, or canceled item (or `all` of them)."""
-    q = _queue()
+    q = _queue(ctx)
     if item_id == "all":
-        retried = [
-            i.id
-            for i in list(q.items)
-            if i.status
-            in (JobStatus.FAILED.value, JobStatus.INTERRUPTED.value, JobStatus.CANCELED.value)
-            and q.retry(i.id)
-        ]
+        retried = _guard(
+            ctx,
+            lambda: [
+                i.id
+                for i in list(q.items)
+                if i.status
+                in (JobStatus.FAILED.value, JobStatus.INTERRUPTED.value, JobStatus.CANCELED.value)
+                and q.retry(i.id)
+            ],
+        )
         print_success(f"Retrying {len(retried)} item(s).")
         return
-    if q.retry(item_id):
+    if _guard(ctx, lambda: q.retry(item_id)):
         print_success(f"Retrying {item_id}")
     else:
         click.echo(f"Not found or not retryable: {item_id}", err=True)
+        ctx.exit(2)
 
 
 @queue.command("clear", short_help="Remove completed/canceled items.")
-def queue_clear() -> None:
-    q = _queue()
+@click.pass_context
+def queue_clear(ctx: click.Context) -> None:
+    q = _queue(ctx)
     if not confirm("Clear completed and canceled items?", default=True):
         return
-    n = q.clear_done()
+    n = _guard(ctx, q.clear_done)
     print_success(f"Removed {n} items.")
+
+
+@queue.command("reset", short_help="Discard a corrupt/current queue and start empty.")
+@click.pass_context
+def queue_reset(ctx: click.Context) -> None:
+    """Recover from a corrupt queue by writing a fresh empty one.
+
+    The corrupt original was already backed up as `queue.json.corrupt.*`.
+    """
+    q = QueueManager(data_dir() / "queue.json")
+    if not confirm("Discard the current queue and start empty?", default=False):
+        return
+    _guard(ctx, q.reset)
+    print_success("Queue reset to empty.")
 
 
 @queue.command("run", short_help="Process pending queue items sequentially.")
@@ -144,13 +197,14 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
     from ..core.uploader import MegaUploader
     from ..ui.prompts import ask, ask_password
     from ..ui.transfer_progress import TransferProgress, redact_link
+    from ..utils.redaction import redact_text
     from ..utils.speed import make_limiter
     from .upload_cmd import finalize_upload_success
 
     cfg = ctx.obj["config"]
     quiet = bool(ctx.obj.get("quiet"))
-    q = _queue()
-    for recovered_item in q.recover_interrupted():
+    q = _queue(ctx)
+    for recovered_item in _guard(ctx, q.recover_interrupted):
         print_error(f"Recovered interrupted job {recovered_item.id} from a previous run.")
     runnable = q.runnable()
     if not runnable:
@@ -232,7 +286,10 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
                 mfa_prompt=lambda: ask("Enter 6-digit 2FA code").strip(),
             )
         except MegaError as exc:
-            print_error(f"Login failed for {acc.email}: {exc}")
+            print_error(f"Login failed for {acc.email}: {redact_text(str(exc))}")
+            # MF8: close the API/HTTP session on the failed-login path before
+            # the client ever enters the cache.
+            upload_api.close()
             return None
         client_cache[account_id] = upload_client
         return upload_client
@@ -264,6 +321,7 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
 
     def _fail(item, row: str, message: str) -> None:
         nonlocal failures
+        message = redact_text(message)
         q.update_status(item.id, JobStatus.FAILED, error=message)
         progress.finish_item(row, "failed")
         notes.append(("error", f"Job {item.id} failed: {message}"))
@@ -345,7 +403,11 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
 
                         upload_result = uploader.upload_file(local_path, on_progress=cb_up)
                         finalize_upload_success(
-                            cfg, upload_client, upload_result, local_path, notes=notes
+                            cfg,
+                            upload_client,
+                            upload_result,
+                            local_path,
+                            note=lambda kind, msg: notes.append((kind, msg)),
                         )
                         progress.finish_item(row, "complete")
                         q.update_status(item.id, JobStatus.DONE)

@@ -16,11 +16,12 @@ from ..core.api import MegaAPIClient
 from ..core.client import MegaClient
 from ..core.errors import MegaError, QuotaError
 from ..core.uploader import MegaUploader, UploadResult
-from ..ui.machine_output import MachineOutput
+from ..ui.machine_output import MachineOutput, error_code_for
 from ..ui.prompts import ask, ask_password, print_error, print_info, print_success, print_warn
 from ..ui.transfer_progress import TransferProgress
 from ..utils.helpers import format_bytes
 from ..utils.hooks import append_upload_log, run_post_transfer_command
+from ..utils.redaction import redact_text
 from ..utils.speed import make_limiter
 
 log = logging.getLogger(__name__)
@@ -38,7 +39,7 @@ def finalize_upload_success(
     *,
     share: bool = False,
     share_password: str | None = None,
-    notes: list[tuple[str, str]] | None = None,
+    note=None,
     machine: MachineOutput | None = None,
 ) -> str | None:
     """Centralized post-upload success pipeline used by EVERY upload mode
@@ -49,13 +50,14 @@ def finalize_upload_success(
     attribution. A share/hook failure is reported separately and never
     converts a successful transfer into a failure. Returns the share link.
 
-    When `notes` is given, user-facing messages are buffered there (so a live
-    progress view is not torn up) and the caller prints them after closing.
+    When `note` (a `(kind, message)` callback) is given, user-facing messages
+    are buffered there (thread-safe) so a live progress view is not torn up
+    and the caller prints them after closing.
     """
 
     def say(kind: str, message: str) -> None:
-        if notes is not None:
-            notes.append((kind, message))
+        if note is not None:
+            note(kind, message)
         else:
             {"success": print_success, "info": print_info, "error": print_error}[kind](message)
 
@@ -70,7 +72,9 @@ def finalize_upload_success(
             say("info", f"Share link: {link}")
         except MegaError as exc:
             # Reported separately: the upload itself succeeded.
-            say("error", f"Could not generate share link for {result.name}: {exc}")
+            say(
+                "error", f"Could not generate share link for {result.name}: {redact_text(str(exc))}"
+            )
     append_upload_log(
         cfg.upload_log_path,
         local_path=local_path,
@@ -310,12 +314,15 @@ def upload(
         )
 
     def _login_client(email: str, password: str) -> MegaClient | None:
-        client = MegaClient(api=_new_api())
+        api = _new_api()
+        client = MegaClient(api=api)
         try:
             client.login(email, password, mfa_code=mfa_code, mfa_prompt=_mfa_prompt)
             return client
         except MegaError as exc:
-            print_error(f"Login failed for {email}: {exc}")
+            print_error(f"Login failed for {email}: {redact_text(str(exc))}")
+            # MF8: never leak the API/HTTP session when login fails.
+            api.close()
             return None
 
     def _worker_client(base: MegaClient) -> MegaClient:
@@ -352,24 +359,42 @@ def upload(
     # Account planning (login happens BEFORE the live view so MFA/vault
     # prompts never fight the renderer).
     # ------------------------------------------------------------------
-    clients: dict[str, MegaClient] = {}  # email -> logged-in client
+    clients: dict[str, MegaClient] = {}  # email -> logged-in BASE client (cached)
+    client_cache_lock = threading.Lock()
     failures = 0
     fail_lock = threading.Lock()
     notes: list[tuple[str, str]] = []
+    notes_lock = threading.Lock()
 
-    def _client_for_email(email_or_label: str) -> MegaClient | None:
+    def _note(kind: str, message: str) -> None:
+        with notes_lock:
+            notes.append((kind, message))
+
+    def _base_for_email(email_or_label: str) -> MegaClient | None:
+        """Thread-safe cached login: one authenticated BASE client per account.
+
+        Logins are serialized under the cache lock so two parallel files that
+        first touch the same account never double-login (and never prompt MFA
+        twice)."""
         try:
             acc = mgr.get_account(email_or_label)
             password = mgr.get_password(email_or_label)
         except AccountNotFound:
             print_error(f"Account not found: {email_or_label}")
             return None
-        if acc.email in clients:
-            return clients[acc.email]
-        client = _login_client(acc.email, password)
-        if client is not None:
-            clients[acc.email] = client
-        return client
+        with client_cache_lock:
+            if acc.email in clients:
+                return clients[acc.email]
+            client = _login_client(acc.email, password)
+            if client is not None:
+                clients[acc.email] = client
+            return client
+
+    def _worker_for_email(email_or_label: str) -> MegaClient | None:
+        """An ISOLATED per-transfer client (own API/HTTP session) reusing the
+        cached account's authenticated session material."""
+        base = _base_for_email(email_or_label)
+        return _worker_client(base) if base is not None else None
 
     ledger: QuotaLedger | None = None
     fixed_email: str | None = None
@@ -388,7 +413,7 @@ def upload(
         if not account_id:
             print_error("No account specified and no default set.")
             ctx.exit(1)
-        if _client_for_email(account_id) is None:
+        if _base_for_email(account_id) is None:
             ctx.exit(1)
         fixed_email = next(iter(clients.keys()))
 
@@ -406,12 +431,27 @@ def upload(
             # Cannot verify: treat the account as unavailable for this run.
             ledger.set_free(email, 0)
 
-    def _fail_item(message: str) -> None:
+    def _fail_item(
+        message: str,
+        *,
+        path: Path | None = None,
+        exc: BaseException | None = None,
+        account: str | None = None,
+    ) -> None:
         nonlocal failures
         with fail_lock:
             failures += 1
-        notes.append(("error", message))
-        machine.emit(event="result", type="upload", status="failed", error=message)
+        _note("error", message)
+        machine.emit(
+            event="result",
+            type="upload",
+            status="failed",
+            name=path.name if path is not None else None,
+            path=str(path) if path is not None else None,
+            account=account,
+            error_code=error_code_for(exc) if exc is not None else None,
+            error=message,
+        )
 
     def _progress_cb(key: str):
         def _cb(p) -> None:
@@ -432,81 +472,45 @@ def upload(
         quiet=quiet,
     )
 
-    can_parallel = parallel > 1 and not keep_structure and not auto_account and len(jobs) > 1
+    def _run_one(job: tuple[Path, int]) -> None:
+        file_path, size = job
+        _upload_one_sequential(
+            file_path,
+            size,
+            ledger=ledger,
+            fixed_email=fixed_email,
+            worker_for_email=_worker_for_email,
+            refresh_quota=_refresh_quota_after_error,
+            resolve_target=_resolve_target_handle,
+            make_uploader=_make_uploader,
+            progress=progress,
+            cfg=cfg,
+            keep_structure=keep_structure,
+            keep_going=keep_going,
+            auto_share=auto_share,
+            share_password=share_password,
+            rename_to=rename if single_file else None,
+            note=_note,
+            fail_item=_fail_item,
+            machine=machine,
+        )
+
+    # Parallel whenever more than one FLAT file is queued — including
+    # `--auto-account`, which selects/reserves per file safely from the
+    # thread-safe ledger and gives every transfer its own isolated client.
+    # `--keep-structure` trees stay sequential (one tree = one account).
+    can_parallel = parallel > 1 and not keep_structure and len(jobs) > 1
 
     try:
         with progress:
             if can_parallel:
-                base_client = next(iter(clients.values()))
-                try:
-                    shared_target = _resolve_target_handle(base_client)
-                except MegaError as exc:
-                    print_error(str(exc))
-                    ctx.exit(1)
-
                 from concurrent.futures import ThreadPoolExecutor
 
-                def _upload_one(job: tuple[Path, int]) -> None:
-                    file_path, size = job
-                    if not file_path.is_file():
-                        return
-                    worker = _worker_client(base_client)
-                    item = progress.add_item(file_path.name, size)
-                    try:
-                        uploader = _make_uploader(worker)
-                        result = uploader.upload_file(
-                            file_path,
-                            target_handle=shared_target,
-                            rename_to=None,
-                            on_progress=_progress_cb(item),
-                        )
-                        finalize_upload_success(
-                            cfg,
-                            worker,
-                            result,
-                            file_path,
-                            share=auto_share,
-                            share_password=share_password,
-                            notes=notes,
-                            machine=machine,
-                        )
-                        progress.finish_item(item, "complete")
-                    except MegaError as exc:
-                        progress.finish_item(item, "failed")
-                        _fail_item(f"Upload failed: {file_path.name}: {exc}")
-                    except Exception as exc:  # noqa: BLE001
-                        log.exception("Unexpected error during upload")
-                        progress.finish_item(item, "failed")
-                        _fail_item(f"Unexpected error: {file_path.name}: {exc}")
-                    finally:
-                        # Close the worker's HTTP session WITHOUT logging out
-                        # the shared server-side session.
-                        worker.close()
-
                 with ThreadPoolExecutor(max_workers=parallel) as pool:
-                    list(pool.map(_upload_one, jobs))
+                    list(pool.map(_run_one, jobs))
             else:
-                for file_path, size in jobs:
-                    _upload_one_sequential(
-                        file_path,
-                        size,
-                        ledger=ledger,
-                        fixed_email=fixed_email,
-                        client_for_email=_client_for_email,
-                        refresh_quota=_refresh_quota_after_error,
-                        resolve_target=_resolve_target_handle,
-                        make_uploader=_make_uploader,
-                        progress=progress,
-                        cfg=cfg,
-                        keep_structure=keep_structure,
-                        keep_going=keep_going,
-                        auto_share=auto_share,
-                        share_password=share_password,
-                        rename_to=rename if single_file else None,
-                        notes=notes,
-                        fail_item=_fail_item,
-                        machine=machine,
-                    )
+                for job in jobs:
+                    _run_one(job)
     finally:
         for client in clients.values():
             try:
@@ -530,7 +534,7 @@ def _upload_one_sequential(
     *,
     ledger: QuotaLedger | None,
     fixed_email: str | None,
-    client_for_email,
+    worker_for_email,
     refresh_quota,
     resolve_target,
     make_uploader,
@@ -541,23 +545,22 @@ def _upload_one_sequential(
     auto_share: bool,
     share_password: str | None,
     rename_to: str | None,
-    notes: list[tuple[str, str]],
+    note,
     fail_item,
     machine: MachineOutput | None = None,
 ) -> None:  # noqa: C901 - one cohesive per-file state machine
-    """Upload one sequential job, selecting the account at start time.
+    """Upload one job, selecting the account at start time.
 
-    With `--auto-account` the account is reserved from the live ledger
-    immediately before the file starts. On `QuotaError` the account's quota
-    is refreshed and the SAME file is retried on another suitable account;
-    each account is tried at most once per file, so the retry is bounded.
-    A `--keep-structure` tree is reserved and uploaded as ONE unit on ONE
-    account; if it fails mid-tree the result is a clear failure (never a
-    silently distributed or partially-complete tree).
+    Thread-safe: safe to call concurrently (one call per file). The account is
+    reserved from the live ledger immediately before the file starts, and each
+    attempt gets its OWN isolated per-transfer client (own API/HTTP session),
+    closed in a `finally`. On `QuotaError` the account's quota is refreshed and
+    the SAME file is retried on another suitable account; each account is tried
+    at most once per file, so the retry is bounded. A `--keep-structure` tree
+    is uploaded as ONE unit on ONE account; a mid-tree failure is a clear
+    failure (never a silently distributed or partial tree).
     """
     is_tree = file_path.is_dir() and keep_structure
-    # A tree gets a summary row without a byte total (its bytes are counted
-    # by the per-file manifest rows), so overall totals are never doubled.
     row = progress.add_item(file_path.name, None if is_tree else size)
     attempted: set[str] = set()
     while True:
@@ -565,113 +568,144 @@ def _upload_one_sequential(
             email = ledger.reserve(size, exclude=attempted)
             if email is None:
                 progress.finish_item(row, "failed")
-                fail_item(f"No stored account has enough known free space for {file_path.name}.")
+                fail_item(
+                    f"No stored account has enough known free space for {file_path.name}.",
+                    path=file_path,
+                )
                 return
-            client = client_for_email(email)
-            if client is None:
+        else:
+            email = fixed_email
+            if email is None:
+                progress.finish_item(row, "failed")
+                fail_item(f"No active session for {file_path.name}.", path=file_path)
+                return
+
+        client = worker_for_email(email)
+        if client is None:
+            if ledger is not None:
                 attempted.add(email)
                 ledger.release(email, size)
                 continue
-            notes.append(("info", f"Using {email} for {file_path.name}"))
-        else:
-            email = fixed_email
-            client = client_for_email(email) if email else None
-            if client is None:
-                progress.finish_item(row, "failed")
-                fail_item(f"No active session for {file_path.name}.")
-                return
-        assert email is not None  # narrowed by the branches above
-
-        try:
-            target_handle = resolve_target(client)
-        except MegaError as exc:
-            if ledger is not None:
-                ledger.release(email, size)
             progress.finish_item(row, "failed")
-            fail_item(str(exc))
+            fail_item(f"No active session for {file_path.name}.", path=file_path, account=email)
             return
+        if ledger is not None:
+            note("info", f"Using {email} for {file_path.name}")
 
-        uploader = make_uploader(client)
         try:
-            if is_tree:
-                tree_ok = _upload_structured_directory(
-                    uploader,
+            try:
+                target_handle = resolve_target(client)
+            except MegaError as exc:
+                if ledger is not None:
+                    ledger.release(email, size)
+                progress.finish_item(row, "failed")
+                fail_item(
+                    f"Target resolution failed for {file_path.name}: {redact_text(str(exc))}",
+                    path=file_path,
+                    exc=exc,
+                    account=email,
+                )
+                return
+
+            uploader = make_uploader(client)
+            try:
+                if is_tree:
+                    tree_ok = _upload_structured_directory(
+                        uploader,
+                        file_path,
+                        target_handle,
+                        progress,
+                        cfg,
+                        client,
+                        keep_going=keep_going,
+                        share=auto_share,
+                        share_password=share_password,
+                        note=note,
+                        on_failure=lambda exc, em=email: fail_item(
+                            f"Directory upload incomplete on {em}: {file_path.name}",
+                            path=file_path,
+                            exc=exc,
+                            account=em,
+                        ),
+                        machine=machine,
+                    )
+                    if tree_ok:
+                        progress.finish_item(row, "complete")
+                    else:
+                        # A partial remote tree is a clear failure — never
+                        # re-planned to another account, never marked complete.
+                        progress.finish_item(row, "failed")
+                        if ledger is not None:
+                            refresh_quota(email)
+                    return
+                result = uploader.upload_file(
                     file_path,
-                    target_handle,
-                    progress,
+                    target_handle=target_handle,
+                    rename_to=rename_to,
+                    on_progress=lambda p: progress.update_item(row, p.bytes_done, p.total_bytes),
+                )
+                finalize_upload_success(
                     cfg,
                     client,
-                    keep_going=keep_going,
+                    result,
+                    file_path,
                     share=auto_share,
                     share_password=share_password,
-                    notes=notes,
-                    on_failure=lambda exc, em=email: fail_item(
-                        f"Directory upload incomplete on {em}: {file_path.name}"
-                    ),
+                    note=note,
                     machine=machine,
                 )
-                if tree_ok:
-                    progress.finish_item(row, "complete")
-                else:
-                    # A partially created remote tree is a clear failure —
-                    # never re-planned to another account (that would leave
-                    # a silent partial tree) and never presented as complete.
-                    progress.finish_item(row, "failed")
-                    if ledger is not None:
-                        refresh_quota(email)
+                progress.finish_item(row, "complete")
                 return
-            result = uploader.upload_file(
-                file_path,
-                target_handle=target_handle,
-                rename_to=rename_to,
-                on_progress=lambda p: progress.update_item(row, p.bytes_done, p.total_bytes),
-            )
-            finalize_upload_success(
-                cfg,
-                client,
-                result,
-                file_path,
-                share=auto_share,
-                share_password=share_password,
-                notes=notes,
-                machine=machine,
-            )
-            progress.finish_item(row, "complete")
-            return
-        except QuotaError as exc:
-            attempted.add(email)
-            refresh_quota(email)
-            if ledger is not None and not is_tree:
-                # Bounded re-plan: retry this file once per remaining account.
-                notes.append(
-                    ("error", f"Quota exhausted on {email}; re-planning {file_path.name}.")
+            except QuotaError as exc:
+                attempted.add(email)
+                refresh_quota(email)
+                if ledger is not None and not is_tree:
+                    # Bounded re-plan: retry this file once per remaining account.
+                    note("error", f"Quota exhausted on {email}; re-planning {file_path.name}.")
+                    continue
+                progress.finish_item(row, "failed")
+                fail_item(
+                    f"Upload failed: {file_path.name}: {redact_text(str(exc))}",
+                    path=file_path,
+                    exc=exc,
+                    account=email,
                 )
-                continue
-            progress.finish_item(row, "failed")
-            fail_item(f"Upload failed: {file_path.name}: {exc}")
-            return
-        except MegaError as exc:
-            if ledger is not None:
-                # A failed single file consumed nothing: return the
-                # reservation. A partially-uploaded tree DID consume remote
-                # space, so refresh instead of blindly re-crediting.
-                if is_tree:
-                    refresh_quota(email)
-                else:
-                    ledger.release(email, size)
-            progress.finish_item(row, "failed")
-            fail_item(f"Upload failed: {file_path.name}: {exc}")
-            return
-        except Exception as exc:  # noqa: BLE001
-            log.exception("Unexpected error during upload")
-            if ledger is not None:
-                if is_tree:
-                    refresh_quota(email)
-                else:
-                    ledger.release(email, size)
-            progress.finish_item(row, "failed")
-            fail_item(f"Unexpected error: {file_path.name}: {exc}")
-            return
+                return
+            except MegaError as exc:
+                if ledger is not None:
+                    # A failed single file consumed nothing; a partial tree DID
+                    # consume remote space, so refresh instead of re-crediting.
+                    if is_tree:
+                        refresh_quota(email)
+                    else:
+                        ledger.release(email, size)
+                progress.finish_item(row, "failed")
+                fail_item(
+                    f"Upload failed: {file_path.name}: {redact_text(str(exc))}",
+                    path=file_path,
+                    exc=exc,
+                    account=email,
+                )
+                return
+            except Exception as exc:  # noqa: BLE001
+                log.exception("Unexpected error during upload")
+                if ledger is not None:
+                    if is_tree:
+                        refresh_quota(email)
+                    else:
+                        ledger.release(email, size)
+                progress.finish_item(row, "failed")
+                fail_item(
+                    f"Unexpected error: {file_path.name}: {redact_text(str(exc))}",
+                    path=file_path,
+                    exc=exc,
+                    account=email,
+                )
+                return
+        finally:
+            # Close the per-transfer worker's HTTP session WITHOUT logging out
+            # the shared cached account session.
+            client.close()
 
 
 def _upload_structured_directory(
@@ -685,7 +719,7 @@ def _upload_structured_directory(
     keep_going: bool,
     share: bool,
     share_password: str | None,
-    notes: list[tuple[str, str]],
+    note,
     on_failure,
     machine: MachineOutput | None = None,
 ) -> bool:
@@ -715,7 +749,7 @@ def _upload_structured_directory(
             local_path,
             share=share,
             share_password=share_password,
-            notes=notes,
+            note=note,
             machine=machine,
         )
         key = items.get(local_path)
@@ -733,7 +767,7 @@ def _upload_structured_directory(
         )
         if keep_going and uploader.last_directory_failures:
             for line in uploader.last_directory_failures:
-                notes.append(("error", f"Failed: {line}"))
+                note("error", f"Failed: {redact_text(line)}")
             for _ in uploader.last_directory_failures:
                 on_failure(MegaError(message="directory item failed"))
         for path, key in items.items():
@@ -743,9 +777,9 @@ def _upload_structured_directory(
                 progress.finish_item(key, "failed")
         return not uploader.last_directory_failures
     except MegaError as exc:
-        notes.append(("error", f"Upload failed: {exc}"))
+        note("error", f"Upload failed: {redact_text(str(exc))}")
         for line in uploader.last_directory_failures or [str(exc)]:
-            log.error("Directory upload failure: %s", line)
+            log.error("Directory upload failure: %s", redact_text(line))
         for path, key in items.items():
             if any(line.startswith(str(path)) for line in uploader.last_directory_failures):
                 progress.finish_item(key, "failed")

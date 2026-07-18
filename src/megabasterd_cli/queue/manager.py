@@ -21,6 +21,8 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from ..utils.filelock import FileLock, FileLockError
+
 log = logging.getLogger(__name__)
 
 
@@ -28,82 +30,12 @@ class QueueLockError(Exception):
     """Raised when the cross-process queue lock cannot be acquired in time."""
 
 
-class _QueueFileLock:
-    """Cross-platform advisory file lock guarding queue read-modify-write.
+class QueueCorruptionError(Exception):
+    """Raised when the queue file is malformed or has an invalid schema.
 
-    Uses `msvcrt.locking` on Windows and `fcntl.flock` on POSIX. Both block
-    other processes AND other open descriptors in the same process, so two
-    `QueueManager` instances anywhere are serialized. Acquisition is bounded
-    by a timeout and never silently skipped.
+    A corrupt queue is preserved (never overwritten) and mutations are blocked
+    until the operator resolves it with `queue reset` or manual recovery.
     """
-
-    def __init__(self, path: Path):
-        self.path = path
-        self._fd: int | None = None
-
-    def acquire(self, timeout: float) -> None:
-        deadline = time.monotonic() + max(0.0, timeout)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(self.path), os.O_CREAT | os.O_RDWR)
-        try:
-            while True:
-                try:
-                    if os.name == "nt":
-                        # msvcrt only exists on Windows; fcntl only on POSIX.
-                        # Each platform's module is invisible to mypy on the
-                        # other, so both branches are attribute-ignored.
-                        import msvcrt  # type: ignore[import-not-found, unused-ignore]
-
-                        os.lseek(fd, 0, os.SEEK_SET)
-                        msvcrt.locking(  # type: ignore[attr-defined, unused-ignore]
-                            fd,
-                            msvcrt.LK_NBLCK,  # type: ignore[attr-defined, unused-ignore]
-                            1,
-                        )
-                    else:
-                        import fcntl  # type: ignore[import-not-found, unused-ignore]
-
-                        fcntl.flock(  # type: ignore[attr-defined, unused-ignore]
-                            fd,
-                            fcntl.LOCK_EX | fcntl.LOCK_NB,  # type: ignore[attr-defined, unused-ignore]
-                        )
-                    self._fd = fd
-                    return
-                except OSError:
-                    if time.monotonic() >= deadline:
-                        raise QueueLockError(
-                            f"Could not lock the transfer queue within {timeout:.0f}s; "
-                            f"another queue operation is holding {self.path.name}. "
-                            "Retry after it finishes."
-                        ) from None
-                    time.sleep(0.05)
-        except BaseException:
-            if self._fd is None:
-                os.close(fd)
-            raise
-
-    def release(self) -> None:
-        fd, self._fd = self._fd, None
-        if fd is None:
-            return
-        try:
-            if os.name == "nt":
-                import msvcrt  # type: ignore[import-not-found, unused-ignore]
-
-                os.lseek(fd, 0, os.SEEK_SET)
-                with contextlib.suppress(OSError):
-                    msvcrt.locking(  # type: ignore[attr-defined, unused-ignore]
-                        fd,
-                        msvcrt.LK_UNLCK,  # type: ignore[attr-defined, unused-ignore]
-                        1,
-                    )
-            else:
-                import fcntl  # type: ignore[import-not-found, unused-ignore]
-
-                with contextlib.suppress(OSError):
-                    fcntl.flock(fd, fcntl.LOCK_UN)  # type: ignore[attr-defined, unused-ignore]
-        finally:
-            os.close(fd)
 
 
 # Associated data tag so a queue secret blob cannot be reused in another context.
@@ -291,8 +223,17 @@ class QueueManager:
         self.lock_timeout = lock_timeout
         self._field_names = {f.name for f in fields(QueueItem)}
         self._mutex = threading.RLock()
-        self._file_lock = _QueueFileLock(path.parent / (path.name + ".lock"))
+        self._file_lock = FileLock(
+            path.parent / (path.name + ".lock"),
+            message=(
+                f"Could not lock the transfer queue within {lock_timeout:.0f}s; "
+                "another queue operation is holding it. Retry after it finishes."
+            ),
+        )
         self._lock_depth = 0
+        # Set by `_load` when the on-disk queue is malformed/invalid-schema.
+        self._corrupt = False
+        self._corrupt_reason = ""
         with self._locked():
             self._load()
 
@@ -301,7 +242,10 @@ class QueueManager:
         """Hold the instance mutex plus the cross-process file lock (once)."""
         with self._mutex:
             if self._lock_depth == 0:
-                self._file_lock.acquire(timeout=self.lock_timeout)
+                try:
+                    self._file_lock.acquire(timeout=self.lock_timeout)
+                except FileLockError as exc:
+                    raise QueueLockError(str(exc)) from None
             self._lock_depth += 1
             try:
                 yield
@@ -309,6 +253,11 @@ class QueueManager:
                 self._lock_depth -= 1
                 if self._lock_depth == 0:
                     self._file_lock.release()
+
+    def _ensure_writable(self) -> None:
+        """Block mutations while the on-disk queue is corrupt."""
+        if self._corrupt:
+            raise QueueCorruptionError(self._corrupt_reason)
 
     def _deserialize(self, raw: dict) -> QueueItem:
         raw = dict(raw)
@@ -349,8 +298,36 @@ class QueueManager:
             data["enc_password"] = getattr(item, "_enc_password", None)
         return data
 
+    def _mark_corrupt(self, reason: str, data: bytes | None) -> None:
+        """Flag the on-disk queue as corrupt, preserve it, and back it up once.
+
+        The original is NEVER overwritten. A single timestamped copy is made
+        the first time corruption is seen (checked under the file lock, so
+        concurrent processes do not race or duplicate backups). No queue key
+        is created while integrity is unknown.
+        """
+        self._corrupt = True
+        self._corrupt_reason = (
+            f"The transfer queue file is corrupt and was preserved: {reason}. "
+            f"A backup was saved next to {self.path.name}; resolve it with "
+            "`mb queue reset` (discards jobs) or restore a good copy."
+        )
+        self._had_encrypted_secrets = True  # refuse any key creation
+        self.items = []
+        # Back up once: skip if a corrupt-copy already exists for this file.
+        existing = list(self.path.parent.glob(self.path.name + ".corrupt.*"))
+        if existing or data is None:
+            return
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+        backup = self.path.parent / f"{self.path.name}.corrupt.{stamp}.json"
+        with contextlib.suppress(OSError):
+            backup.write_bytes(data)  # byte-for-byte, encrypted blobs intact
+            log.warning("Preserved corrupt queue as %s", backup.name)
+
     def _load(self) -> None:
         self._needs_migration = False
+        self._corrupt = False
+        self._corrupt_reason = ""
         # Conservative default: assume secrets may exist until we have parsed
         # the file, so we never auto-create a key over a malformed queue.
         self._had_encrypted_secrets = False
@@ -358,25 +335,28 @@ class QueueManager:
             self.items = []
             return
         try:
-            with open(self.path, encoding="utf-8") as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, OSError, TypeError):
-            # Malformed/unreadable queue: do not rewrite it and do not create a
-            # key. Treat as possibly holding secrets so key creation is refused.
-            self._had_encrypted_secrets = True
-            self.items = []
+            raw = self.path.read_bytes()
+        except OSError as exc:
+            self._mark_corrupt(f"unreadable ({exc})", None)
             return
-        # Determine up front whether any encrypted secrets already exist; this
-        # governs whether a missing/empty key may be safely (re)created.
         try:
-            self._had_encrypted_secrets = any(
-                isinstance(i, dict) and i.get("enc_password") for i in data
-            )
-            self.items = [self._deserialize(i) for i in data]
-        except (TypeError, AttributeError):
-            self._had_encrypted_secrets = True
-            self.items = []
+            data = json.loads(raw.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            self._mark_corrupt(f"not valid JSON ({exc})", raw)
             return
+        # Schema: root must be a JSON list of objects.
+        if not isinstance(data, list):
+            self._mark_corrupt(f"root is {type(data).__name__}, expected a list", raw)
+            return
+        try:
+            validated = [self._validate_raw_item(entry) for entry in data]
+        except QueueCorruptionError as exc:
+            self._mark_corrupt(str(exc), raw)
+            return
+        # Only now — with the whole file validated — build items. Never
+        # partially load and then rewrite.
+        self._had_encrypted_secrets = any(entry.get("enc_password") for entry in validated)
+        self.items = [self._deserialize(entry) for entry in validated]
         # Rewrite once to encrypt any legacy plaintext passwords found on load.
         # If the key cannot be created safely, preserve the original file.
         if self._needs_migration:
@@ -385,8 +365,39 @@ class QueueManager:
             except QueueKeyError as exc:
                 log.warning("Could not migrate legacy queue secrets: %s", exc)
 
+    _REQUIRED_ITEM_FIELDS = {
+        "id": str,
+        "type": str,
+        "source": str,
+        "destination": str,
+    }
+
+    def _validate_raw_item(self, entry) -> dict:
+        """Validate one raw queue entry's shape; raise QueueCorruptionError."""
+        if not isinstance(entry, dict):
+            raise QueueCorruptionError(f"queue entry is {type(entry).__name__}, expected an object")
+        for name, expected in self._REQUIRED_ITEM_FIELDS.items():
+            if name not in entry:
+                raise QueueCorruptionError(f"queue entry is missing required field {name!r}")
+            if not isinstance(entry[name], expected):
+                raise QueueCorruptionError(
+                    f"queue entry field {name!r} must be {expected.__name__}"
+                )
+        if entry["type"] not in {t.value for t in JobType}:
+            raise QueueCorruptionError(f"queue entry has unknown type {entry['type']!r}")
+        status = entry.get("status", JobStatus.PENDING.value)
+        if status not in {s.value for s in JobStatus}:
+            raise QueueCorruptionError(f"queue entry has unknown status {status!r}")
+        if "size" in entry and not isinstance(entry["size"], int):
+            raise QueueCorruptionError("queue entry field 'size' must be an integer")
+        return entry
+
     def save(self) -> None:
         with self._locked():
+            # Never overwrite a corrupt queue file: every mutation funnels
+            # through save(), so this one guard blocks add/remove/claim/status/
+            # heartbeat/retry/clear while integrity is unknown.
+            self._ensure_writable()
             self.path.parent.mkdir(parents=True, exist_ok=True)
             # Serialize BEFORE touching the filesystem so a serialization
             # failure preserves the original file untouched.
@@ -613,3 +624,20 @@ class QueueManager:
             if len(self.items) != before:
                 self.save()
             return before - len(self.items)
+
+    @property
+    def is_corrupt(self) -> bool:
+        return self._corrupt
+
+    def reset(self) -> None:
+        """Explicit recovery: discard a corrupt/current queue and start empty.
+
+        The corrupt original was already backed up on load; this writes a
+        fresh empty queue so mutations can resume.
+        """
+        with self._locked():
+            self._corrupt = False
+            self._corrupt_reason = ""
+            self._had_encrypted_secrets = False
+            self.items = []
+            self.save()

@@ -96,7 +96,9 @@ def test_missing_local_file_creates_visible_failed_row(cli_env, monkeypatch, cap
     assert "missing" in (q.items[0].error or "").lower()
 
 
-def test_unknown_job_type_is_failed_row(cli_env, captured_progress):
+def test_unknown_job_type_in_file_is_corruption(cli_env, captured_progress):
+    """MF7: an unknown job type in the queue file is a schema violation and is
+    treated as corruption (preserved + non-zero exit), not silently run."""
     q = QueueManager(_queue_path(cli_env))
     q.add(
         QueueItem(
@@ -106,12 +108,16 @@ def test_unknown_job_type_is_failed_row(cli_env, captured_progress):
             destination="",
         )
     )
+    original = _queue_path(cli_env).read_bytes()
     runner = CliRunner()
     result = runner.invoke(cli, ["-q", "queue", "run"])
     assert result.exit_code == 1
-    assert _statuses(captured_progress) == ["failed"]
-    fresh = QueueManager(_queue_path(cli_env))
-    assert fresh.items[0].status == JobStatus.FAILED.value
+    # No transfer controller is created: the corrupt file is not run.
+    assert captured_progress == [] or _statuses(captured_progress) == []
+    # Original preserved byte-for-byte; a backup exists.
+    assert _queue_path(cli_env).read_bytes() == original
+    backups = list(_queue_path(cli_env).parent.glob("queue.json.corrupt.*"))
+    assert backups, "a corrupt-queue backup must be created"
 
 
 def test_keyboard_interrupt_cancels_row_and_releases_lease(cli_env, monkeypatch, captured_progress):

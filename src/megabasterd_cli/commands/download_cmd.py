@@ -22,7 +22,7 @@ from ..core.links import (
     resolve_megacrypter_link,
     resolve_password_link,
 )
-from ..ui.machine_output import MachineOutput
+from ..ui.machine_output import MachineOutput, error_code_for
 from ..ui.prompts import print_error, print_info, print_success
 from ..ui.transfer_progress import TransferProgress, redact_link
 from ..utils.helpers import format_bytes
@@ -578,6 +578,7 @@ def _download_file(
             type="download",
             status="failed",
             source=redact_link(url),
+            error_code=error_code_for(e),
             error=str(e),
         )
         return False
@@ -590,6 +591,7 @@ def _download_file(
             type="download",
             status="failed",
             source=redact_link(url),
+            error_code=error_code_for(e),
             error=str(e),
         )
         return False
@@ -662,7 +664,9 @@ def _download_folder(
             event="result",
             type="download",
             status="failed",
+            name=path.name,
             path=str(path),
+            error_code=error_code_for(exc),
             error=str(exc),
         )
 
@@ -704,6 +708,7 @@ def _download_folder(
             type="download",
             status="failed",
             source=redact_link(url),
+            error_code=error_code_for(e),
             error=str(e),
         )
         return False
@@ -715,6 +720,7 @@ def _download_folder(
             type="download",
             status="failed",
             source=redact_link(url),
+            error_code=error_code_for(e),
             error=str(e),
         )
         return False
@@ -763,7 +769,9 @@ def _download_folder_file(
             event="result",
             type="download",
             status="failed",
+            name=path.name,
             path=str(path),
+            error_code=error_code_for(exc),
             error=str(exc),
         )
 
@@ -803,6 +811,7 @@ def _download_folder_file(
             type="download",
             status="failed",
             source=redact_link(url),
+            error_code=error_code_for(e),
             error=str(e),
         )
         return False
@@ -814,6 +823,7 @@ def _download_folder_file(
             type="download",
             status="failed",
             source=redact_link(url),
+            error_code=error_code_for(e),
             error=str(e),
         )
         return False

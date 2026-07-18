@@ -60,7 +60,13 @@ def test_finalize_writes_log_runs_hook_and_shares(tmp_path, monkeypatch):
     local.write_bytes(b"data")
 
     link = finalize_upload_success(
-        cfg, client, _result(), local, share=True, share_password="pw", notes=notes
+        cfg,
+        client,
+        _result(),
+        local,
+        share=True,
+        share_password="pw",
+        note=lambda k, m: notes.append((k, m)),
     )
 
     assert link == "https://mega.nz/file/H#K"
@@ -81,7 +87,9 @@ def test_share_failure_is_reported_separately_not_as_upload_failure(tmp_path):
     local = tmp_path / "f.bin"
     local.write_bytes(b"data")
 
-    link = finalize_upload_success(cfg, client, _result(), local, share=True, notes=notes)
+    link = finalize_upload_success(
+        cfg, client, _result(), local, share=True, note=lambda k, m: notes.append((k, m))
+    )
 
     assert link is None
     kinds = [k for k, _ in notes]
@@ -98,4 +106,4 @@ def test_hook_failure_never_breaks_the_transfer(tmp_path):
     local = tmp_path / "f.bin"
     local.write_bytes(b"data")
     # Must not raise even though the hook cannot start.
-    finalize_upload_success(cfg, client, _result(), local, notes=[])
+    finalize_upload_success(cfg, client, _result(), local, note=lambda k, m: None)

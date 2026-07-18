@@ -20,17 +20,12 @@ import threading
 import uuid
 from dataclasses import dataclass
 
+from ..utils.redaction import redact_link  # re-exported for existing imports
 from .progress import MultiFileProgressView, ProgressFileState
 
+__all__ = ["TransferProgress", "redact_link", "TERMINAL_STATUSES"]
+
 TERMINAL_STATUSES = {"complete", "failed", "canceled", "skipped"}
-
-
-def redact_link(value: str) -> str:
-    """Strip the key fragment from a MEGA URL for on-screen summaries."""
-    if "#" in value:
-        base, _fragment = value.split("#", 1)
-        return f"{base}#<key>"
-    return value
 
 
 @dataclass

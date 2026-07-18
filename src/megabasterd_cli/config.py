@@ -2,16 +2,30 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
+import tempfile
+import threading
+import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
+
+from .utils.filelock import FileLock, FileLockError
 
 APP_NAME = "megabasterd-cli"
 APP_AUTHOR = "MegaBasterdCLI"
 
 log = logging.getLogger(__name__)
+
+
+class ConfigLockError(Exception):
+    """Raised when the config file lock cannot be acquired in time."""
+
+
+# Nullable (None-default) fields accept an explicit "null"/"none" to unset.
+_NULL_TOKENS = {"null", "none"}
 
 # Settings that existed but never worked; keeping them silently would lie to
 # users, so setting them is rejected with the reason and old persisted values
@@ -40,7 +54,8 @@ _OPTIONAL_STR_KEYS = {
     "megacrypter_server",
 }
 
-# Values of these keys may contain secrets and are never echoed in warnings.
+# Values of these keys may contain secrets and are never echoed in warnings
+# or `config show`/`config get`.
 _SECRET_CONFIG_KEYS = {"connect_proxy_password", "elc_accounts"}
 
 
@@ -214,6 +229,24 @@ def validate_config(cfg: Config) -> list[str]:
     return warnings
 
 
+def display_value(key: str, value):
+    """Redact secret config values for `config show` / `config get`.
+
+    `connect_proxy_password` shows `<redacted>` when set; `elc_accounts` has
+    its nested credential fields recursively redacted while keeping structure
+    visible.
+    """
+    from .utils.redaction import REDACTED, sanitize
+
+    if value is None:
+        return None
+    if key == "connect_proxy_password":
+        return REDACTED
+    if key == "elc_accounts":
+        return sanitize(value, _field="elc_accounts")
+    return value
+
+
 def config_dir() -> Path:
     return user_dir() / "Config"
 
@@ -267,11 +300,49 @@ def default_download_dir() -> Path:
 
 
 class ConfigStore:
-    """Load and save the Config dataclass from JSON on disk."""
+    """Load and save the Config dataclass from JSON on disk.
 
-    def __init__(self, path: Path | None = None):
+    Concurrency contract (mirrors QueueManager): targeted mutations
+    (`set`/`unset`) run under an instance mutex plus a cross-process file
+    lock, reload the newest on-disk config first, apply only the requested
+    change, and persist atomically via a unique fsync'd temp file. This
+    prevents two CLI/EVdlc processes from losing each other's updates or
+    colliding on a shared temp file.
+    """
+
+    def __init__(self, path: Path | None = None, lock_timeout: float = 10.0):
         self.path = path or config_file()
         self._config: Config | None = None
+        self.lock_timeout = lock_timeout
+        self._mutex = threading.RLock()
+        self._file_lock = FileLock(
+            self.path.parent / (self.path.name + ".lock"),
+            message=(
+                f"Could not lock the config file within {lock_timeout:.0f}s; "
+                "another process is updating it. Retry shortly."
+            ),
+        )
+        self._lock_depth = 0
+
+    @contextlib.contextmanager
+    def _locked(self):
+        """Hold the instance mutex plus the cross-process file lock (once)."""
+        self._mutex.acquire()
+        try:
+            if self._lock_depth == 0:
+                try:
+                    self._file_lock.acquire(timeout=self.lock_timeout)
+                except FileLockError as exc:
+                    raise ConfigLockError(str(exc)) from None
+            self._lock_depth += 1
+            try:
+                yield
+            finally:
+                self._lock_depth -= 1
+                if self._lock_depth == 0:
+                    self._file_lock.release()
+        finally:
+            self._mutex.release()
 
     @property
     def config(self) -> Config:
@@ -316,38 +387,88 @@ class ConfigStore:
         return cfg
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(asdict(self.config), f, indent=2)
-        os.replace(tmp, self.path)
+        with self._locked():
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            # Serialize BEFORE touching the filesystem so a serialization
+            # failure leaves the original file untouched.
+            payload = json.dumps(asdict(self.config), indent=2)
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=self.path.parent,
+                prefix=self.path.name + ".",
+                suffix=".tmp",
+                delete=False,
+            ) as tf:
+                tf.write(payload)
+                tf.flush()
+                os.fsync(tf.fileno())
+                tmp_path = tf.name
+            for attempt in range(5):
+                try:
+                    os.replace(tmp_path, self.path)
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
 
-    def set(self, key: str, value) -> None:
+    def _is_nullable(self, key: str) -> bool:
+        return key in _OPTIONAL_STR_KEYS
+
+    def _coerce(self, key: str, value):
+        """Turn a CLI string into the field's typed value; parse null/none."""
         if key in DEPRECATED_CONFIG_KEYS:
             raise ValueError(f"{key} is deprecated: {DEPRECATED_CONFIG_KEYS[key]}")
         if not hasattr(self.config, key):
             raise KeyError(f"Unknown config key: {key}")
-        # Cast to the existing type when feasible
+        # Nullable fields: an explicit null/none unsets to JSON null; any other
+        # string is kept verbatim (so "null-value" or a URL stays a string).
+        if self._is_nullable(key) and isinstance(value, str):
+            if value.strip().lower() in _NULL_TOKENS:
+                return None
+            return value
         current = getattr(self.config, key)
         if isinstance(current, bool):
             lowered = str(value).strip().lower()
             if lowered in ("1", "true", "yes", "y", "on"):
-                value = True
-            elif lowered in ("0", "false", "no", "n", "off"):
-                value = False
-            else:
-                raise ValueError("Expected a boolean value: true/false, yes/no, on/off, or 1/0")
-        elif isinstance(current, dict):
-            value = json.loads(value)
-            if not isinstance(value, dict):
+                return True
+            if lowered in ("0", "false", "no", "n", "off"):
+                return False
+            raise ValueError("Expected a boolean value: true/false, yes/no, on/off, or 1/0")
+        if isinstance(current, dict):
+            parsed = json.loads(value)
+            if not isinstance(parsed, dict):
                 raise ValueError("Expected a JSON object")
-        elif isinstance(current, int):
-            value = int(value)
-        elif isinstance(current, float):
-            value = float(value)
-        validate_config_value(key, value)
-        setattr(self.config, key, value)
-        self.save()
+            return parsed
+        if isinstance(current, int):
+            return int(value)
+        if isinstance(current, float):
+            return float(value)
+        return value
+
+    def set(self, key: str, value) -> None:
+        with self._locked():
+            self._config = self.load()  # reload newest before mutating
+            typed = self._coerce(key, value)
+            validate_config_value(key, typed)
+            setattr(self._config, key, typed)
+            self.save()
+
+    def unset(self, key: str) -> None:
+        """Reset a nullable field to JSON null (fails for non-nullable keys)."""
+        with self._locked():
+            self._config = self.load()
+            if key in DEPRECATED_CONFIG_KEYS:
+                raise ValueError(f"{key} is deprecated: {DEPRECATED_CONFIG_KEYS[key]}")
+            if not hasattr(self._config, key):
+                raise KeyError(f"Unknown config key: {key}")
+            if not self._is_nullable(key):
+                raise ValueError(
+                    f"{key} is not a nullable field; use `config reset` to restore defaults"
+                )
+            setattr(self._config, key, None)
+            self.save()
 
     def raw_keys(self) -> frozenset[str]:
         """Keys present in the persisted JSON file (empty when absent)."""
@@ -366,16 +487,18 @@ class ConfigStore:
         Returns the removed keys so callers (and EVdlc) can report them.
         Values of known keys are validated/kept by the normal load path.
         """
-        stale = sorted(
-            key
-            for key in self.raw_keys()
-            if key in DEPRECATED_CONFIG_KEYS or not hasattr(Config(), key)
-        )
-        self._config = self.load()
-        self.save()
-        return stale
+        with self._locked():
+            stale = sorted(
+                key
+                for key in self.raw_keys()
+                if key in DEPRECATED_CONFIG_KEYS or not hasattr(Config(), key)
+            )
+            self._config = self.load()
+            self.save()
+            return stale
 
     def reset(self) -> None:
-        self._config = Config()
-        self._config.download_path = str(default_download_dir())
-        self.save()
+        with self._locked():
+            self._config = Config()
+            self._config.download_path = str(default_download_dir())
+            self.save()

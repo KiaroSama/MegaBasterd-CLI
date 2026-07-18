@@ -63,9 +63,14 @@ Machine mode (`--json`) emits JSONL records shaped like
 `{"event": "result", "type": "download", "status": "success", "name": ...,
 "path": ..., "size": ..., "elapsed_seconds": ..., "integrity_ok": ...}` plus a
 final `{"event": "summary", ...}` per folder. Failures use
-`"status": "failed"` with an `error` field, user skips use `"skipped"`, and
-sources are always key-redacted (`#<key>`). Exit codes are unchanged. This is
-the stable interface external callers (e.g. EVdlc) should parse.
+`"status": "failed"` with a stable `error_code` and a sanitized `error`
+field, user skips use `"skipped"`, and sources are always key-redacted
+(`#<key>`). Records are emitted atomically (one whole line per lock hold), so
+parallel `-P N` output stays valid JSONL, and every string value is passed
+through a recursive secret sanitizer (link keys, SIDs, passwords, API keys,
+MFA codes, tokens are never emitted; a `share_link` keeps its public key).
+Exit codes are unchanged. This is the stable interface external callers (e.g.
+EVdlc) should parse.
 
 Examples:
 
@@ -95,7 +100,7 @@ vault.
 | `--target HANDLE_OR_PATH` | Destination folder handle or path. |
 | `--keep-structure` | Preserve local directory structure. |
 | `--keep-going` | Continue directory uploads after item failures and print a warning summary (the exit code still reports the failures). |
-| `--auto-account` | Select the account immediately before each file starts, reserving its bytes in a live free-space ledger (requires cached quotas from `account refresh-all`). On a quota error the account's quota is refreshed and the same file is retried on another suitable account (each account at most once per file); a `--keep-structure` tree always stays on ONE account and fails clearly rather than being split. |
+| `--auto-account` | Select the account immediately before each file starts, reserving its bytes in a live free-space ledger (requires cached quotas from `account refresh-all`). Runs in parallel with `-P N` for flat files — each file gets its own isolated API/session, accounts log in once (no repeated MFA), and the free-space ledger is thread-safe. On a quota error the account's quota is refreshed and the same file is retried on another suitable account (each account at most once per file); a `--keep-structure` tree always stays on ONE account and fails clearly rather than being split. |
 | `--share` | Print a public link after each upload (directories: one link per uploaded file). |
 | `--share-password TEXT` | Create password-protected share links. |
 | `--mfa-code CODE` | Two-factor code if required. |
@@ -213,6 +218,7 @@ prompted interactively unless `--vault-passphrase` is provided.
 .\Run.ps1 queue remove ID
 .\Run.ps1 queue retry ID|all
 .\Run.ps1 queue clear
+.\Run.ps1 queue reset
 .\Run.ps1 queue run [--vault-passphrase TEXT]
 ```
 
@@ -222,7 +228,12 @@ The queue is persisted as JSON under `<project>/User/Data/queue.json`.
 one cross-process file lock), so concurrent `queue run` threads, instances,
 or processes can never execute the same job; if the queue lock cannot be
 acquired within its timeout the command reports a clear error and exits
-non-zero. Jobs a crashed or killed run left `active` are recovered as
+non-zero. A malformed or invalid-schema `queue.json` (non-list root, missing
+required fields, unknown type/status) is treated as corruption: the original
+is preserved and backed up as `queue.json.corrupt.<timestamp>.json`,
+mutations are blocked with a non-zero exit, and no queue key is created.
+Recover with `mb queue reset` (discards the jobs; the backup remains) or by
+restoring a good copy. Jobs a crashed or killed run left `active` are recovered as
 `interrupted` on the next run and re-run automatically; a job whose owner is
 still heartbeating is never stolen, and a heartbeat can never revert a
 finished status. `failed` jobs are not retried automatically — use

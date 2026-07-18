@@ -141,6 +141,16 @@ class MegaUploader:
     def stop(self) -> None:
         self._stop_event.set()
 
+    def _reset_per_file_state(self) -> None:
+        """Clear every per-file mutable field so a prior file (failed, canceled,
+        or completed) cannot leak state into the next `upload_file()`."""
+        self._stop_event.clear()
+        with self._lock:
+            self._bytes_done = 0
+            self._chunks_done = 0
+            self._completion_token = None
+            self._speed_meter = RollingSpeedMeter(window=5.0)
+
     def upload_file(
         self,
         source: Path,
@@ -154,6 +164,14 @@ class MegaUploader:
         """
         if not source.is_file():
             raise FileNotFoundError(f"Not a file: {source}")
+        # Reset ALL per-file mutable state at the safe start of every upload,
+        # BEFORE hashing. `upload_directory(keep_going=True)` reuses one
+        # uploader for every file, so a previous file that set `_stop_event`
+        # (or left a completion token / progress counters) must never poison
+        # the next file — e.g. hashing the next source would otherwise abort
+        # immediately with "canceled while hashing". `stop()` still cancels
+        # the file that is currently active.
+        self._reset_per_file_state()
         # Operation clock starts here, once, and is never reset by upload-slot
         # refreshes/retries; the result elapsed covers every phase including
         # finalization.

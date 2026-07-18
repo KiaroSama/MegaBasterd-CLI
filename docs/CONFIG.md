@@ -21,16 +21,30 @@ Booleans accept `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off`.
 
 Values are validated centrally: `config set` rejects out-of-range values
 (ports outside 1–65535, non-positive timeouts, worker counts outside 1–64,
-negative speed limits or quota waits, unknown log levels), and invalid values
-found in a hand-edited `config.json` produce a warning and fall back to the
-default instead of crashing at runtime. Optional (nullable) keys are
-type-checked too: `default_account`, `smart_proxy_url`, `run_command`,
-`upload_log_path`, `connect_proxy_password`, and `megacrypter_server` must be
-strings or null, and `elc_accounts` must be `{host: {field: string}}`.
-Booleans are not accepted for numeric keys. Validation warnings never echo
-secret values. Deprecated or unknown keys in old files are ignored with a
-single warning per key per process; `mb config migrate` rewrites the file
-without them.
+negative speed limits or quota waits, unknown log levels) and exits non-zero,
+and invalid values found in a hand-edited `config.json` produce a warning and
+fall back to the default instead of crashing at runtime. Optional (nullable)
+keys are type-checked too: `default_account`, `smart_proxy_url`,
+`run_command`, `upload_log_path`, `connect_proxy_password`, and
+`megacrypter_server` must be strings or null, and `elc_accounts` must be
+`{host: {field: string}}`. Booleans are not accepted for numeric keys.
+
+Secrets are never displayed: `config show` and `config get` print
+`<redacted>` for `connect_proxy_password` and recursively redact the
+credential fields inside `elc_accounts`; `config set` confirms only that the
+key was updated and never echoes the value; validation warnings never echo
+secret values.
+
+Nullable keys can be cleared: `config set <key> null` (or `none`) stores JSON
+null, and `mb config unset <key>` clears a nullable key (any other string
+value, including a URL or the literal `null-value`, is kept verbatim).
+`config get`/`set`/`unset` exit non-zero on unknown keys, invalid values, or
+deprecated keys. Config writes are cross-process safe (a bounded file lock,
+reload-before-write, and a unique fsync'd temp file), so the CLI and EVdlc
+can update the file concurrently without losing each other's changes.
+
+Deprecated or unknown keys in old files are ignored with a single warning per
+key per process; `mb config migrate` rewrites the file without them.
 
 ## Transfer Settings
 
