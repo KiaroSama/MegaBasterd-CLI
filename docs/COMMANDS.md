@@ -54,6 +54,18 @@ directory.
 | `-i`, `--input-file PATH` | Read links from text, or decrypt a `.dlc` file. |
 | `--elc-user TEXT` | ELC account user. |
 | `--elc-api-key TEXT` | ELC API key. |
+| `-I`, `--include GLOB` | Folder links: only download files matching this glob (repeatable). |
+| `-X`, `--exclude GLOB` | Folder links: skip files matching this glob (repeatable; wins over include). |
+| `--select` | Folder links: interactively choose files (`1,3-5` / `all` / `none`). |
+| `--json` | Machine mode: one JSON result record per line on stdout; every human message and progress frame goes to stderr. |
+
+Machine mode (`--json`) emits JSONL records shaped like
+`{"event": "result", "type": "download", "status": "success", "name": ...,
+"path": ..., "size": ..., "elapsed_seconds": ..., "integrity_ok": ...}` plus a
+final `{"event": "summary", ...}` per folder. Failures use
+`"status": "failed"` with an `error` field, user skips use `"skipped"`, and
+sources are always key-redacted (`#<key>`). Exit codes are unchanged. This is
+the stable interface external callers (e.g. EVdlc) should parse.
 
 Examples:
 
@@ -83,11 +95,12 @@ vault.
 | `--target HANDLE_OR_PATH` | Destination folder handle or path. |
 | `--keep-structure` | Preserve local directory structure. |
 | `--keep-going` | Continue directory uploads after item failures and print a warning summary (the exit code still reports the failures). |
-| `--auto-account` | Pick the stored account with the most known free space per file (whole tree with `--keep-structure`); requires cached quotas from `account refresh-all`. |
+| `--auto-account` | Select the account immediately before each file starts, reserving its bytes in a live free-space ledger (requires cached quotas from `account refresh-all`). On a quota error the account's quota is refreshed and the same file is retried on another suitable account (each account at most once per file); a `--keep-structure` tree always stays on ONE account and fails clearly rather than being split. |
 | `--share` | Print a public link after each upload (directories: one link per uploaded file). |
 | `--share-password TEXT` | Create password-protected share links. |
 | `--mfa-code CODE` | Two-factor code if required. |
 | `--vault-passphrase TEXT` | Non-interactive vault unlock. |
+| `--json` | Machine mode: JSONL upload records (`handle`, `account`, `share_link`, ...) on stdout; human output to stderr. Secrets are never included. |
 
 The account used when `-a/--account` is omitted resolves as: vault default
 (`account default` / `account add --default`) first, then the legacy
@@ -205,13 +218,19 @@ prompted interactively unless `--vault-passphrase` is provided.
 
 The queue is persisted as JSON under `<project>/User/Data/queue.json`.
 
-`queue run` leases each job to the current run (run id + heartbeat). Jobs a
-crashed or killed run left `active` are recovered as `interrupted` on the
-next run and re-run automatically; a job whose owner is still heartbeating is
-never stolen. `failed` jobs are not retried automatically — use
+`queue run` claims each job atomically (reload + stale recovery + lease under
+one cross-process file lock), so concurrent `queue run` threads, instances,
+or processes can never execute the same job; if the queue lock cannot be
+acquired within its timeout the command reports a clear error and exits
+non-zero. Jobs a crashed or killed run left `active` are recovered as
+`interrupted` on the next run and re-run automatically; a job whose owner is
+still heartbeating is never stolen, and a heartbeat can never revert a
+finished status. `failed` jobs are not retried automatically — use
 `queue retry <id>` (or `queue retry all`) to return failed/interrupted/
 canceled jobs to `pending`; encrypted link passwords survive the retry.
-`queue run` exits non-zero when any job fails; per-job statuses are kept.
+`queue run` exits non-zero when any job fails; per-job statuses are kept, and
+every progress row ends in the job's real final state (Ctrl+C marks the
+current job `interrupted` and its row canceled).
 
 ## Proxy Commands
 

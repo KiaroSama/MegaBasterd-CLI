@@ -119,6 +119,43 @@ Command modules must not duplicate layout logic; they only talk to
 `TransferProgress`. Speed limits are aggregate per command: the command
 builds one `TokenBucket` and every worker shares it.
 
+The final overall state combines the context outcome with the item states:
+any `failed` item — or any item still unfinished at `close()` time — makes
+the overall state `Failed`, matching the process exit code; explicit user
+skips stay successful.
+
+## API-Client Ownership
+
+`MegaAPIClient` owns one mutable `requests.Session`, a request-sequence
+counter, and the SID slot; it belongs to exactly ONE concurrent transfer.
+Commands build a fresh client per transfer (`MegaAPIClient.clone()` for
+folder workers), and every client is closed on a `finally` path. Within one
+`MegaDownloader`, chunk worker threads reach the API only through
+`_refresh_url`, which is serialized by the downloader's `_url_refresh_lock`;
+initial link resolution happens on the transfer's own thread before workers
+start. The `SmartProxyPool` is the only intentionally shared object (every
+method takes its internal lock). The aggregate `TokenBucket` limiter is also
+shared by design and is thread-safe.
+
+## Queue Concurrency
+
+`QueueManager` serializes every read-modify-write behind an instance mutex
+plus a cross-platform file lock (`msvcrt`/`fcntl`, bounded timeout →
+`QueueLockError`). Mutations reload the newest queue from disk before
+writing, so a stale snapshot can never clobber newer statuses and a
+heartbeat can never revert a terminal state. `claim_next(run_id)` performs
+recovery + selection + leasing atomically under one lock acquisition, which
+makes concurrent `queue run` threads/instances/processes safe. Saves write a
+unique fsync'd temp file and `os.replace` it over `queue.json`.
+
+## Upload Resume Identity
+
+Upload state records a versioned (v2) source identity: canonical path, size,
+`mtime_ns`, platform file id, and a FULL streaming SHA-256 of the content.
+Resume and pre-finalization checks recompute the hash, so a change to any
+byte anywhere in the file is detected (zero-byte uploads included). Legacy
+v1 sampled identities are never trusted; such uploads restart fresh.
+
 ## Transfer Invariants
 
 ### Crypto is deterministic

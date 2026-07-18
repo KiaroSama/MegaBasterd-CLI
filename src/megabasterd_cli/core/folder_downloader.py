@@ -263,14 +263,20 @@ class MegaFolderDownloader:
                     failures.append(f"{node.name}: {e}")
                     _report_failure(destination, e)
         else:
-            # Multiple files downloading in parallel: each needs its own downloader
-            # instance because the downloader stores per-transfer state.
+            # Multiple files downloading in parallel: each worker gets its own
+            # downloader (per-transfer CDN URL/generation state) AND its own
+            # cloned API client. One MegaAPIClient owns one mutable
+            # requests.Session and sequence counter, so it must belong to
+            # exactly one concurrent transfer; within a transfer, chunk
+            # threads only reach the API through `_refresh_url`, which is
+            # serialized by the downloader's `_url_refresh_lock`.
             from .downloader import MegaDownloader
 
             def _worker(job):
                 node, destination = job
+                worker_api = self.api.clone()
                 worker_dl = MegaDownloader(
-                    api=self.api,
+                    api=worker_api,
                     max_workers=self.downloader.max_workers,
                     speed_limit_kbps=0,
                     verify_integrity=self.downloader.verify_integrity,
@@ -292,9 +298,12 @@ class MegaFolderDownloader:
                     if on_progress:
                         on_progress(progress)
 
-                return sub_folder._download_owned_file(
-                    folder_public_id, node, destination, _progress
-                )
+                try:
+                    return sub_folder._download_owned_file(
+                        folder_public_id, node, destination, _progress
+                    )
+                finally:
+                    worker_api.close()
 
             with ThreadPoolExecutor(max_workers=parallel_files) as pool:
                 futures = {pool.submit(_worker, job): job for job in file_jobs}

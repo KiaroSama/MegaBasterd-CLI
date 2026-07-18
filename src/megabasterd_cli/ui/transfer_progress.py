@@ -66,6 +66,7 @@ class TransferProgress:
         self._order: list[str] = []
         self._lock = threading.RLock()
         self._closed = False
+        self._final_success: bool | None = None  # Set exactly once by close()
         self._view: MultiFileProgressView | None = None
         self._view_factory = view_factory or (
             lambda: MultiFileProgressView(
@@ -186,14 +187,19 @@ class TransferProgress:
     def close(self, success: bool = True) -> None:
         """Finalize the whole view; no item stays visually active.
 
-        Leftover non-terminal items are completed when their bytes are done,
-        otherwise canceled — expected errors, unexpected exceptions, empty
-        selections, and worker failures all funnel through here.
+        The final overall state combines the caller's outcome (an uncaught
+        exception maps to ``success=False``) with the ITEM states: any failed
+        item, and any item left unfinished (auto-canceled here), makes the
+        overall state Failed even when the surrounding context exited
+        cleanly. Items explicitly finished as "skipped" (user-requested
+        skips) never fail the overall state. Idempotent: repeated calls are
+        no-ops and can never convert a failed overall back to complete.
         """
         with self._lock:
             if self._closed:
                 return
             self._closed = True
+            auto_canceled = False
             for item in self._items.values():
                 state = item.state
                 if state.status in TERMINAL_STATUSES:
@@ -201,8 +207,14 @@ class TransferProgress:
                 if state.total is not None and state.completed >= state.total and state.total > 0:
                     state.status = "complete"
                 else:
+                    # An item that was still queued/active at close time did
+                    # not finish; that is never a successful outcome.
                     state.status = "canceled"
+                    auto_canceled = True
                 state.speed = 0.0
+            failed = any(i.state.status == "failed" for i in self._items.values())
+            effective_success = success and not failed and not auto_canceled
+            self._final_success = effective_success
             view = self._view
             self._view = None
         if view is None or self.quiet:
@@ -215,10 +227,10 @@ class TransferProgress:
             completed_items=done_items,
             total_items=total_items,
             failed_items=failed_items,
-            status="Complete" if success else "Failed",
+            status="Complete" if effective_success else "Failed",
             force=True,
         )
-        view.close(success=success)
+        view.close(success=effective_success)
 
     def __enter__(self) -> TransferProgress:
         return self
@@ -235,3 +247,8 @@ class TransferProgress:
     def failed_count(self) -> int:
         with self._lock:
             return sum(1 for i in self._items.values() if i.state.status == "failed")
+
+    def final_success(self) -> bool | None:
+        """Overall outcome computed by close(); None while still open."""
+        with self._lock:
+            return self._final_success

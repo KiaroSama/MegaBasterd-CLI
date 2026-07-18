@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import threading
 import uuid
 
 import click
 
 from ..config import data_dir
-from ..queue.manager import JobStatus, JobType, QueueItem, QueueManager
+from ..queue.manager import JobStatus, JobType, QueueItem, QueueLockError, QueueManager
 from ..ui.prompts import confirm, print_error, print_success
 from ..ui.tables import render_queue
+
+log = logging.getLogger(__name__)
 
 
 def _queue() -> QueueManager:
@@ -147,9 +150,8 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
     cfg = ctx.obj["config"]
     quiet = bool(ctx.obj.get("quiet"))
     q = _queue()
-    recovered = q.recover_interrupted()
-    for item in recovered:
-        print_error(f"Recovered interrupted job {item.id} from a previous run.")
+    for recovered_item in q.recover_interrupted():
+        print_error(f"Recovered interrupted job {recovered_item.id} from a previous run.")
     runnable = q.runnable()
     if not runnable:
         print_success("Queue is empty.")
@@ -259,20 +261,41 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
         item_label="jobs",
         quiet=quiet,
     )
+
+    def _fail(item, row: str, message: str) -> None:
+        nonlocal failures
+        q.update_status(item.id, JobStatus.FAILED, error=message)
+        progress.finish_item(row, "failed")
+        notes.append(("error", f"Job {item.id} failed: {message}"))
+        failures += 1
+
     try:
         with progress:
-            for item in runnable:
-                q.mark_active(item.id, run_id)
+            while True:
+                # Atomic claim: reload + stale recovery + lease under ONE
+                # cross-process lock, so a second `queue run` (thread,
+                # instance, or process) can never take the same job.
+                item = q.claim_next(run_id)
+                if item is None:
+                    break
                 current_item_id[0] = item.id
+                # The progress row exists BEFORE any branch runs; every
+                # outcome below finalizes it exactly once so queue JSON and
+                # the visible row always agree.
+                if item.type == JobType.UPLOAD.value:
+                    row = progress.add_item(
+                        Path(item.source).name, direction="upload", status="active"
+                    )
+                else:
+                    row = progress.add_item(
+                        redact_link(item.source), direction="download", status="active"
+                    )
                 try:
                     if item.type == JobType.DOWNLOAD.value:
                         out = (
                             Path(item.destination) if item.destination else Path(cfg.download_path)
                         )
                         out.mkdir(parents=True, exist_ok=True)
-                        row = progress.add_item(
-                            redact_link(item.source), direction="download", status="active"
-                        )
 
                         def cb(p, t=row):
                             progress.update_item(t, p.bytes_done, p.total_bytes)
@@ -292,30 +315,17 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
                             resolve_account_id(manager, cfg.default_account) if manager else None
                         )
                         if not account_id:
-                            q.update_status(
-                                item.id,
-                                JobStatus.FAILED,
-                                error="No account on queued upload and no default account set",
+                            _fail(
+                                item, row, "No account on queued upload and no default account set"
                             )
-                            failures += 1
                             continue
                         upload_client = _client_for(account_id)
                         if upload_client is None:
-                            q.update_status(
-                                item.id,
-                                JobStatus.FAILED,
-                                error=f"Could not log in to {account_id}",
-                            )
-                            failures += 1
+                            _fail(item, row, f"Could not log in to {account_id}")
                             continue
                         local_path = Path(item.source)
                         if not local_path.is_file():
-                            q.update_status(
-                                item.id,
-                                JobStatus.FAILED,
-                                error=f"Local file missing: {local_path}",
-                            )
-                            failures += 1
+                            _fail(item, row, f"Local file missing: {local_path}")
                             continue
                         uploader = MegaUploader(
                             client=upload_client,
@@ -328,11 +338,7 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
                             auto_resume=cfg.auto_resume,
                             user_agent=cfg.user_agent,
                         )
-                        row = progress.add_item(
-                            local_path.name,
-                            local_path.stat().st_size,
-                            direction="upload",
-                        )
+                        progress.update_item(row, 0, local_path.stat().st_size)
 
                         def cb_up(p, t=row):
                             progress.update_item(t, p.bytes_done, p.total_bytes)
@@ -344,26 +350,32 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
                         progress.finish_item(row, "complete")
                         q.update_status(item.id, JobStatus.DONE)
                     else:
-                        q.update_status(
-                            item.id,
-                            JobStatus.FAILED,
-                            error=f"Unknown job type: {item.type}",
-                        )
-                        failures += 1
+                        _fail(item, row, f"Unknown job type: {item.type}")
+                except KeyboardInterrupt:
+                    # User cancellation: release the lease so the next run
+                    # resumes this job, and finalize the row as canceled.
+                    progress.finish_item(row, "canceled")
+                    with contextlib.suppress(Exception):
+                        q.update_status(item.id, JobStatus.INTERRUPTED)
+                    raise
                 except MegaError as e:
-                    q.update_status(item.id, JobStatus.FAILED, error=str(e))
-                    failures += 1
+                    _fail(item, row, str(e))
                 except Exception as e:  # noqa: BLE001
-                    q.update_status(item.id, JobStatus.FAILED, error=str(e))
-                    failures += 1
+                    log.exception("Unexpected error while running queue job %s", item.id)
+                    _fail(item, row, str(e))
                 finally:
                     current_item_id[0] = None
+    except QueueLockError as exc:
+        print_error(str(exc))
+        failures += 1
     finally:
         heartbeat_stop.set()
         heartbeat.join(timeout=2.0)
+        api.close()
         for c in client_cache.values():
             with contextlib.suppress(Exception):
                 c.logout()
+                c.api.close()
 
     from ..ui.prompts import print_info
 

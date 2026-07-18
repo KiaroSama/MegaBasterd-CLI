@@ -23,7 +23,14 @@ Values are validated centrally: `config set` rejects out-of-range values
 (ports outside 1–65535, non-positive timeouts, worker counts outside 1–64,
 negative speed limits or quota waits, unknown log levels), and invalid values
 found in a hand-edited `config.json` produce a warning and fall back to the
-default instead of crashing at runtime.
+default instead of crashing at runtime. Optional (nullable) keys are
+type-checked too: `default_account`, `smart_proxy_url`, `run_command`,
+`upload_log_path`, `connect_proxy_password`, and `megacrypter_server` must be
+strings or null, and `elc_accounts` must be `{host: {field: string}}`.
+Booleans are not accepted for numeric keys. Validation warnings never echo
+secret values. Deprecated or unknown keys in old files are ignored with a
+single warning per key per process; `mb config migrate` rewrites the file
+without them.
 
 ## Transfer Settings
 

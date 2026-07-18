@@ -74,3 +74,19 @@ def config_reset(ctx: click.Context) -> None:
 @config_cmd.command("path", short_help="Print config file path.")
 def config_path() -> None:
     click.echo(str(config_file()))
+
+
+@config_cmd.command("migrate", short_help="Normalize the config file (drop dead keys).")
+@click.pass_context
+def config_migrate(ctx: click.Context) -> None:
+    """Rewrite config.json without deprecated/unknown keys.
+
+    Lets external callers (e.g. EVdlc) clean old config files they wrote for
+    earlier versions. Valid settings are preserved; removed keys are listed.
+    """
+    store: ConfigStore = ctx.obj["config_store"]
+    removed = store.migrate()
+    if removed:
+        print_success(f"Config normalized; removed keys: {', '.join(removed)}")
+    else:
+        print_success("Config already normalized; nothing to remove.")

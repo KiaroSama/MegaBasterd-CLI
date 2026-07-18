@@ -71,6 +71,28 @@ class MegaAPIClient:
         self.proxy_pool = proxy_pool
         self.force_proxy = force_proxy
         self._static_proxies = dict(proxies) if proxies else None
+        # Non-secret identity instrumentation: lets tests and -vv runs prove
+        # that independent parallel transfers use distinct client/session
+        # objects (never log SIDs or keys here).
+        log.debug("MegaAPIClient created client_id=%s session_id=%s", id(self), id(self._session))
+
+    def clone(self) -> MegaAPIClient:
+        """Return an independent client sharing configuration and SID.
+
+        The clone owns its own `requests.Session` and sequence counter, so
+        parallel transfers never share mutable HTTP/sequence state. The proxy
+        pool object is intentionally shared (it is explicitly thread-safe).
+        """
+        dup = MegaAPIClient(
+            timeout=self.timeout,
+            proxies=self._static_proxies,
+            api_base=self.api_base,
+            proxy_pool=self.proxy_pool,
+            force_proxy=self.force_proxy,
+            user_agent=self.user_agent,
+        )
+        dup.set_session(self._sid)
+        return dup
 
     def _request_proxies(self) -> tuple[dict[str, str] | None, str | None]:
         """Per-request proxy decision for API calls (mirrors downloader logic).

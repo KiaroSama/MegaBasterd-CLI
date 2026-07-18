@@ -25,6 +25,42 @@ DEPRECATED_CONFIG_KEYS = {
     "smart_proxy_random": "not implemented; the pool always picks randomly, weighted by health.",
 }
 
+# Deterministic warn-once bookkeeping: old config files written by other
+# tools (e.g. EVdlc) may carry deprecated or unknown keys on every load;
+# each key is warned about at most once per process, never per access.
+_warned_config_keys: set[str] = set()
+
+# Fields whose dataclass default is None still have an expected value type.
+_OPTIONAL_STR_KEYS = {
+    "default_account",
+    "smart_proxy_url",
+    "run_command",
+    "upload_log_path",
+    "connect_proxy_password",
+    "megacrypter_server",
+}
+
+# Values of these keys may contain secrets and are never echoed in warnings.
+_SECRET_CONFIG_KEYS = {"connect_proxy_password", "elc_accounts"}
+
+
+def _warn_once(key: str, message: str) -> None:
+    if key not in _warned_config_keys:
+        _warned_config_keys.add(key)
+        log.warning("%s", message)
+
+
+def _valid_elc_accounts(value) -> bool:
+    """`elc_accounts` must be {host: {field: str}} end to end."""
+    if not isinstance(value, dict):
+        return False
+    for host, entry in value.items():
+        if not isinstance(host, str) or not isinstance(entry, dict):
+            return False
+        if not all(isinstance(k, str) and isinstance(v, str) for k, v in entry.items()):
+            return False
+    return True
+
 
 @dataclass
 class Config:
@@ -98,7 +134,17 @@ _VALIDATORS: dict[str, tuple] = {
 
 
 def validate_config_value(key: str, value) -> None:
-    """Raise ValueError when `value` is out of range for `key`."""
+    """Raise ValueError when `value` is invalid for `key`.
+
+    Secret-carrying keys are validated without echoing the value.
+    """
+    if key in _OPTIONAL_STR_KEYS and value is not None and not isinstance(value, str):
+        raise ValueError(f"{key} must be a string or null (got type {type(value).__name__})")
+    if key == "elc_accounts" and not _valid_elc_accounts(value):
+        raise ValueError(
+            "elc_accounts must be a JSON object of the form "
+            '{"host": {"user": "...", "api_key": "..."}} with string values only'
+        )
     rule = _VALIDATORS.get(key)
     if rule is None:
         return
@@ -108,7 +154,8 @@ def validate_config_value(key: str, value) -> None:
     except TypeError:
         ok = False
     if not ok:
-        raise ValueError(f"{key} must be {requirement} (got {value!r})")
+        shown = "<redacted>" if key in _SECRET_CONFIG_KEYS else repr(value)
+        raise ValueError(f"{key} must be {requirement} (got {shown})")
 
 
 def validate_config(cfg: Config) -> list[str]:
@@ -122,6 +169,24 @@ def validate_config(cfg: Config) -> list[str]:
     for f in fields(Config):
         current = getattr(cfg, f.name)
         default = getattr(defaults, f.name)
+        # Optional (None-default) fields still have an expected type; never
+        # echo their values (they may carry secrets).
+        if f.name in _OPTIONAL_STR_KEYS:
+            if current is not None and not isinstance(current, str):
+                warnings.append(
+                    f"config: {f.name} must be a string or null "
+                    f"(got type {type(current).__name__}); using default"
+                )
+                setattr(cfg, f.name, default)
+            continue
+        if f.name == "elc_accounts":
+            if not _valid_elc_accounts(current):
+                warnings.append(
+                    "config: elc_accounts has an invalid structure "
+                    "(expected {host: {field: string}}); using default"
+                )
+                setattr(cfg, f.name, {})
+            continue
         # Type check against the default's runtime type (None-able keys skip).
         if default is not None and current is not None:
             expected = type(default)
@@ -231,12 +296,16 @@ class ConfigStore:
         cfg = Config()
         for key, value in data.items():
             if key in DEPRECATED_CONFIG_KEYS:
-                log.warning(
-                    "config: ignoring deprecated key %s (%s)", key, DEPRECATED_CONFIG_KEYS[key]
+                _warn_once(
+                    key,
+                    f"config: ignoring deprecated key {key} ({DEPRECATED_CONFIG_KEYS[key]}); "
+                    "run `mb config migrate` to remove it",
                 )
                 continue
             if hasattr(cfg, key):
                 setattr(cfg, key, value)
+            else:
+                _warn_once(key, f"config: ignoring unknown key {key}")
         validate_config(cfg)
         if cfg.user_agent == "MegaBasterd-CLI/1.0":
             # Old persisted default carried a hard-coded version; empty means
@@ -279,6 +348,32 @@ class ConfigStore:
         validate_config_value(key, value)
         setattr(self.config, key, value)
         self.save()
+
+    def raw_keys(self) -> frozenset[str]:
+        """Keys present in the persisted JSON file (empty when absent)."""
+        if not self.path.exists():
+            return frozenset()
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return frozenset()
+        return frozenset(data.keys()) if isinstance(data, dict) else frozenset()
+
+    def migrate(self) -> list[str]:
+        """Normalize the persisted config: drop deprecated/unknown keys.
+
+        Returns the removed keys so callers (and EVdlc) can report them.
+        Values of known keys are validated/kept by the normal load path.
+        """
+        stale = sorted(
+            key
+            for key in self.raw_keys()
+            if key in DEPRECATED_CONFIG_KEYS or not hasattr(Config(), key)
+        )
+        self._config = self.load()
+        self.save()
+        return stale
 
     def reset(self) -> None:
         self._config = Config()
