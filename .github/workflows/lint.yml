@@ -4,15 +4,22 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   ruff:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install ruff "black<26"
+      # Keep this specifier identical to the `dev` extra in pyproject.toml,
+      # or the lint job and a local dev install can resolve different black
+      # majors and disagree on formatting.
+      - run: pip install ruff "black>=23.9.0,<27"
       - name: Ruff lint
         run: ruff check src tests
       - name: Black format check

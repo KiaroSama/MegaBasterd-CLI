@@ -41,6 +41,23 @@ class QueueCorruptionError(Exception):
     """
 
 
+class QueueOwnershipError(Exception):
+    """Raised when a run mutates a job it no longer owns.
+
+    A lease is (run_id, lease_epoch). Once the lease expires and another run
+    re-claims the job, the previous owner's DONE/FAILED/INTERRUPTED write must
+    be REFUSED - silently applying it would mark a still-running job complete
+    or overwrite the new owner's result.
+    """
+
+
+class QueueLeaseLostError(Exception):
+    """Raised by a runner that can no longer prove it owns its active job.
+
+    Signals that in-flight work must stop rather than race the new owner.
+    """
+
+
 # Associated data tag so a queue secret blob cannot be reused in another context.
 _QUEUE_SECRET_AAD = b"megabasterd-cli/queue-secret"
 _QUEUE_KEY_LEN = 32
@@ -123,6 +140,10 @@ class QueueItem:
     # proved it was alive. Absent in legacy queue files (safe default None).
     run_id: str | None = None
     heartbeat_iso: str | None = None
+    # Lease generation: incremented on every (re)claim and NEVER reset, so a
+    # run that lost its lease can be told apart from the current owner even if
+    # a run_id repeats. Absent in legacy files (safe default 0).
+    lease_epoch: int = 0
 
     def __post_init__(self) -> None:
         # Fields written by a NEWER version, carried through untouched so a
@@ -479,6 +500,12 @@ class QueueManager:
         size = entry.get("size", 0)
         if isinstance(size, bool) or not isinstance(size, int) or size < 0:
             raise QueueCorruptionError("queue entry field 'size' must be an integer >= 0")
+        # Legacy files predate the lease generation; absent means 0. Unlike
+        # run_id/heartbeat_iso it is NOT cleared on a terminal status: it is a
+        # monotonic counter, so an old owner stays locked out forever.
+        epoch = entry.get("lease_epoch", 0)
+        if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 0:
+            raise QueueCorruptionError("queue entry field 'lease_epoch' must be an integer >= 0")
         for name in self._OPTIONAL_STR_ITEM_FIELDS:
             value = entry.get(name)
             if value is not None and not isinstance(value, str):
@@ -595,13 +622,57 @@ class QueueManager:
                 return True
             return False
 
-    def update_status(self, item_id: str, status: JobStatus, error: str | None = None) -> None:
+    @staticmethod
+    def _owns(item: QueueItem, run_id: str, lease_epoch: int | None) -> bool:
+        return item.run_id == run_id and (lease_epoch is None or item.lease_epoch == lease_epoch)
+
+    @staticmethod
+    def _check_owner(item: QueueItem, run_id: str | None, lease_epoch: int | None) -> None:
+        """Refuse a mutation from a run that no longer holds the lease.
+
+        Callers that pass no ``run_id`` are administrative (CLI `retry`/`remove`,
+        recovery, tests): they are the operator acting deliberately, not a
+        runner racing another runner. A caller that DOES present a lease must
+        still hold it.
+        """
+        if run_id is None:
+            return
+        if not QueueManager._owns(item, run_id, lease_epoch):
+            raise QueueOwnershipError(
+                f"Run {run_id} no longer owns job {item.id} "
+                f"(it is now {item.status} under {item.run_id or 'no run'}); "
+                "the write was refused."
+            )
+
+    def _is_lease_live(self, item: QueueItem, lease_seconds: int) -> bool:
+        """True when this active job's owner is still heartbeating."""
+        import datetime as dt
+
+        if item.status != JobStatus.ACTIVE.value or not item.heartbeat_iso:
+            return False
+        try:
+            beat = dt.datetime.fromisoformat(item.heartbeat_iso)
+        except ValueError:
+            return False
+        return (dt.datetime.now(dt.timezone.utc) - beat).total_seconds() <= lease_seconds
+
+    def update_status(
+        self,
+        item_id: str,
+        status: JobStatus,
+        error: str | None = None,
+        run_id: str | None = None,
+        lease_epoch: int | None = None,
+    ) -> None:
+        """Set a job's status. When ``run_id`` is given, the lease is verified
+        first and a write from a lost lease raises QueueOwnershipError."""
         import datetime as dt
 
         with self._locked():
             self._load()
             for item in self.items:
                 if item.id == item_id:
+                    self._check_owner(item, run_id, lease_epoch)
                     item.status = status.value
                     if error:
                         item.error = error
@@ -619,8 +690,15 @@ class QueueManager:
                     break
             self.save()
 
-    def mark_active(self, item_id: str, run_id: str) -> None:
-        """Lease a job to this run: active + owner + fresh heartbeat."""
+    def mark_active(
+        self, item_id: str, run_id: str, lease_seconds: int = LEASE_SECONDS
+    ) -> int | None:
+        """Lease a job to this run: active + owner + fresh heartbeat.
+
+        Starts a NEW lease generation. Refuses to steal a lease another run is
+        still heartbeating; returns the new generation, or None if the job is
+        gone.
+        """
         import datetime as dt
 
         with self._locked():
@@ -628,14 +706,27 @@ class QueueManager:
             now = dt.datetime.now(dt.timezone.utc).isoformat()
             for item in self.items:
                 if item.id == item_id:
+                    if item.run_id != run_id and self._is_lease_live(item, lease_seconds):
+                        raise QueueOwnershipError(
+                            f"Job {item_id} is actively leased to run {item.run_id}; "
+                            f"run {run_id} cannot take it over."
+                        )
                     item.status = JobStatus.ACTIVE.value
                     item.run_id = run_id
                     item.heartbeat_iso = now
-                    break
+                    item.lease_epoch += 1
+                    self.save()
+                    return item.lease_epoch
             self.save()
+            return None
 
-    def touch(self, item_id: str, run_id: str) -> None:
+    def touch(self, item_id: str, run_id: str, lease_epoch: int | None = None) -> bool:
         """Refresh the heartbeat of a job this run owns and that is still active.
+
+        Returns True when the heartbeat was applied. A False return means this
+        run NO LONGER OWNS the job (it finished elsewhere, was recovered, or
+        was re-leased) — the caller must stop the in-flight work instead of
+        racing the new owner.
 
         Reloads the newest state first, so a heartbeat can never revert a
         DONE/FAILED/CANCELED status written by another thread or process.
@@ -645,14 +736,16 @@ class QueueManager:
         with self._locked():
             self._load()
             for item in self.items:
-                if (
-                    item.id == item_id
-                    and item.run_id == run_id
-                    and item.status == JobStatus.ACTIVE.value
-                ):
-                    item.heartbeat_iso = dt.datetime.now(dt.timezone.utc).isoformat()
-                    self.save()
-                    break
+                if item.id != item_id:
+                    continue
+                if not self._owns(item, run_id, lease_epoch):
+                    return False
+                if item.status != JobStatus.ACTIVE.value:
+                    return False
+                item.heartbeat_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+                self.save()
+                return True
+            return False
 
     def _recover_interrupted_locked(self, lease_seconds: int) -> list[QueueItem]:
         """Recovery pass over the freshly loaded items; caller holds the lock."""
@@ -716,6 +809,9 @@ class QueueManager:
                 chosen.status = JobStatus.ACTIVE.value
                 chosen.run_id = run_id
                 chosen.heartbeat_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+                # New generation: any writer still holding the previous lease
+                # (a stalled run whose heartbeat died) is locked out from here.
+                chosen.lease_epoch += 1
             if chosen is not None or recovered:
                 self.save()
             return chosen

@@ -290,7 +290,15 @@ class AccountStorage:
             f.flush()
             os.fsync(f.fileno())
             tmp = f.name
-        os.replace(tmp, self.path)
+        try:
+            os.replace(tmp, self.path)
+        except BaseException:
+            # Includes KeyboardInterrupt: a failed replace (file held open by
+            # antivirus, disk full) must not orphan accounts.json.*.tmp next to
+            # the vault. Suppress only the cleanup error, never the original.
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
         # Permission hardening on POSIX
         with contextlib.suppress(OSError, AttributeError):
             os.chmod(self.path, 0o600)

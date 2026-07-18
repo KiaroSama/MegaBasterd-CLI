@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from rich.console import Console
+from rich.table import Table
+from rich.text import Text
 from rich.theme import Theme
 
 PALETTE = {
@@ -62,3 +66,39 @@ THEME = Theme(
 def make_console(**kwargs) -> Console:
     """Create a Console that uses the shared project theme."""
     return Console(theme=THEME, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Trusted / untrusted boundary
+#
+# Rich parses plain `str` as markup, so any remote-controlled value (a MEGA
+# filename, a MegaCrypter server response, a server-supplied error string) could
+# choose its own styling, or abort the whole render with `MarkupError` on an
+# unbalanced tag. The rule enforced here: a plain `str` is UNTRUSTED and is shown
+# literally; app-authored styling must be opted in via `markup()`.
+# ---------------------------------------------------------------------------
+
+
+def markup(text: str) -> Text:
+    """Mark app-authored text as trusted Rich markup (`[mb.dim]...[/mb.dim]`)."""
+    return Text.from_markup(text)
+
+
+def literal(text: object) -> Text:
+    """Wrap an untrusted value so Rich renders it verbatim."""
+    return text if isinstance(text, Text) else Text(str(text))
+
+
+class SafeTable(Table):
+    """`rich.table.Table` that treats plain `str` cells as untrusted literal text.
+
+    Use `markup("[mb.success]Y[/mb.success]")` for deliberate in-cell styling;
+    column-level `style=` is unaffected and remains the normal way to colour a
+    column.
+    """
+
+    def add_row(self, *renderables: Any, **kwargs: Any) -> None:
+        super().add_row(
+            *(Text(cell) if type(cell) is str else cell for cell in renderables),
+            **kwargs,
+        )

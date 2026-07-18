@@ -30,13 +30,23 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 
 from ..proxy.selector import ProxySelector
 from ..utils.helpers import (
+    available_disk_space,
     claim_destination,
     ensure_within_directory,
     release_destination,
     sanitize_filename,
 )
 from ..utils.speed import RollingSpeedMeter, make_limiter
-from .chunks import Chunk, chunk_mac, combine_chunk_macs, condense_mac, iter_chunks
+from .chunks import (
+    MAX_CHUNKS,
+    MAX_FILE_SIZE,
+    Chunk,
+    chunk_count,
+    chunk_mac,
+    combine_chunk_macs,
+    condense_mac,
+    iter_chunks,
+)
 from .crypto import (
     b64_url_decode,
     decrypt_attributes,
@@ -98,6 +108,40 @@ class DownloadResult:
 
 class CdnUrlExpired(TransferError):  # noqa: N818 - internal retry sentinel name
     """Raised when the CDN URL has expired and needs to be refreshed."""
+
+
+class DeclaredSizeError(NonRetryableTransferError):
+    """The remote declared a file size we refuse to plan a transfer around.
+
+    The size is not a fact, it is a claim: for a `mc://` link it comes from a
+    server the LINK chose. Retrying cannot change the answer, hence
+    non-retryable.
+    """
+
+
+class InsufficientDiskSpaceError(NonRetryableTransferError):
+    """The destination filesystem cannot hold the file we are about to preallocate."""
+
+
+def _validate_declared_size(file_size: object) -> int:
+    """Return a size we are willing to allocate a chunk plan for, or raise.
+
+    Called before ANY per-chunk work: the whole point is that the allocation
+    loop never starts. `bool` is rejected explicitly because it is an `int`
+    subclass and `True` would otherwise pass as a one-byte file.
+    """
+    if isinstance(file_size, bool) or not isinstance(file_size, int):
+        raise DeclaredSizeError(message=f"Declared file size is not an integer: {file_size!r}")
+    if file_size < 0:
+        raise DeclaredSizeError(message=f"Declared file size is negative: {file_size}")
+    if file_size > MAX_FILE_SIZE or chunk_count(file_size) > MAX_CHUNKS:
+        raise DeclaredSizeError(
+            message=(
+                f"Declared file size {file_size} exceeds the supported maximum "
+                f"{MAX_FILE_SIZE} bytes ({MAX_CHUNKS} chunks)"
+            )
+        )
+    return file_size
 
 
 def _is_transient_chunk_failure(exc: BaseException) -> bool:
@@ -383,7 +427,12 @@ class MegaDownloader:
             encrypted_attrs = b64_url_decode(info.get("at", "") or "")
 
         cdn_url = info["g"]
-        file_size = int(info["s"])
+        try:
+            file_size = int(info["s"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise DeclaredSizeError(
+                message=f"Upstream did not declare a usable file size: {info.get('s')!r}"
+            ) from exc
         aes_key, nonce, mac_iv_a32 = unpack_file_key(key_a32)
 
         # Decrypt the filename
@@ -446,6 +495,11 @@ class MegaDownloader:
         on_progress: Callable[[DownloadProgress], None] | None,
         url_resolver: Callable[[], str] | None = None,
     ) -> DownloadResult:
+        # Every download path funnels through here, so the size claim is checked
+        # once, at the only place that is guaranteed to run before the chunk
+        # plan is built.
+        file_size = _validate_declared_size(file_size)
+
         # Configure the URL state for workers
         with self._cdn_url_lock:
             self._cdn_url = cdn_url
@@ -527,8 +581,21 @@ class MegaDownloader:
                 },
             )
 
-        # Pre-allocate the destination file with the final size
+        # Pre-allocate the destination file with the final size. Ask the
+        # filesystem first: `truncate` to a size that does not fit either fails
+        # with a bare ENOSPC deep inside a worker or (on a sparse filesystem)
+        # succeeds and fails much later, mid-transfer, with the disk full.
         if not destination.exists() or destination.stat().st_size != file_size:
+            already = destination.stat().st_size if destination.exists() else 0
+            needed = max(0, file_size - already)
+            free = available_disk_space(destination.parent)
+            if free < needed:
+                raise InsufficientDiskSpaceError(
+                    message=(
+                        f"Not enough free space for {destination.name}: need {needed} bytes, "
+                        f"{free} available on {destination.parent}"
+                    )
+                )
             with open(destination, "wb") as f:
                 f.truncate(file_size)
 
@@ -791,10 +858,23 @@ class MegaDownloader:
                         message=f"Upstream ignored the requested range for chunk {chunk.index}: {exc}"
                     ) from exc
 
-                # Read encrypted bytes
+                # Read encrypted bytes, never more than this chunk is worth.
+                # `validate_range_response` can only check Content-Length when
+                # the server sends one, so a 206 with a plausible Content-Range
+                # and chunked transfer-encoding streamed into this bytearray
+                # without any ceiling at all.
                 for block in resp.iter_content(chunk_size=65536):
                     if self._stop_event.is_set():
                         return
+                    if len(encrypted) + len(block) > chunk.size:
+                        if picked_proxy and self.proxy_pool is not None:
+                            self.proxy_pool.report_failure(picked_proxy)
+                        raise NonRetryableTransferError(
+                            message=(
+                                f"Upstream sent more than the requested range for chunk "
+                                f"{chunk.index}: expected {chunk.size} bytes"
+                            )
+                        )
                     encrypted.extend(block)
                     self.limiter.consume(len(block))
         except (requests.ConnectionError, requests.Timeout):

@@ -1,6 +1,7 @@
 """MegaCrypter API compatibility tests."""
 
 import base64
+import json
 
 import pytest
 from Crypto.Cipher import AES
@@ -29,11 +30,15 @@ class DummyResponse:
     def json(self):
         return self._body
 
+    def iter_content(self, chunk_size=65536):
+        # The resolver now reads the reply as a bounded stream.
+        yield json.dumps(self._body).encode()
+
 
 def test_resolve_megacrypter_inline_url(monkeypatch):
     parsed = parse_link("mc://mc.example/token")
 
-    def fake_post(url, json, timeout, proxies=None):
+    def fake_post(url, json, timeout, proxies=None, **kwargs):
         assert url == "https://mc.example/api"
         assert json["m"] == "info"
         return DummyResponse({"mega_url": "https://mega.nz/file/ABC#KEY"})
@@ -74,7 +79,7 @@ def test_megacrypter_password_metadata_and_url(monkeypatch):
     cdn_url = "https://gfs.example/file"
     encrypted_url = AES.new(info_key, AES.MODE_CBC, iv).encrypt(pad(cdn_url.encode(), 16))
 
-    def fake_post(url, json, timeout, proxies=None):
+    def fake_post(url, json, timeout, proxies=None, **kwargs):
         if json["m"] == "info":
             return DummyResponse(
                 {

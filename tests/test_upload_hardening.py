@@ -34,7 +34,7 @@ from megabasterd_cli.core.uploader import (
 )
 from megabasterd_cli.proxy.selector import ProxyRequiredError
 
-UPLOAD_URL = "http://fake.invalid/upload"
+UPLOAD_URL = "https://gfs270n123.userstorage.mega.co.nz/ul/fake"
 
 
 def _symlink(link: Path, target: Path, *, target_is_directory: bool = False) -> None:

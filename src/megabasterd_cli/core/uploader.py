@@ -332,7 +332,12 @@ class MegaUploader:
                 upload_url = state.metadata["upload_url"]
                 token_hex = state.metadata.get("completion_token")
                 self._completion_token = bytes.fromhex(token_hex) if token_hex else None
-            except (KeyError, ValueError):
+            # `bytes.fromhex` raises TypeError - NOT ValueError - when the
+            # value is a JSON number, so a poisoned state file used to escape
+            # this self-heal entirely and break every later retry. State-level
+            # validation now rejects such a file at load; TypeError stays here
+            # as the belt to that pair of braces.
+            except (KeyError, TypeError, ValueError):
                 clear_state(state_path)
                 state = None
 
@@ -903,6 +908,11 @@ class MegaUploader:
             body = _read_bounded_body(resp)
         finally:
             resp.close()
+        # Data before state: an upload has no local destination to flush, so
+        # its durability point is the HTTP 200 above - the endpoint already
+        # holds the chunk before the state below claims it does. The ordering
+        # is therefore satisfied by construction here; `save_state` enforces
+        # the equivalent flush for a download's destination file.
         with self._lock:
             state.mark_chunk_done(chunk.index, mac)
             self._bytes_done += chunk.size

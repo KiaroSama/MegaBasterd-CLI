@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import click
-from rich.table import Table
 
 from ..core.api import MegaAPIClient
 from ..core.crypto import (
@@ -20,7 +19,7 @@ from ..core.link_services import get_megacrypter_info, resolve_elc_links, resolv
 from ..core.links import LinkType, parse_link, resolve_password_link
 from ..proxy.selector import ProxySelector
 from ..ui.prompts import print_error
-from ..ui.theme import make_console
+from ..ui.theme import SafeTable, make_console
 from ..utils.helpers import format_bytes
 
 _console = make_console()
@@ -108,7 +107,7 @@ def info_cmd(
             except ValueError:
                 print_error(str(exc))
                 return
-            table = Table(
+            table = SafeTable(
                 show_header=False,
                 title="MegaCrypter info",
                 border_style="mb.table.border",
@@ -131,7 +130,7 @@ def info_cmd(
         proxy_pool=ProxySelector.from_config(cfg).pool,
         force_proxy=cfg.force_smart_proxy,
     )
-    table = Table(show_header=False, title="Link info", border_style="mb.table.border")
+    table = SafeTable(show_header=False, title="Link info", border_style="mb.table.border")
     table.add_column("Field", style="mb.info")
     table.add_column("Value", style="mb.value")
 

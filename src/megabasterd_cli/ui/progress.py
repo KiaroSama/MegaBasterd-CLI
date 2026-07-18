@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from rich.console import Console, Group
 from rich.live import Live
+from rich.markup import escape
 from rich.progress import (
     BarColumn,
     DownloadColumn,
@@ -397,5 +398,8 @@ def progress_for(description: str, total: int) -> Iterator[ProgressReporter]:
     console = make_console()
     progress = build_progress(console)
     with progress:
-        task_id = progress.add_task(description, total=total)
+        # Descriptions are usually filenames, i.e. untrusted remote text.
+        # `add_task` takes a str, so escape the markup rather than wrapping in
+        # a Text the API does not accept.
+        task_id = progress.add_task(escape(description), total=total)
         yield ProgressReporter(progress, task_id)

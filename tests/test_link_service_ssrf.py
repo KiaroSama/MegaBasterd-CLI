@@ -121,6 +121,9 @@ def test_elc_still_reaches_an_ordinary_public_endpoint(monkeypatch):
         def json(self):
             return {}
 
+        def iter_content(self, chunk_size=65536):
+            yield b"{}"
+
         def raise_for_status(self):
             return None
 

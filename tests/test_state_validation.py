@@ -169,7 +169,16 @@ def test_round_trip_survives_save_and_load(tmp_path):
     assert reloaded.get_chunk_mac(0) == bytes.fromhex(MAC)
 
 
-def test_clear_state_removes_the_lock_sidecar(tmp_path):
+def test_clear_state_removes_the_state_and_keeps_only_the_lock_sidecar(tmp_path):
+    """The `.lock` sidecar is deliberately kept; nothing else may remain.
+
+    This test previously demanded the sidecar be unlinked too. That is the
+    unsound tidier option: between `release()` and `unlink()` another process
+    can lock the still-open inode while the unlink frees the NAME, so a third
+    process locks a FRESH inode and two owners each believe they are exclusive
+    - the identical race `utils/helpers.release_destination` documents at
+    length for `.mbclaim`. An empty sidecar is inert and is reused.
+    """
     destination = tmp_path / "out.bin"
     state = TransferState(
         transfer_type="download", source="u", destination=str(destination), total_size=1
@@ -177,7 +186,7 @@ def test_clear_state_removes_the_lock_sidecar(tmp_path):
     save_state(state)
     clear_state(destination)
     leftovers = [p.name for p in tmp_path.iterdir() if p.name != "out.bin"]
-    assert leftovers == [], f"no state or lock artifacts may remain: {leftovers}"
+    assert leftovers == ["out.bin.mbstate.lock"], f"unexpected artifacts remain: {leftovers}"
 
 
 def test_no_temp_files_are_left_after_saving(tmp_path):

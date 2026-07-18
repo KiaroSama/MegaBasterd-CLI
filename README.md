@@ -13,7 +13,7 @@ and is focused on CLI/source-script usage rather than a desktop GUI.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)](#requirements)
 
 ## Features
 
@@ -50,6 +50,11 @@ trust, because the returned URLs are supplied by that third-party service.
 - Python 3.9 or newer.
 - PowerShell 5.1 or PowerShell 7+ for `Run.ps1`.
 - Internet access for MEGA transfers and first-time dependency installation.
+
+Supported platforms: Windows and Linux — these are the two CI tests on every
+push. The code is otherwise plain POSIX and macOS very likely works (there is a
+`Darwin` clipboard branch, for one), but nothing is tested there, so it is not
+claimed as supported.
 
 Python dependencies are listed in [requirements.txt](requirements.txt) and
 [pyproject.toml](pyproject.toml):

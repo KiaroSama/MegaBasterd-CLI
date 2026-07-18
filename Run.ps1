@@ -676,9 +676,32 @@ function Get-RedactedArgsForLog {
             $redacted.Add("<redacted-link>")
             continue
         }
+        # Secrets also travel as JSON POSITIONALS, not just as --option values:
+        # `config set elc_accounts {"host":{"user":..,"api_key":..}}` put the
+        # ELC API key in the launcher log in cleartext, because matching on
+        # option NAMES alone never looked inside the payload.
+        if ($arg -match '"(api_key|password|passphrase|token|mfa_code|secret)"\s*:') {
+            $redacted.Add(($arg -replace '("(?:api_key|password|passphrase|token|mfa_code|secret)"\s*:\s*)"[^"]*"', '$1"<redacted>"'))
+            continue
+        }
         $redacted.Add($arg)
     }
     return @($redacted)
+}
+
+function Stop-LauncherTranscript {
+    # Idempotent: safe to call from the finally block, from a trap, and from
+    # the engine-exiting handler, in any order and more than once.
+    if (-not $script:transcriptStarted) {
+        return
+    }
+    $script:transcriptStarted = $false
+    try {
+        Stop-Transcript | Out-Null
+    } catch {
+        Write-RunLog "WARN" "Stop-Transcript failed: $($_.Exception.Message)"
+    }
+    Protect-TranscriptFile $LauncherTranscriptPath
 }
 
 function Protect-TranscriptFile {
@@ -698,8 +721,13 @@ function Protect-TranscriptFile {
         $sensitive = "--token|--password|--share-password|--vault-passphrase|--mfa-code|--elc-api-key"
         # `--option value` and `--option=value`
         $content = [regex]::Replace($content, "(?<opt>$sensitive)(?<sep>=|\s+)(?<val>\S+)", '${opt}${sep}<redacted>')
-        # `-p value` (short password option)
-        $content = [regex]::Replace($content, "(?<lead>\s)-p(?<sep>\s+)\S+", '${lead}-p${sep}<redacted>')
+        # `-p value` (short password option). The old pattern required a
+        # LEADING whitespace character, so `-p` at the start of a line was
+        # missed, and `\S+` stopped at the first space inside a quoted
+        # password. Match start-of-line too, and consume a quoted value whole.
+        $content = [regex]::Replace($content, '(?m)(?<lead>^|\s)-p(?<sep>\s+)(?:"[^"]*"|''[^'']*''|\S+)', '${lead}-p${sep}<redacted>')
+        # Secrets embedded in a JSON positional (e.g. `config set elc_accounts`).
+        $content = [regex]::Replace($content, '("(?:api_key|password|passphrase|token|mfa_code|secret)"\s*:\s*)"[^"]*"', '$1"<redacted>"')
         # MEGA-style links
         $content = [regex]::Replace($content, "\S*(?:mega\.nz/|mega\.co\.nz/|mc://|mega://)\S*", "<redacted-link>")
         Set-Content -LiteralPath $Path -Value $content -Encoding UTF8 -NoNewline
@@ -1507,6 +1535,9 @@ try {
     try {
         Start-Transcript -LiteralPath $LauncherTranscriptPath -Append | Out-Null
         $transcriptStarted = $true
+        # Ctrl+C or a closed window unwinds WITHOUT running the finally block,
+        # so without this the transcript keeps whatever secrets it captured.
+        [void](Register-EngineEvent PowerShell.Exiting -Action { Stop-LauncherTranscript })
     } catch {
         Write-RunLog "WARN" "Start-Transcript failed: $($_.Exception.Message)"
     }
@@ -1578,17 +1609,14 @@ try {
         ((-not $launchedWithoutArgs) -and $exitCode -ne 0) -and
         -not ($env:MEGABASTERD_NO_PAUSE -match "^(1|true|yes)$")
     )
+    # Close and scrub the transcript BEFORE the pause prompt. The pause used to
+    # come first, so a failed run left an UNREDACTED transcript sitting on disk
+    # for as long as nobody pressed Enter - which is exactly the window in which
+    # someone reads the log to find out what went wrong.
+    Stop-LauncherTranscript
     if ($shouldPause) {
         Write-Launcher "Command failed. Check the Logs directory for details." "error"
         [void](Read-Host "Press Enter to close")
-    }
-    if ($transcriptStarted) {
-        try {
-            Stop-Transcript | Out-Null
-        } catch {
-            Write-RunLog "WARN" "Stop-Transcript failed: $($_.Exception.Message)"
-        }
-        Protect-TranscriptFile $LauncherTranscriptPath
     }
 }
 exit $exitCode

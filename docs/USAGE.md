@@ -425,7 +425,8 @@ Add an account or set the default account:
 
 Install `pyperclip` or make sure your OS clipboard command is available:
 PowerShell `Get-Clipboard` on Windows, `pbpaste` on macOS, or `wl-paste`/`xclip`
-on Linux.
+on Linux. (Windows and Linux are the CI-tested platforms; the macOS path exists
+in the code but is untested.)
 
 ## 17. Exit Codes
 

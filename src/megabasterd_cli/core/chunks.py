@@ -60,12 +60,37 @@ def iter_chunks(file_size: int) -> Iterator[Chunk]:
         index += 1
 
 
+# Upper bound on the chunk list a single transfer may build. A Chunk costs
+# ~172 bytes, so this keeps the materialised list around 33 MiB for a ~195 GiB
+# file. It exists because the chunk count comes from a SERVER-DECLARED size: a
+# hostile MegaCrypter host answering "1 PiB" would otherwise spend hours
+# allocating ~1.07 billion Chunk objects (~172 GiB) before the first request.
+MAX_CHUNKS = 200_000
+# The largest file that still fits in MAX_CHUNKS chunks (~195 GiB): the first
+# eight chunks are smaller than 1 MiB, so this is not a plain multiplication.
+MAX_FILE_SIZE = (
+    sum(kb * 1024 for kb in CHUNK_SIZES_KB) + (MAX_CHUNKS - len(CHUNK_SIZES_KB)) * MAX_CHUNK_SIZE
+)
+
+
 def chunk_count(file_size: int) -> int:
-    """Total number of chunks for a file."""
+    """Total number of chunks for a file, computed WITHOUT building them.
+
+    Counting by iteration is fine for a real file and catastrophic for a
+    declared one: it is the same unbounded loop the size guard exists to
+    prevent, so the guard cannot be allowed to depend on it.
+    """
+    if file_size <= 0:
+        return 0
+    offset = 0
     count = 0
-    for _ in iter_chunks(file_size):
+    for size_kb in CHUNK_SIZES_KB:
+        if offset >= file_size:
+            return count
+        offset += min(size_kb * 1024, file_size - offset)
         count += 1
-    return count
+    remaining = file_size - offset
+    return count + (remaining + MAX_CHUNK_SIZE - 1) // MAX_CHUNK_SIZE
 
 
 def chunks_for_range(file_size: int, start: int, end: int) -> list[Chunk]:

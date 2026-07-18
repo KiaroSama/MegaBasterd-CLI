@@ -36,6 +36,86 @@ from .errors import AuthError, MegaError
 log = logging.getLogger(__name__)
 
 
+# ----------------------------------------------------------------------
+# Response shape guards
+#
+# Everything below the API boundary used to index server-supplied JSON
+# blind: `nodes[0]["h"]`, `raw_node["t"]`, `result["privk"]`. A response
+# whose shape differs - a hostile server, a captive portal, a protocol
+# change - produced a KeyError/TypeError that the CLI catch-all rendered
+# as an uninterpretable `Error: 'p'`, and `{"s": "1234"}` propagated a
+# STRING into format_bytes and the chunk maths instead of failing here.
+# `export_link` already did this correctly; these make it universal.
+# ----------------------------------------------------------------------
+_REQUIRED = object()
+
+
+def _expect_mapping(value: Any, what: str) -> dict:
+    if not isinstance(value, dict):
+        raise MegaError(
+            message=f"Unexpected MEGA response for {what}: "
+            f"expected an object, got {type(value).__name__}"
+        )
+    return value
+
+
+def _expect_field(mapping: dict, key: str, kind: type, what: str, default: Any = _REQUIRED) -> Any:
+    """Return `mapping[key]`, proving its type before any caller can use it."""
+    if key not in mapping:
+        if default is _REQUIRED:
+            raise MegaError(message=f"Malformed MEGA response for {what}: missing {key!r}")
+        return default
+    value = mapping[key]
+    # bool is a subclass of int, and MEGA never sends one where a number or a
+    # size belongs; accepting it would let `True` become a node type or a size.
+    if (kind is int and isinstance(value, bool)) or not isinstance(value, kind):
+        raise MegaError(
+            message=f"Malformed MEGA response for {what}: {key!r} is "
+            f"{type(value).__name__}, expected {kind.__name__}"
+        )
+    return value
+
+
+def _atomic_write_private(path: Path, data: bytes) -> None:
+    """Replace `path` with `data` in one step, owner-only from creation.
+
+    The previous in-place `open(path, "w")` truncated the existing session
+    before writing, so any failure mid-write destroyed a still-valid session,
+    and `os.chmod(..., 0o600)` ran only AFTER the write - leaving the SID
+    world-readable for that window. Same `O_CREAT | O_EXCL` + 0o600 pattern
+    `utils.corruption` already uses.
+    """
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        fd = os.open(str(tmp), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # A restrictive umask already gave us 0o600; this covers a permissive
+        # one without ever widening the mode. Ignored on Windows.
+        with contextlib.suppress(OSError, AttributeError):
+            os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
+
+
+def _first_node_handle(result: Any, what: str) -> str:
+    """Handle of the first node in a `{"f": [...]}` mutation reply, or "".
+
+    An empty list is a legitimate "nothing was created"; a list whose first
+    element is not an object with a string handle is a protocol violation and
+    must not be indexed blind.
+    """
+    nodes = _expect_field(_expect_mapping(result, what), "f", list, what, default=[])
+    if not nodes:
+        return ""
+    return _expect_field(_expect_mapping(nodes[0], what), "h", str, what)
+
+
 @dataclass
 class MegaNode:
     """A node (file or folder) in the user's MEGA tree or in a shared folder."""
@@ -101,8 +181,10 @@ class MegaClient:
     def login_anonymous(self) -> MegaSession:
         """Login without an account (ephemeral session)."""
         master_key = os.urandom(16)
-        result = self.api.request({"a": "us0"})
-        sid = result.get("tsid") or result.get("csid", "")
+        result = _expect_mapping(self.api.request({"a": "us0"}), "anonymous login")
+        sid = _expect_field(result, "tsid", str, "anonymous login", default="") or _expect_field(
+            result, "csid", str, "anonymous login", default=""
+        )
 
         self.session = MegaSession(sid=sid, master_key=master_key)
         self.api.set_session(sid)
@@ -122,9 +204,11 @@ class MegaClient:
         if supplied, otherwise `mfa_prompt()` is invoked to obtain a code.
         """
         # Step 1: get the account version and salt
-        prelogin = self.api.request({"a": "us0", "user": email.lower()})
-        version = prelogin.get("v", 1)
-        salt_b64 = prelogin.get("s", "")
+        prelogin = _expect_mapping(
+            self.api.request({"a": "us0", "user": email.lower()}), "prelogin"
+        )
+        version = _expect_field(prelogin, "v", int, "prelogin", default=1)
+        salt_b64 = _expect_field(prelogin, "s", str, "prelogin", default="")
 
         if version == 2:
             salt = b64_url_decode(salt_b64)
@@ -153,26 +237,37 @@ class MegaClient:
             else:
                 raise
 
-        # Step 3: decrypt the master key
-        encrypted_master_a32 = str_to_a32(result["k"])
-        master_a32 = aes_cbc_decrypt_a32(encrypted_master_a32, bytes_to_a32(login_key))
-        master_key = a32_to_bytes(master_a32)
+        # Steps 3 and 4: decrypt the master key, then derive the session ID.
+        # The blobs come straight off the wire, so a wrong type, bad base64 or
+        # a non-block-aligned payload is a malformed RESPONSE, not a bug here:
+        # translate it into a typed AuthError instead of letting a raw
+        # ValueError/binascii.Error reach the CLI catch-all.
+        result = _expect_mapping(result, "login")
+        try:
+            encrypted_master_a32 = str_to_a32(_expect_field(result, "k", str, "login"))
+            master_a32 = aes_cbc_decrypt_a32(encrypted_master_a32, bytes_to_a32(login_key))
+            master_key = a32_to_bytes(master_a32)
 
-        # Step 4: derive the session ID
-        if "tsid" in result:
-            sid = result["tsid"]
-            rsa_priv = None
-        else:
-            encrypted_rsa_priv = b64_url_decode(result["privk"])
-            csid_encrypted = b64_url_decode(result["csid"])
-            rsa_priv = aes_cbc_decrypt(encrypted_rsa_priv, master_key)
-            sid = self._decode_session_id(csid_encrypted, rsa_priv)
+            if "tsid" in result:
+                sid = _expect_field(result, "tsid", str, "login")
+                rsa_priv = None
+            else:
+                encrypted_rsa_priv = b64_url_decode(_expect_field(result, "privk", str, "login"))
+                csid_encrypted = b64_url_decode(_expect_field(result, "csid", str, "login"))
+                rsa_priv = aes_cbc_decrypt(encrypted_rsa_priv, master_key)
+                sid = self._decode_session_id(csid_encrypted, rsa_priv)
+        except MegaError:
+            raise  # already typed and actionable
+        except (ValueError, TypeError, IndexError) as exc:
+            raise AuthError(
+                message="MEGA returned malformed key material in the login response"
+            ) from exc
 
         self.session = MegaSession(
             sid=sid,
             master_key=master_key,
             rsa_private_key=rsa_priv,
-            user_handle=result.get("u", ""),
+            user_handle=_expect_field(result, "u", str, "login", default=""),
             email=email,
         )
         self.api.set_session(sid)
@@ -295,15 +390,17 @@ class MegaClient:
         if master_key is None:
             raise AuthError(message="No master key available")
 
+        raw_node = _expect_mapping(raw_node, "node")
+        raw_attrs_b64 = _expect_field(raw_node, "a", str, "node", default="")
         node = MegaNode(
-            handle=raw_node["h"],
-            parent=raw_node.get("p", ""),
-            owner=raw_node.get("u", ""),
-            node_type=raw_node["t"],
-            size=raw_node.get("s", 0),
-            timestamp=raw_node.get("ts", 0),
-            raw_attrs=b64_url_decode(raw_node.get("a", "") or "") if raw_node.get("a") else b"",
-            raw_key=raw_node.get("k", ""),
+            handle=_expect_field(raw_node, "h", str, "node"),
+            parent=_expect_field(raw_node, "p", str, "node", default=""),
+            owner=_expect_field(raw_node, "u", str, "node", default=""),
+            node_type=_expect_field(raw_node, "t", int, "node"),
+            size=_expect_field(raw_node, "s", int, "node", default=0),
+            timestamp=_expect_field(raw_node, "ts", int, "node", default=0),
+            raw_attrs=b64_url_decode(raw_attrs_b64) if raw_attrs_b64 else b"",
+            raw_key=_expect_field(raw_node, "k", str, "node", default=""),
         )
 
         if node.raw_key:
@@ -316,8 +413,13 @@ class MegaClient:
                     node.file_key_a32 = key_a32
                     aes_key, _, _ = unpack_file_key(key_a32)
                     attrs = decrypt_attributes(node.raw_attrs, aes_key)
-                else:
+                elif len(decrypted_key) >= 16:
                     attrs = decrypt_attributes(node.raw_attrs, decrypted_key[:16])
+                else:
+                    # The slice used to run unchecked, feeding AES a short key.
+                    raise MegaError(
+                        message=f"node key is {len(decrypted_key)} bytes, expected at least 16"
+                    )
 
                 if attrs:
                     node.name = attrs.get("n")
@@ -335,8 +437,9 @@ class MegaClient:
             raise AuthError(message="Not logged in")
         if self._node_cache is not None and not refresh:
             return list(self._node_cache)
-        result = self.api.request({"a": "f", "c": 1})
-        nodes = [self.decrypt_node(raw) for raw in result.get("f", [])]
+        result = _expect_mapping(self.api.request({"a": "f", "c": 1}), "file listing")
+        raw_nodes = _expect_field(result, "f", list, "file listing", default=[])
+        nodes = [self.decrypt_node(raw) for raw in raw_nodes]
         self._node_cache = nodes
         return list(nodes)
 
@@ -427,9 +530,8 @@ class MegaClient:
             encrypted_attrs=b64_url_encode(enc_attrs),
             wrapped_key=b64_url_encode(wrapped_key),
         )
-        nodes = result.get("f", []) if isinstance(result, dict) else []
         self.invalidate_cache()
-        return nodes[0]["h"] if nodes else ""
+        return _first_node_handle(result, "folder creation")
 
     def delete(self, handle: str) -> None:
         """Move a node to trash."""
@@ -570,10 +672,21 @@ class MegaClient:
             raise MegaError(message="No target folder for import")
 
         folder_key = a32_to_bytes(str_to_a32(parsed.key))
-        listing = self.api.get_public_folder_listing(parsed.public_id)
-        raw_nodes = listing.get("f", [])
+        listing = _expect_mapping(
+            self.api.get_public_folder_listing(parsed.public_id), "share listing"
+        )
+        raw_nodes = _expect_field(listing, "f", list, "share listing", default=[])
         if not raw_nodes:
             return []
+        # Every loop below indexes `n["h"]`, `n.get("p")` and `n.get("t")`, so
+        # the whole listing is proven well-formed once, here, rather than
+        # failing halfway through an import with a bare KeyError.
+        for raw in raw_nodes:
+            _expect_field(_expect_mapping(raw, "shared node"), "h", str, "shared node")
+            _expect_field(raw, "p", str, "shared node", default="")
+            _expect_field(raw, "t", int, "shared node", default=0)
+            _expect_field(raw, "k", str, "shared node", default="")
+            _expect_field(raw, "a", str, "shared node", default="")
 
         # Identify the share root: its parent doesn't appear in the listing.
         by_handle = {n["h"]: n for n in raw_nodes if "h" in n}
@@ -673,9 +786,8 @@ class MegaClient:
                 log.warning("Failed to import %s: %s", src_handle, exc)
                 continue
 
-            imported_nodes = result.get("f", []) if isinstance(result, dict) else []
-            if imported_nodes:
-                new_handle = imported_nodes[0]["h"]
+            new_handle = _first_node_handle(result, "share import")
+            if new_handle:
                 new_handles.append(new_handle)
                 parent_map[src_handle] = new_handle
 
@@ -709,10 +821,7 @@ class MegaClient:
             ),
         }
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-        with contextlib.suppress(OSError, AttributeError):
-            os.chmod(path, 0o600)
+        _atomic_write_private(path, json.dumps(data).encode("utf-8"))
 
     @staticmethod
     def load_session(path: Path, passphrase: str | None = None) -> MegaSession | None:
@@ -722,25 +831,41 @@ class MegaClient:
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
+            # The file is attacker-reachable and user-editable, so its SHAPE is
+            # checked before anything indexes it. `"encrypted" in data` used to
+            # run against whatever json.load returned: a bare `"encrypted"`
+            # string passed the substring test and then raised AttributeError
+            # on `.get`, while `123`/`null` raised TypeError on the `in` itself
+            # - neither caught, so "returns None if corrupt" was not true.
+            if not isinstance(data, dict):
+                log.warning("Refusing to load malformed session file: %s", path)
+                return None
             if "encrypted" in data:
                 if data.get("version") != 2:
                     log.warning("Refusing to load unsupported session file version: %s", path)
                     return None
                 if not passphrase:
                     return None
+                blob = data["encrypted"]
+                if not isinstance(blob, str):
+                    log.warning("Refusing to load malformed session file: %s", path)
+                    return None
                 from ..accounts.storage import CredentialVault
 
-                data = json.loads(CredentialVault(passphrase).decrypt(data["encrypted"]))
+                data = json.loads(CredentialVault(passphrase).decrypt(blob))
+                if not isinstance(data, dict):
+                    log.warning("Refusing to load malformed session payload: %s", path)
+                    return None
             elif os.environ.get("MEGABASTERD_ALLOW_PLAINTEXT_SESSION") != "1":
                 log.warning("Refusing to load plaintext session file: %s", path)
                 return None
             rsa = data.get("rsa_private_key")
             return MegaSession(
-                sid=data["sid"],
-                master_key=bytes.fromhex(data["master_key"]),
-                rsa_private_key=bytes.fromhex(rsa) if rsa else None,
-                user_handle=data.get("user_handle", ""),
-                email=data.get("email", ""),
+                sid=_expect_field(data, "sid", str, "saved session"),
+                master_key=bytes.fromhex(_expect_field(data, "master_key", str, "saved session")),
+                rsa_private_key=bytes.fromhex(rsa) if isinstance(rsa, str) and rsa else None,
+                user_handle=_expect_field(data, "user_handle", str, "saved session", default=""),
+                email=_expect_field(data, "email", str, "saved session", default=""),
             )
-        except (json.JSONDecodeError, KeyError, ValueError, OSError, InvalidTag):
+        except (json.JSONDecodeError, KeyError, ValueError, OSError, InvalidTag, MegaError):
             return None

@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from rich.table import Table
-
 from ..accounts.storage import Account
 from ..utils.helpers import format_bytes
-from .theme import make_console
+from .theme import SafeTable, make_console, markup
 
 _console = make_console()
 
@@ -16,7 +14,7 @@ def render_accounts(accounts: list[Account], default_email: str | None = None) -
         _console.print("[mb.dim]No accounts stored.[/mb.dim]")
         return
 
-    table = Table(
+    table = SafeTable(
         title="MEGA Accounts",
         show_header=True,
         header_style="mb.table.header",
@@ -30,7 +28,7 @@ def render_accounts(accounts: list[Account], default_email: str | None = None) -
     table.add_column("Last used")
 
     for a in accounts:
-        is_default = "[mb.success]Y[/mb.success]" if a.email == default_email else ""
+        is_default = markup("[mb.success]Y[/mb.success]") if a.email == default_email else ""
         used = format_bytes(a.quota_used) if a.quota_used is not None else "-"
         total = format_bytes(a.quota_total) if a.quota_total is not None else "-"
         table.add_row(
@@ -49,7 +47,7 @@ def render_queue(items: list[dict]) -> None:
         _console.print("[mb.dim]Queue is empty.[/mb.dim]")
         return
 
-    table = Table(
+    table = SafeTable(
         title="Transfer Queue",
         show_header=True,
         header_style="mb.table.header",

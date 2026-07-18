@@ -1,6 +1,7 @@
 """Tests for ELC and DLC container resolution."""
 
 import base64
+import json
 
 import pytest
 from Crypto.Cipher import AES
@@ -21,6 +22,12 @@ class DummyResponse:
 
     def json(self):
         return self._body
+
+    def iter_content(self, chunk_size=65536):
+        # Service replies are now read as a bounded stream.
+        body = self.text.encode() if self.text else json.dumps(self._body).encode()
+        for i in range(0, len(body), chunk_size):
+            yield body[i : i + chunk_size]
 
 
 def _pad_spaces(data: bytes) -> bytes:
@@ -47,7 +54,7 @@ def test_resolve_elc_links(monkeypatch):
     )
     parsed = parse_link("mega://elc?" + b64_url_encode(payload))
 
-    def fake_post(url, data, headers, timeout, proxies):
+    def fake_post(url, data, headers, timeout, proxies, **kwargs):
         assert url == service_url
         assert data["USER"] == "alice"
         assert data["APIKEY"] == "secret"
@@ -82,7 +89,7 @@ def test_decrypt_dlc_container(monkeypatch):
     dlc_id = "A" * 88
     dlc_data = base64.b64encode(enc_data).decode() + dlc_id
 
-    def fake_post(url, data, headers, timeout, proxies, allow_redirects=None):
+    def fake_post(url, data, headers, timeout, proxies, allow_redirects=None, **kwargs):
         assert "srcType=dlc" in data
         return DummyResponse({}, text=f"<rc>{base64.b64encode(enc_key).decode()}</rc>")
 

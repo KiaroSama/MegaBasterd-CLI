@@ -28,6 +28,13 @@ class _Resp:
         self.status_code = status_code
         self.headers = headers or {}
 
+    def iter_content(self, chunk_size=65536):
+        # The resolver now caps the body WHILE reading it instead of measuring
+        # `response.text` after the fact.
+        body = self.text.encode()
+        for i in range(0, len(body), chunk_size):
+            yield body[i : i + chunk_size]
+
     def raise_for_status(self) -> None:
         return None
 
@@ -40,7 +47,9 @@ def _install_posts(monkeypatch, responses):
     calls = []
     seq = list(responses)
 
-    def fake_post(url, data=None, headers=None, timeout=None, proxies=None, allow_redirects=None):
+    def fake_post(
+        url, data=None, headers=None, timeout=None, proxies=None, allow_redirects=None, **kwargs
+    ):
         calls.append(url)
         return seq.pop(0)
 

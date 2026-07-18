@@ -53,6 +53,10 @@ def record_proxied(monkeypatch):
         def json(self):
             return {"link": "https://mega.nz/file/ABCDEFGH#key"}
 
+        def iter_content(self, chunk_size=65536):
+            # The resolver now reads the reply as a bounded stream.
+            yield b'{"link": "https://mega.nz/file/ABCDEFGH#key"}'
+
         def raise_for_status(self):
             return None
 
@@ -153,6 +157,10 @@ def test_an_explicit_non_forced_policy_still_allows_direct(monkeypatch):
 
         def json(self):
             return {"link": "https://mega.nz/file/ABCDEFGH#key"}
+
+        def iter_content(self, chunk_size=65536):
+            # The resolver now reads the reply as a bounded stream.
+            yield b'{"link": "https://mega.nz/file/ABCDEFGH#key"}'
 
         def raise_for_status(self):
             return None

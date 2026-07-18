@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 
 import click
-from rich.table import Table
 
 from ..accounts.manager import AccountManager, AccountNotFound
 from ..config import accounts_file
@@ -14,7 +13,7 @@ from ..core.client import MegaClient, MegaNode
 from ..core.errors import MegaError
 from ..core.links import LinkType, parse_link
 from ..ui.prompts import ask, ask_password, confirm, print_error, print_info, print_success
-from ..ui.theme import make_console
+from ..ui.theme import SafeTable, make_console
 from ..utils.helpers import format_bytes
 
 log = logging.getLogger(__name__)
@@ -82,7 +81,7 @@ def _render_nodes(nodes: list[MegaNode], parent_filter: str | None = None) -> No
         _console.print("[mb.dim]No items[/mb.dim]")
         return
 
-    table = Table(
+    table = SafeTable(
         show_header=True,
         header_style="mb.table.header",
         border_style="mb.table.border",

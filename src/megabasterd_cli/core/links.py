@@ -445,3 +445,47 @@ def _aes_cbc_pkcs7_decrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
     from Crypto.Util.Padding import unpad
 
     return unpad(AES.new(key, AES.MODE_CBC, iv).decrypt(data), 16)
+
+
+# Backwards-compatible re-exports.
+#
+# These six used to live here and were moved to `link_services.py`, which
+# imports from this module - so a top-level `from .link_services import ...`
+# would be a cycle. PEP 562 module __getattr__ resolves them on first access
+# instead, once both modules are fully loaded.
+_MOVED_TO_LINK_SERVICES = frozenset(
+    {
+        "decode_elc_payload",
+        "resolve_elc_links",
+        "decrypt_dlc_container",
+        "get_megacrypter_info",
+        "get_megacrypter_download_url",
+        "resolve_megacrypter_link",
+    }
+)
+
+__all__ = [
+    "ElcPayload",
+    "LinkType",
+    "MAX_MEGACRYPTER_PBKDF2_ITERATIONS",
+    "MegaCrypterInfo",
+    "ParsedLink",
+    "is_mega_url",
+    "normalize_link",
+    "parse_link",
+    "resolve_encrypted_container_link",
+    "resolve_password_link",
+    *sorted(_MOVED_TO_LINK_SERVICES),
+]
+
+
+def __getattr__(name: str):
+    if name in _MOVED_TO_LINK_SERVICES:
+        from . import link_services
+
+        return getattr(link_services, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted({*globals(), *__all__})

@@ -8,10 +8,17 @@ from pathlib import Path
 
 import click
 
-from ..config import data_dir
 from ..core.links import is_mega_url
-from ..queue.manager import JobStatus, JobType, QueueItem, QueueManager
-from ..ui.prompts import print_info, print_success
+from ..queue.manager import (
+    JobStatus,
+    JobType,
+    QueueCorruptionError,
+    QueueItem,
+    QueueLockError,
+    QueueManager,
+)
+from ..ui.prompts import print_error, print_info, print_success
+from ..utils.redaction import redact_link
 
 log = logging.getLogger(__name__)
 
@@ -61,7 +68,10 @@ def _read_clipboard() -> str:
 @click.command("watch", short_help="Watch the clipboard and queue any MEGA links copied.")
 @click.option(
     "--interval",
-    type=float,
+    # A non-positive interval either busy-spins the poller (0) or makes
+    # `time.sleep()` raise on the first tick (negative), so it is rejected up
+    # front instead of at run time.
+    type=click.FloatRange(min=0.05, max=3600.0),
     default=1.5,
     show_default=True,
     help="Polling interval in seconds.",
@@ -97,8 +107,12 @@ def watch_cmd(
     """Continuously watch the system clipboard. When a MEGA URL appears, it is
     automatically added to the persistent download queue. Press Ctrl+C to stop.
     """
+    from .queue_cmd import _queue
+
     cfg = ctx.obj["config"]
-    q = QueueManager(data_dir() / "queue.json")
+    # Refuse to start against a corrupt queue rather than discovering it on the
+    # first copied link (the manager preserves and backs up the original).
+    q = _queue(ctx)
     out = str(output_dir) if output_dir else cfg.download_path
 
     print_info("Watching clipboard for MEGA links... (Ctrl+C to stop)")
@@ -124,8 +138,20 @@ def watch_cmd(
                     source=line,
                     destination=out,
                 )
-                q.add(item)
-                print_success(f"Queued: {line}")
+                try:
+                    q.add(item)
+                except QueueLockError as exc:
+                    # Transient: another queue operation holds the lock. Keep
+                    # watching; the link will be re-queued if it is copied again.
+                    print_error(f"Could not queue {redact_link(line)}: {exc}")
+                    continue
+                except QueueCorruptionError as exc:
+                    # Not recoverable by retrying: stop with a clear message
+                    # instead of dying with a traceback on every later link.
+                    print_error(str(exc))
+                    ctx.exit(1)
+                # Never print the `#<key>` fragment: it is the decryption key.
+                print_success(f"Queued: {redact_link(line)}")
                 if run:
                     if _has_pending_uploads(q) and not vault_passphrase:
                         print_info(

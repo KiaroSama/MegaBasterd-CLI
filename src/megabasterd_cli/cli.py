@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import click
+from rich.text import Text
 
 from . import __version__
 from .commands.account_cmd import account
@@ -300,7 +301,8 @@ def main() -> int:
         return 130
     except Exception as e:
         logging.getLogger(__name__).exception("Fatal error: %s", e)
-        console.print(f"[bold red]Error:[/bold red] {e}")
+        # `e` may carry server-supplied text; render it literally, not as markup.
+        console.print(Text.assemble(("Error:", "bold red"), " ", str(e)))
         return 1
 
 
