@@ -196,13 +196,22 @@ class _EndlessResponse:
 def test_a_client_that_stops_reading_cannot_pin_a_handler_forever(monkeypatch):
     """The write leg needs a timeout too: with none, a stalled reader owns a
     thread (and, now, a connection slot) for good."""
-    server = _start(max_connections=1, handler_timeout=0.5, header_timeout=2.0)
+    # The two phases must not race each other. `handler_timeout` has to be
+    # comfortably longer than the phase-1 settle, or the timeout under test
+    # fires BEFORE we check that the slot is held and phase 1 reads 200 - which
+    # is what happened on the slower Windows runners when both were 0.5s.
+    settle = 0.5
+    handler_timeout = 3.0
+    assert handler_timeout > settle * 3, "phase 1 must not race the timeout"
+    assert handler_timeout * 2 < HARD_TIMEOUT, "phase 2 must outlast the timeout"
+
+    server = _start(max_connections=1, handler_timeout=handler_timeout, header_timeout=2.0)
     server.source = _FakeSource(_STALL_SIZE)
     monkeypatch.setattr(srv.requests, "get", lambda url, **kw: _EndlessResponse())
     stalled = socket.create_connection(_addr(server), timeout=HARD_TIMEOUT)
     try:
         stalled.sendall(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
-        time.sleep(0.5)  # the handler is now blocked writing into a full buffer
+        time.sleep(settle)  # the handler is now blocked writing into a full buffer
         assert _status(server) == 503, "the single slot is not held as expected"
 
         deadline = time.monotonic() + HARD_TIMEOUT
