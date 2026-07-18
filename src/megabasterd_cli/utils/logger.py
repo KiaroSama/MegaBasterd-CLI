@@ -69,7 +69,19 @@ def _redact_url_query(url: str) -> str:
 
 
 def redact_log_text(text: str) -> str:
-    """Remove MEGA URLs and token-like payload values from debug logs."""
+    """Remove secrets, MEGA URLs, and account identifiers from log output.
+
+    This composes TWO layers rather than maintaining a second, parallel set of
+    patterns. The log-specific rules below (whole-URL removal, `/cs?` query
+    stripping, e-mail masking) have no equivalent in the shared sanitizer, but
+    everything a secret can look like in free text is delegated to it.
+
+    Keeping a private copy of the secret patterns here is exactly how this
+    drifted: the logger leaked Digest headers, Proxy-Authorization, Bearer
+    tokens, and free-text `password:` / `SID was` / `MFA code` values that the
+    central sanitizer had already learned to catch.
+    """
+    from .redaction import redact_text
 
     def redact_url(match: re.Match[str]) -> str:
         url = match.group(0)
@@ -78,7 +90,10 @@ def redact_log_text(text: str) -> str:
             return "<redacted-url>"
         return _redact_url_query(url)
 
-    redacted = _URL_RE.sub(redact_url, text)
+    # Central sanitizer FIRST: it works on the raw text, before URLs are
+    # replaced by placeholders that would hide an embedded credential.
+    redacted = redact_text(text)
+    redacted = _URL_RE.sub(redact_url, redacted)
     redacted = _MEGA_API_PATH_RE.sub("/cs?<redacted-query>", redacted)
     redacted = _SENSITIVE_FIELD_RE.sub(r"\1'<redacted>'", redacted)
     return _EMAIL_RE.sub("<redacted-email>", redacted)
