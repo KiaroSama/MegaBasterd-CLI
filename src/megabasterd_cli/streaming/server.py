@@ -17,7 +17,6 @@ import hmac
 import ipaddress
 import logging
 import mimetypes
-import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
@@ -33,6 +32,7 @@ from ..core.crypto import (
     unpack_file_key,
 )
 from ..core.links import parse_link
+from ..core.range_validation import RangeNotHonoredError, validate_range_response
 from ..proxy.selector import ProxyRequiredError, ProxySelector
 from ..utils.helpers import sanitize_filename
 
@@ -70,60 +70,6 @@ def _content_disposition(filename: str) -> str:
     ascii_name = cleaned.encode("ascii", errors="ignore").decode("ascii") or "download"
     ascii_name = ascii_name.replace('"', r"\"")
     return f'inline; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(cleaned, safe="")}'
-
-
-class RangeNotHonoredError(Exception):
-    """The upstream response does not match the requested byte range."""
-
-
-# `bytes <start>-<end>/<total>`; a `*` in either position is not acceptable
-# for a range we are about to decrypt at a specific counter.
-_CONTENT_RANGE_RE = re.compile(r"^bytes\s+(\d+)\s*-\s*(\d+)\s*/\s*(\d+|\*)$", re.IGNORECASE)
-
-
-def validate_range_response(status: int, headers, start: int, end: int, size: int) -> None:
-    """Raise RangeNotHonored unless the body is exactly bytes `start`..`end`.
-
-    A nonzero range decrypted with a nonzero AES-CTR counter is only correct
-    if the server actually honored the range. A proxy or CDN that ignores
-    `Range` and replies 200 with the whole body from byte 0 would otherwise
-    produce garbage plaintext that looks like a successful stream.
-
-    HTTP 200 is accepted for one case only: the request covers the whole file,
-    where the counter starts at zero anyway.
-    """
-    wants_whole_file = start == 0 and end == size - 1
-    if status == 200:
-        if wants_whole_file:
-            return
-        raise RangeNotHonoredError(
-            f"HTTP 200 (full body) for a partial request of bytes {start}-{end}"
-        )
-    if status != 206:
-        raise RangeNotHonoredError(f"expected HTTP 206 for bytes {start}-{end}, got {status}")
-    raw = headers.get("Content-Range")
-    if not raw:
-        raise RangeNotHonoredError("206 response without a Content-Range header")
-    match = _CONTENT_RANGE_RE.match(str(raw).strip())
-    if match is None:
-        raise RangeNotHonoredError(f"unparsable Content-Range {raw!r}")
-    got_start, got_end, total = int(match.group(1)), int(match.group(2)), match.group(3)
-    if got_start != start or got_end != end:
-        raise RangeNotHonoredError(
-            f"Content-Range covers {got_start}-{got_end}, requested {start}-{end}"
-        )
-    if total != "*" and int(total) != size:
-        raise RangeNotHonoredError(f"Content-Range total {total} does not match file size {size}")
-    declared = headers.get("Content-Length")
-    if declared is not None:
-        try:
-            declared_len = int(declared)
-        except (TypeError, ValueError):
-            raise RangeNotHonoredError(f"unparsable Content-Length {declared!r}") from None
-        if declared_len != end - start + 1:
-            raise RangeNotHonoredError(
-                f"Content-Length {declared_len} does not match the {end - start + 1}-byte range"
-            )
 
 
 class _StreamSource:

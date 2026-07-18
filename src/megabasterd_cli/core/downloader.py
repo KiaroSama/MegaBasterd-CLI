@@ -51,6 +51,7 @@ from .link_services import (
     resolve_megacrypter_link,
 )
 from .links import LinkType, parse_link, resolve_encrypted_container_link, resolve_password_link
+from .range_validation import RangeNotHonoredError, validate_range_response
 from .state import (
     TransferState,
     clear_state,
@@ -744,6 +745,30 @@ class MegaDownloader:
                     if picked_proxy and self.proxy_pool is not None:
                         self.proxy_pool.report_failure(picked_proxy)
                     raise TransferError(message=f"HTTP {resp.status_code} for chunk {chunk.index}")
+
+                # These bytes are about to be decrypted with a CTR counter
+                # derived from THIS chunk's offset and written at that offset.
+                # If the CDN or a proxy ignored `Range` and sent the whole file
+                # - or a different window of the same length - the result is
+                # silent on-disk corruption that only a full MAC check would
+                # ever notice, and only if integrity verification is enabled.
+                # Same rule the streaming server enforces, from one module.
+                try:
+                    validate_range_response(
+                        resp.status_code,
+                        resp.headers,
+                        chunk.offset,
+                        chunk.offset + chunk.size - 1,
+                        state.total_size,
+                    )
+                except RangeNotHonoredError as exc:
+                    if picked_proxy and self.proxy_pool is not None:
+                        self.proxy_pool.report_failure(picked_proxy)
+                    # A protocol violation, not a transient fault: retrying the
+                    # same request against the same server would repeat it.
+                    raise TransferError(
+                        message=f"Upstream ignored the requested range for chunk {chunk.index}: {exc}"
+                    ) from exc
 
                 # Read encrypted bytes
                 for block in resp.iter_content(chunk_size=65536):
