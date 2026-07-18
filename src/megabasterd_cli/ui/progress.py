@@ -70,7 +70,7 @@ def build_progress(console: Console | None = None) -> Progress:
 
 
 class MultiFileProgressView:
-    """EVdlc-style live progress with one overall row and one row per file."""
+    """Live progress with one overall row and one row per file."""
 
     def __init__(
         self,

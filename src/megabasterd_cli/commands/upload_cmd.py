@@ -108,7 +108,7 @@ class QuotaLedger:
     before each file starts via `reserve()`, which atomically deducts the
     expected bytes so parallel reservations can never overcommit one
     account. A successful upload keeps its reservation; a non-quota failure
-    `release()`s it; a `QuotaError` triggers `set_free()` with the account's
+    `release()`s it; a `QuotaError` triggers `reconcile_free()` with the account's
     LIVE quota so the failed file and every not-yet-started file are
     re-planned against fresh numbers instead of the stale cache.
     """
@@ -138,10 +138,17 @@ class QuotaLedger:
             if email in self._free:
                 self._free[email] += size
 
-    def set_free(self, email: str, free: int) -> None:
-        """Replace an account's balance with a freshly fetched live value."""
+    def reconcile_free(self, email: str, free: int) -> None:
+        """Correct an account's balance from a live quota read — downward only.
+
+        A live read cannot see the reservations of files still in flight, so
+        raising the balance from it would hand back space another file already
+        reserved. Concurrent QuotaError refreshes for one account therefore can
+        never increase available space; they only shrink it (0 = unusable).
+        """
         with self._lock:
-            self._free[email] = max(0, int(free))
+            current = self._free.get(email, 0)
+            self._free[email] = min(current, max(0, int(free)))
 
     def free_of(self, email: str) -> int | None:
         with self._lock:
@@ -419,17 +426,32 @@ def upload(
 
     def _refresh_quota_after_error(email: str) -> None:
         """After a QuotaError, replace the stale ledger balance with the
-        account's LIVE quota so re-planning never trusts old numbers."""
+        account's LIVE quota so re-planning never trusts old numbers.
+
+        The refresh runs on a SHORT-LIVED ISOLATED client (its own API/HTTP
+        session and request counter, reusing the account's already
+        authenticated session material — no second login or MFA prompt), so
+        two files hitting QuotaError on one account never share the cached
+        base client's mutable request state. The client is always closed.
+        """
         if ledger is None:
             return
+        with client_cache_lock:
+            base = clients.get(email)
+        if base is None:
+            ledger.reconcile_free(email, 0)
+            return
+        client = _worker_client(base)
         try:
-            quota = clients[email].get_quota()
+            quota = client.get_quota()
             live_free = quota.get("mstrg", 0) - quota.get("cstrg", 0)
-            ledger.set_free(email, live_free)
+            ledger.reconcile_free(email, live_free)
             mgr.update_quota(email, quota.get("cstrg", 0), quota.get("mstrg", 0))
         except MegaError:
             # Cannot verify: treat the account as unavailable for this run.
-            ledger.set_free(email, 0)
+            ledger.reconcile_free(email, 0)
+        finally:
+            client.close()
 
     def _fail_item(
         message: str,

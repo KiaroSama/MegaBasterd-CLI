@@ -76,7 +76,7 @@ def test_release_and_set_free_reconcile_reservations():
     assert ledger.reserve(400) == "a@example.com"
     ledger.release("a@example.com", 400)  # non-quota failure: give it back
     assert ledger.free_of("a@example.com") == 500
-    ledger.set_free("a@example.com", 42)  # QuotaError refresh with live value
+    ledger.reconcile_free("a@example.com", 42)  # QuotaError refresh with live value
     assert ledger.free_of("a@example.com") == 42
     assert ledger.reserve(100) is None, "stale quota must not be trusted after refresh"
 

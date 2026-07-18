@@ -163,8 +163,12 @@ backed up once as `queue.json.corrupt.<ts>.json`, mutations are blocked
 
 `ConfigStore` mirrors the queue contract: `set`/`unset`/`migrate` reload the
 newest config under the shared lock, apply only the requested change, and
-persist through a unique fsync'd temp file, so the CLI and EVdlc never lose
-each other's updates. `config show`/`get` redact secret values via
+persist through a unique fsync'd temp file, so concurrent processes never lose
+each other's updates. Load applies the same integrity contract as the queue:
+invalid UTF-8/JSON or a non-object root is corruption — the original is
+preserved, backed up once as `config.json.corrupt.<ts>.json`, and every
+mutation raises `ConfigCorruptionError` (non-zero CLI exit) until
+`mb config recover --reset`. `config show`/`get` redact secret values via
 `config.display_value` (which reuses the machine-output sanitizer), and
 `config set` never echoes a value. Nullable keys accept `null`/`none` to
 store JSON null; `config unset` clears them.
@@ -173,7 +177,10 @@ store JSON null; `config unset` clears them.
 
 `utils/redaction.py` is the single secret-redaction authority: `sanitize()`
 recursively walks records (secret-named fields wholesale, embedded link keys
-and secret query params in every string, `share_link` kept). `MachineOutput`
+and secret query params in every string, `share_link` kept). `redact_text()`
+also covers the free-text shapes that reach output through `str(exc)` —
+`password: x`, `SID was x`, `MFA code 123456`, `api key = x`, `token is x`,
+`Authorization: Bearer x`, and `scheme://user:pass@host` proxy credentials. `MachineOutput`
 sanitizes each `--json` record and writes it as one atomic
 `dumps(...) + "\n"` under a lock, so parallel workers never interleave partial
 lines. `transfer_progress.redact_link` and `config.display_value` delegate to
