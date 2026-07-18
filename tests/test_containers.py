@@ -6,12 +6,8 @@ import pytest
 from Crypto.Cipher import AES
 
 from megabasterd_cli.core.crypto import b64_url_encode
-from megabasterd_cli.core.links import (
-    LinkType,
-    decrypt_dlc_container,
-    parse_link,
-    resolve_elc_links,
-)
+from megabasterd_cli.core.link_services import decrypt_dlc_container, resolve_elc_links
+from megabasterd_cli.core.links import LinkType, parse_link
 
 
 class DummyResponse:

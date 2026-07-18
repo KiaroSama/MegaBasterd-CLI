@@ -13,11 +13,11 @@ import threading
 import pytest
 from click.testing import CliRunner
 
-from megabasterd_cli.commands.upload_cmd import QuotaLedger
 from megabasterd_cli.core.api import MegaAPIClient
 from megabasterd_cli.core.client import MegaClient, MegaSession
 from megabasterd_cli.core.errors import MegaError, QuotaError
 from megabasterd_cli.core.uploader import MegaUploader, UploadResult
+from megabasterd_cli.upload_support import QuotaLedger
 
 GB = 1024**3
 

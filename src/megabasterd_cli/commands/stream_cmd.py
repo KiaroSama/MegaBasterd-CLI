@@ -5,7 +5,8 @@ from __future__ import annotations
 import click
 
 from ..core.api import MegaAPIClient
-from ..core.links import LinkType, parse_link, resolve_elc_links
+from ..core.link_services import resolve_elc_links
+from ..core.links import LinkType, parse_link
 from ..proxy.selector import ProxySelector
 from ..streaming.server import StreamingServer
 from ..ui.prompts import print_error, print_info

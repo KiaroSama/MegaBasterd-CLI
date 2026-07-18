@@ -8,11 +8,7 @@ from megabasterd_cli.core.crypto import (
     decrypt_password_link,
     encrypt_password_link,
 )
-from megabasterd_cli.core.links import (
-    LinkType,
-    parse_link,
-    resolve_password_link,
-)
+from megabasterd_cli.core.links import LinkType, parse_link, resolve_password_link
 
 
 def test_password_link_roundtrip_file():

@@ -28,7 +28,7 @@ def test_stream_source_tolerates_missing_file_attrs():
 def test_megacrypter_stream_refresh_uses_the_configured_proxy_selector(monkeypatch):
     """Every MegaCrypter call - including each CDN-URL refresh - must carry the
     command's ProxySelector, so proxy config AND force policy reach them."""
-    import megabasterd_cli.core.links as links
+    import megabasterd_cli.core.link_services as links
     from megabasterd_cli.proxy.selector import ProxySelector
 
     calls = []

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from megabasterd_cli.core import links
+from megabasterd_cli.core import link_services as links
 from megabasterd_cli.core.links import parse_link
 from megabasterd_cli.proxy.selector import ProxyRequiredError, ProxySelector
 from megabasterd_cli.proxy.smart_proxy import SmartProxyPool

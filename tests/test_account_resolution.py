@@ -6,7 +6,7 @@ import threading
 
 import megabasterd_cli.accounts.manager as manager_module
 from megabasterd_cli.accounts.manager import AccountManager, resolve_account_id
-from megabasterd_cli.commands.upload_cmd import QuotaLedger
+from megabasterd_cli.upload_support import QuotaLedger
 
 
 def _mgr(tmp_path, default_email=None) -> AccountManager:

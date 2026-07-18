@@ -9,13 +9,13 @@ from Crypto.Protocol.KDF import PBKDF2
 from Crypto.Util.Padding import pad
 
 from megabasterd_cli.core.crypto import b64_url_decode
-from megabasterd_cli.core.links import (
+from megabasterd_cli.core.link_services import (
     _decrypt_megacrypter_password_info,
     get_megacrypter_download_url,
     get_megacrypter_info,
-    parse_link,
     resolve_megacrypter_link,
 )
+from megabasterd_cli.core.links import parse_link
 
 
 class DummyResponse:
