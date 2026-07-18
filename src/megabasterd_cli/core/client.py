@@ -240,13 +240,20 @@ class MegaClient:
         Use `close()` instead when the server-side session must survive -
         parallel workers sharing one sid.
         """
-        if self.session:
-            with contextlib.suppress(MegaError):
-                self.api.request({"a": "sml"})
-        self.api.clear_session()
-        self.api.close()
-        self.session = None
-        self.invalidate_cache()
+        try:
+            if self.session:
+                with contextlib.suppress(MegaError):
+                    self.api.request({"a": "sml"})
+        finally:
+            # Local cleanup is not conditional on the server cooperating. The
+            # remote call can fail in ways that are not MegaError - Timeout,
+            # ConnectionError, HTTPError, a non-JSON body, a crypto error -
+            # and every one of those used to escape before the transport was
+            # released, leaking the session logout() exists to free.
+            self.api.clear_session()
+            self.api.close()
+            self.session = None
+            self.invalidate_cache()
 
     def invalidate_cache(self) -> None:
         """Clear cached cloud node listings after a mutation."""

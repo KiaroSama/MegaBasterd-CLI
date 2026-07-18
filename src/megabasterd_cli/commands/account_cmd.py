@@ -76,11 +76,15 @@ def account_add(
         client = MegaClient(api=_api_for(cfg))
         try:
             client.login(email, password, mfa_code=mfa_code, mfa_prompt=_mfa_prompt)
-            client.logout()
         except MegaError as e:
-            print_error(f"Login verification failed: {e}")
+            print_error(f"Login verification failed: {redact_text(str(e))}")
             if not confirm("Add account anyway?", default=False):
                 return
+        finally:
+            # `logout()` used to sit inside the try after `login()`, so a
+            # failed verification - or a KeyboardInterrupt at the 2FA prompt -
+            # never released the session it had just opened.
+            client.logout()
 
     mgr = _open_manager(vault_passphrase)
     try:

@@ -15,7 +15,7 @@ from ..config import accounts_file
 from ..core.api import MegaAPIClient
 from ..core.client import MegaClient
 from ..core.errors import MegaError, QuotaError
-from ..core.uploader import MegaUploader
+from ..core.uploader import MegaUploader, walk_upload_entries
 from ..ui.machine_output import MachineOutput, error_code_for
 from ..ui.prompts import ask, ask_password, print_error, print_info, print_success, print_warn
 from ..ui.transfer_progress import TransferProgress
@@ -28,10 +28,6 @@ log = logging.getLogger(__name__)
 
 def _mfa_prompt() -> str:
     return ask("Enter 6-digit 2FA code").strip()
-
-
-def _tree_size(path: Path) -> int:
-    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
 
 
 @click.command("upload", short_help="Upload local files to MEGA.")
@@ -166,10 +162,20 @@ def upload(
     # covering the whole tree (a preserved tree must live in ONE account).
     jobs: list[tuple[Path, int]] = []
     for p in paths:
-        if p.is_dir() and not keep_structure:
-            jobs.extend((f, f.stat().st_size) for f in sorted(p.rglob("*")) if f.is_file())
-        elif p.is_dir() and keep_structure:
-            jobs.append((p, _tree_size(p)))
+        if p.is_dir():
+            # Symlinks are never walked into an upload; say so, because the
+            # resulting upload is deliberately incomplete.
+            entries, skipped_links = walk_upload_entries(p)
+            if skipped_links:
+                print_info(
+                    f"Skipping {skipped_links} symlink(s) under {p.name}: symlinked files "
+                    "are not uploaded, so this upload is deliberately incomplete."
+                )
+            files = [f for f in entries if f.is_file()]
+            if keep_structure:
+                jobs.append((p, sum(f.stat().st_size for f in files)))
+            else:
+                jobs.extend((f, f.stat().st_size) for f in files)
         else:
             jobs.append((p, p.stat().st_size))
 

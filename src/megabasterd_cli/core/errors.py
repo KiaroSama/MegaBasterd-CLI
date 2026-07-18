@@ -50,7 +50,21 @@ class TransferError(MegaError):
     """Error during a download or upload."""
 
 
-class TransferCancelled(TransferError):  # noqa: N818 - a decision, not a fault
+class NonRetryableTransferError(TransferError):
+    """A deterministic refusal: replaying the request cannot change the answer.
+
+    The chunk-level retry decorators match on `TransferError`, so every
+    subclass was retried by default - including policy refusals and protocol
+    violations, which are settled the moment they are raised. Eight attempts
+    with exponential backoff per chunk is pure latency for those, and for a
+    proxy-policy refusal it is latency spent NOT making the request the user
+    explicitly demanded be proxied.
+
+    Subclass this (or raise it directly) for anything a retry cannot fix.
+    """
+
+
+class TransferCancelled(NonRetryableTransferError):  # noqa: N818 - a decision, not a fault
     """The user (or the caller) stopped the transfer before it completed.
 
     A distinct type because cancellation must never be reported as success and

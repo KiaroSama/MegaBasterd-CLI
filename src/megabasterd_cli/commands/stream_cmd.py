@@ -142,8 +142,11 @@ def stream(
     try:
         server.serve_forever()
     except KeyboardInterrupt:
+        # Deliberately NOT server.shutdown(): that must never be called from
+        # the thread running serve_forever(). By the time this handler runs,
+        # serve_forever() has already unwound, so the only thing left to do is
+        # release resources - which the single cleanup path below does.
         print_info("Stopping...")
-        server.shutdown()
     finally:
         # Release the listening socket and the upstream HTTP session; the
         # command exits straight after this.

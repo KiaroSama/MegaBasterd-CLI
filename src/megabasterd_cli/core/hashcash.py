@@ -13,6 +13,7 @@ This module re-implements the algorithm from the original MegaBasterd
 from __future__ import annotations
 
 import base64
+import binascii
 import contextlib
 import hashlib
 import logging
@@ -31,10 +32,23 @@ TOKEN_BYTES = 48
 PREFIX_BYTES = 4
 REPEAT = 262_144
 BUF_SIZE = PREFIX_BYTES + REPEAT * TOKEN_BYTES
-DEFAULT_TIMEOUT_S = 300.0
+# The whole challenge is attacker-supplied (any HTTP 402 response can carry one),
+# so every field is bounded before it reaches an allocation or a CPU burn.
+SUPPORTED_VERSIONS = (1,)
+MAX_EASINESS = 255  # The wire format packs easiness into a single byte.
+# Ceiling on the base64 blob so a hostile header cannot be decoded wholesale
+# before the 48-byte length check. 48 raw bytes is 64 base64 chars padded.
+MAX_TOKEN_B64_CHARS = 128
+# api.py retries a rejected request up to 3 times, each solving a fresh
+# challenge on this default, so the default is a third of the tolerable stall.
+DEFAULT_TIMEOUT_S = 30.0
 NATIVE_TIMEOUT_MARGIN_S = 5.0
 
 log = logging.getLogger(__name__)
+
+
+class HashcashError(ValueError):
+    """An `X-Hashcash` challenge was malformed, unsupported, or out of range."""
 
 
 @dataclass
@@ -45,9 +59,23 @@ class HashcashChallenge:
     easiness: int  # 0..255, controls difficulty
     token: bytes  # 48 raw bytes (base64-decoded)
 
+    def __post_init__(self) -> None:
+        # Validate here rather than in parse_challenge so no construction path
+        # can reach `threshold` with an unchecked shift count.
+        if self.version not in SUPPORTED_VERSIONS:
+            raise HashcashError(f"Unsupported hashcash version: {self.version}")
+        if not 0 <= self.easiness <= MAX_EASINESS:
+            raise HashcashError(
+                f"Hashcash easiness out of range (0..{MAX_EASINESS}): {self.easiness}"
+            )
+
     @property
     def threshold(self) -> int:
-        """Maximum allowed value of the first 4 bytes (big-endian) of SHA-256."""
+        """Maximum allowed value of the first 4 bytes (big-endian) of SHA-256.
+
+        The shift count is linear in `easiness`, which is why `__post_init__`
+        bounds it: an unchecked value turns this into an unbounded allocation.
+        """
         return (((self.easiness & 0x3F) << 1) + 1) << ((self.easiness >> 6) * 7 + 3)
 
 
@@ -55,19 +83,25 @@ def parse_challenge(header: str) -> HashcashChallenge:
     """Parse an `X-Hashcash` header of the form `1:easiness:b64token`."""
     parts = header.strip().split(":")
     if len(parts) != 3:
-        raise ValueError(f"Malformed hashcash challenge: {header!r}")
+        raise HashcashError(f"Malformed hashcash challenge: {header!r}")
     try:
         version = int(parts[0])
         easiness = int(parts[1])
     except ValueError as exc:
-        raise ValueError(f"Bad numeric fields in challenge: {header!r}") from exc
+        raise HashcashError(f"Bad numeric fields in challenge: {header!r}") from exc
     token_b64 = parts[2]
+    # Bound the encoded length *before* decoding it.
+    if len(token_b64) > MAX_TOKEN_B64_CHARS:
+        raise HashcashError(f"Hashcash token is too long: {len(token_b64)} base64 characters")
     # MEGA-style base64 (URL safe, no padding)
     token_b64 = token_b64.replace("-", "+").replace("_", "/")
     token_b64 += "=" * ((4 - len(token_b64) % 4) % 4)
-    token = base64.b64decode(token_b64)
+    try:
+        token = base64.b64decode(token_b64)
+    except (ValueError, binascii.Error) as exc:
+        raise HashcashError(f"Hashcash token is not valid base64: {exc}") from exc
     if len(token) != TOKEN_BYTES:
-        raise ValueError(f"Hashcash token must be {TOKEN_BYTES} bytes, got {len(token)}")
+        raise HashcashError(f"Hashcash token must be {TOKEN_BYTES} bytes, got {len(token)}")
     return HashcashChallenge(version=version, easiness=easiness, token=token)
 
 
@@ -271,12 +305,17 @@ def solve(
     workers = max(1, min(workers, 32))
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = [pool.submit(_worker, i, workers) for i in range(workers)]
-        # Poll for completion or timeout
-        while not stop.is_set() and time.monotonic() < deadline:
-            done, _ = wait(futures, timeout=0.5, return_when=FIRST_COMPLETED)
-            if done:
-                break
-        stop.set()
+        try:
+            # Poll for completion or timeout
+            while not stop.is_set() and time.monotonic() < deadline:
+                done, _ = wait(futures, timeout=0.5, return_when=FIRST_COMPLETED)
+                if done:
+                    break
+        finally:
+            # Must run even on KeyboardInterrupt: otherwise the workers spin to
+            # the deadline and the pool shutdown blocks on them, so Ctrl-C looks
+            # ignored for up to `timeout` seconds.
+            stop.set()
         for f in futures:
             with contextlib.suppress(Exception):
                 f.result(timeout=1.0)

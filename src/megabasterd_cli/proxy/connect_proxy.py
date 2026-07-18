@@ -14,6 +14,7 @@ import hmac
 import logging
 import platform
 import re
+import select
 import socket
 import threading
 import time
@@ -25,6 +26,19 @@ log = logging.getLogger(__name__)
 MAX_HEADER_LINE_LEN = 8192
 MAX_PROXY_THREADS = 64
 CONNECT_TUNNEL_JOIN_TIMEOUT_SECONDS = 30
+# Total budget for reading a request head, however many recv() calls it takes.
+# A per-recv timeout alone lets a client drip one byte per timeout window and
+# pin a worker until the size cap is reached (slowloris).
+HEADER_READ_DEADLINE_SECONDS = 30
+# How long a tunnel may sit with no bytes in either direction before it is
+# dropped, and the hard cap on a single tunnel's total life. Both bound how
+# long one client can hold a worker out of the pool.
+TUNNEL_IDLE_TIMEOUT_SECONDS = 300
+TUNNEL_MAX_LIFETIME_SECONDS = 3600
+# recv() timeout inside the tunnel loop. Blocking forever means neither the
+# idle/lifetime deadlines nor the stop Event can ever be observed, so the
+# socket wakes up this often to check them.
+TUNNEL_POLL_SECONDS = 1.0
 ALLOWED_HOST_RE = re.compile(r"^(.+\.)?mega(?:\.co)?\.nz$", re.IGNORECASE)
 CONNECT_RE = re.compile(
     r"^CONNECT\s+(?P<host>[A-Za-z0-9.\-]+):(?P<port>\d+)\s+HTTP/(?P<ver>1\.[01])\s*$"
@@ -58,13 +72,22 @@ def check_destination(host: str, port: int, is_connect: bool, allow_any_port: bo
 
 
 class _ProxyHandler:
-    def __init__(self, password: str, allow_any_port: bool = False):
+    def __init__(
+        self,
+        password: str,
+        allow_any_port: bool = False,
+        server_stop: threading.Event | None = None,
+    ):
         self.password = password
         self.allow_any_port = allow_any_port
+        # Set when the server is shutting down: every tunnel loop watches it so
+        # a stop() is observed within one TUNNEL_POLL_SECONDS even if the peer
+        # socket is still open.
+        self.server_stop = server_stop or threading.Event()
 
     def handle(self, client_sock: socket.socket, addr: tuple[str, int]) -> None:
         try:
-            client_sock.settimeout(30)
+            client_sock.settimeout(HEADER_READ_DEADLINE_SECONDS)
             request_line, headers, body_tail = self._read_headers(client_sock)
             if not request_line:
                 return
@@ -162,10 +185,23 @@ class _ProxyHandler:
         The third element is any bytes that came in the same recv after the
         \\r\\n\\r\\n terminator (e.g. the start of a POST body). The caller is
         responsible for forwarding those if applicable.
+
+        The whole head must arrive within HEADER_READ_DEADLINE_SECONDS. The
+        timeout shrinks with every recv so a client that keeps the connection
+        barely alive (one byte per window) is cut off at the deadline instead
+        of holding a pool worker until the size cap is reached.
         """
+        deadline = time.monotonic() + HEADER_READ_DEADLINE_SECONDS
         data = b""
         while b"\r\n\r\n" not in data:
-            chunk = sock.recv(4096)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return "", [], b""
+            sock.settimeout(remaining)
+            try:
+                chunk = sock.recv(4096)
+            except socket.timeout:
+                return "", [], b""
             if not chunk:
                 break
             data += chunk
@@ -187,20 +223,43 @@ class _ProxyHandler:
             )
         )
 
-    @staticmethod
-    def _tunnel(client: socket.socket, upstream: socket.socket) -> None:
+    def _tunnel(self, client: socket.socket, upstream: socket.socket) -> None:
+        """Shovel bytes both ways until idle, expired, closed, or stopped.
+
+        The wait for readable data is bounded by `select`, not by a blocking
+        recv(): a blocking recv could observe neither the stop Event nor the
+        deadlines, so `stop()` left the worker parked forever and the process
+        hung at interpreter exit (ThreadPoolExecutor joins its workers there).
+        The sockets themselves stay in blocking mode so `sendall` still cannot
+        time out half-way through a chunk on a slow peer.
+        """
         client.settimeout(None)
         upstream.settimeout(None)
         stop = threading.Event()
+        expires_at = time.monotonic() + TUNNEL_MAX_LIFETIME_SECONDS
 
         def pipe(src: socket.socket, dst: socket.socket) -> None:
+            last_byte_at = time.monotonic()
             try:
-                while not stop.is_set():
+                while not stop.is_set() and not self.server_stop.is_set():
+                    now = time.monotonic()
+                    if now >= expires_at:
+                        log.debug("Tunnel closed: lifetime cap reached")
+                        break
+                    if now - last_byte_at >= TUNNEL_IDLE_TIMEOUT_SECONDS:
+                        log.debug("Tunnel closed: idle timeout")
+                        break
+                    readable, _w, _x = select.select([src], [], [], TUNNEL_POLL_SECONDS)
+                    if not readable:
+                        continue  # nothing yet: re-check the deadlines and stop
                     data = src.recv(65536)
                     if not data:
                         break
+                    last_byte_at = time.monotonic()
                     dst.sendall(data)
-            except OSError:
+            # ValueError: stop() closed the socket under us, so its fileno is
+            # already -1 by the time select() looks at it.
+            except (OSError, ValueError):
                 pass
             finally:
                 stop.set()
@@ -232,6 +291,10 @@ class MegaConnectProxy:
         self._server: socket.socket | None = None
         self._pool: ThreadPoolExecutor | None = None
         self._stop = threading.Event()
+        # Every accepted socket, so stop() can close them all. Without this the
+        # listener closed while accepted connections kept their worker parked.
+        self._active: set[socket.socket] = set()
+        self._active_lock = threading.Lock()
 
     def start(self) -> None:
         self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -243,30 +306,61 @@ class MegaConnectProxy:
             log.warning("CONNECT proxy password is short; use at least 8 characters")
         self._server.bind((self.host, self.port))
         self._server.listen(50)
-        self._pool = ThreadPoolExecutor(max_workers=MAX_PROXY_THREADS)
-        handler = _ProxyHandler(self.password, allow_any_port=self.allow_any_port)
+        pool = self._pool = ThreadPoolExecutor(max_workers=MAX_PROXY_THREADS)
+        server = self._server
+        handler = _ProxyHandler(
+            self.password,
+            allow_any_port=self.allow_any_port,
+            server_stop=self._stop,
+        )
 
         def _accept_loop() -> None:
+            # `pool`/`server` are captured locally: stop() clears the attributes
+            # concurrently, and a half-torn-down attribute must not be used.
             try:
                 while not self._stop.is_set():
                     try:
-                        sock, addr = self._server.accept()
+                        sock, addr = server.accept()
                     except OSError:
                         break
-                    self._pool.submit(handler.handle, sock, addr)
+                    with self._active_lock:
+                        self._active.add(sock)
+                    pool.submit(self._serve, handler, sock, addr)
             finally:
-                if self._pool:
-                    self._pool.shutdown(wait=False)
+                pool.shutdown(wait=False)
 
         threading.Thread(target=_accept_loop, daemon=True).start()
         log.info("MEGA CONNECT proxy listening on %s:%d", self.host, self.port)
 
+    def _serve(self, handler: _ProxyHandler, sock: socket.socket, addr: tuple[str, int]) -> None:
+        try:
+            handler.handle(sock, addr)
+        finally:
+            with self._active_lock:
+                self._active.discard(sock)
+
     def stop(self) -> None:
+        """Stop listening AND terminate everything already accepted.
+
+        Closing only the listener left in-flight tunnels running; their pool
+        workers are joined at interpreter exit, so `mb proxy serve` hung on
+        Ctrl-C instead of exiting. Shutting the accepted sockets down makes the
+        blocked reads return, and `cancel_futures` drops the ones not started.
+        """
         self._stop.set()
         if self._server:
             with contextlib.suppress(OSError):
                 self._server.close()
             self._server = None
+        with self._active_lock:
+            active, self._active = list(self._active), set()
+        for sock in active:
+            # shutdown() first: it wakes a peer blocked in select()/recv() even
+            # when another thread still holds the same socket object.
+            with contextlib.suppress(OSError):
+                sock.shutdown(socket.SHUT_RDWR)
+            with contextlib.suppress(OSError):
+                sock.close()
         if self._pool:
-            self._pool.shutdown(wait=False)
+            self._pool.shutdown(wait=False, cancel_futures=True)
             self._pool = None

@@ -44,8 +44,12 @@ header so the same passphrase produces a different key for each file.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import struct
+import tempfile
+import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import BinaryIO, Callable
 
@@ -104,6 +108,39 @@ def _validate_scrypt_params(n: int, r: int, p: int) -> None:
         raise CrypterError("scrypt parameters exceed the memory budget")
 
 
+@contextlib.contextmanager
+def _atomic_output(dst: Path) -> Iterator[BinaryIO]:
+    """Yield a writable temp file that replaces `dst` only after full success.
+
+    Opening `dst` directly with "wb" truncates it before any work happens, so a
+    wrong passphrase (or any mid-stream failure) destroys an existing file the
+    caller never agreed to lose. Writing beside it and renaming on success keeps
+    the destination untouched until the output is complete and durable.
+    """
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=dst.parent, suffix=".mbcr-tmp")
+    try:
+        with os.fdopen(fd, "wb") as fout:
+            yield fout
+            fout.flush()
+            os.fsync(fout.fileno())
+        # Windows: replace can transiently fail while the destination is held
+        # open (antivirus scan, a lingering handle). Retry briefly.
+        for attempt in range(5):
+            try:
+                os.replace(tmp_name, dst)
+                return
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+    except BaseException:
+        # Includes KeyboardInterrupt: never leave a partial blob behind.
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise
+
+
 def _derive_key(passphrase: str, salt: bytes) -> bytes:
     _validate_scrypt_params(SCRYPT_N, SCRYPT_R, SCRYPT_P)
     kdf = Scrypt(salt=salt, length=KEY_LEN, n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P)
@@ -136,8 +173,7 @@ def encrypt_file(
 
     written = 0
     index = 0
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    with open(src, "rb") as fin, open(dst, "wb") as fout:
+    with open(src, "rb") as fin, _atomic_output(dst) as fout:
         fout.write(header)
 
         def _write_chunk(idx: int, final: bool, plaintext: bytes) -> None:
@@ -202,11 +238,10 @@ def _decrypt_v2(
     key = _derive_key(passphrase, salt)
     aes = AESGCM(key)
 
-    dst.parent.mkdir(parents=True, exist_ok=True)
     decrypted = 0
     index = 0
     seen_final = False
-    with open(dst, "wb") as fout:
+    with _atomic_output(dst) as fout:
         while True:
             flag_byte = fin.read(1)
             if not flag_byte:
@@ -241,13 +276,15 @@ def _decrypt_v2(
                 seen_final = True
                 break
 
-    if not seen_final:
-        raise CrypterError("Truncated file (missing final chunk)")
-    # Reject any trailing bytes appended after the authenticated final chunk.
-    if fin.read(1):
-        raise CrypterError("Trailing data after final chunk")
-    if decrypted != original_length:
-        raise CrypterError("Decrypted length does not match authenticated header length")
+        # These checks stay inside the atomic block: a failure here must abort
+        # the rename, not reject a destination that has already been replaced.
+        if not seen_final:
+            raise CrypterError("Truncated file (missing final chunk)")
+        # Reject any trailing bytes appended after the authenticated final chunk.
+        if fin.read(1):
+            raise CrypterError("Trailing data after final chunk")
+        if decrypted != original_length:
+            raise CrypterError("Decrypted length does not match authenticated header length")
 
 
 def _decrypt_v1(
@@ -266,9 +303,8 @@ def _decrypt_v1(
     key = _derive_key(passphrase, salt)
     aes = AESGCM(key)
 
-    dst.parent.mkdir(parents=True, exist_ok=True)
     decrypted = 0
-    with open(dst, "wb") as fout:
+    with _atomic_output(dst) as fout:
         while True:
             length_bytes = fin.read(4)
             if len(length_bytes) < 4:
@@ -276,6 +312,11 @@ def _decrypt_v1(
             length = struct.unpack(">I", length_bytes)[0]
             if length == 0:
                 break
+            # `length` is a raw u32 straight from an untrusted file. Bound it to
+            # the header chunk size (as the v2 path does) so a hostile blob
+            # cannot force a multi-gigabyte read/allocation.
+            if length > NONCE_LEN + chunk_size + TAG_LEN:
+                raise CrypterError("Declared chunk length exceeds header chunk size")
             block = _read_exact(fin, length, "short read")
             nonce = block[:NONCE_LEN]
             ciphertext = block[NONCE_LEN:]

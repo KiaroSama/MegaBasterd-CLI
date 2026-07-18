@@ -22,6 +22,10 @@ class _FakeResponse:
         self.status_code = status
         self.content = body
 
+    def iter_content(self, chunk_size: int = 65536):
+        for start in range(0, len(self.content), chunk_size):
+            yield self.content[start : start + chunk_size]
+
     def close(self) -> None:
         pass
 
@@ -56,7 +60,7 @@ def test_elapsed_includes_failed_slot_and_retry_and_finalization(tmp_path, monke
 
     calls = {"n": 0}
 
-    def fake_post(url, data=b"", timeout=None, proxies=None, headers=None):
+    def fake_post(url, data=b"", timeout=None, proxies=None, headers=None, stream=False):
         calls["n"] += 1
         if calls["n"] == 1:
             time.sleep(0.15)  # time spent on the DOOMED first slot

@@ -30,6 +30,10 @@ class _FakeResponse:
         self.status_code = status
         self.content = body
 
+    def iter_content(self, chunk_size: int = 65536):
+        for start in range(0, len(self.content), chunk_size):
+            yield self.content[start : start + chunk_size]
+
     def close(self) -> None:
         pass
 
@@ -86,7 +90,7 @@ def upload_env(tmp_path, monkeypatch):
     monkeypatch.setattr(config_module, "data_dir", lambda: tmp_path / "data")
     posts: list[str] = []
 
-    def fake_post(url, data=b"", timeout=None, proxies=None, headers=None):
+    def fake_post(url, data=b"", timeout=None, proxies=None, headers=None, stream=False):
         posts.append(url)
         return _FakeResponse(b"COMPLETION")
 
@@ -198,7 +202,7 @@ def test_mutation_during_upload_detected_before_finalization(upload_env, monkeyp
 
     original_post = uploader_module.requests.post
 
-    def mutating_post(url, data=b"", timeout=None, proxies=None, headers=None):
+    def mutating_post(url, data=b"", timeout=None, proxies=None, headers=None, stream=False):
         # Modify the source while its chunks are in flight.
         source.write_bytes(b"\x0b" * file_size)
         return original_post(url, data=data, timeout=timeout, proxies=proxies, headers=headers)
@@ -314,7 +318,7 @@ def test_zero_byte_becomes_nonzero_before_finalization_is_rejected(upload_env, m
     source = _make_source(upload_env.tmp_path, 0)
     api = _DummyAPI()
 
-    def mutating_post(url, data=b"", timeout=None, proxies=None, headers=None):
+    def mutating_post(url, data=b"", timeout=None, proxies=None, headers=None, stream=False):
         source.write_bytes(b"grew!")  # no longer zero bytes
         return _FakeResponse(b"COMPLETION")
 
@@ -331,7 +335,7 @@ def test_zero_byte_replaced_with_other_zero_byte_is_rejected(upload_env, monkeyp
     source = _make_source(upload_env.tmp_path, 0)
     api = _DummyAPI()
 
-    def replacing_post(url, data=b"", timeout=None, proxies=None, headers=None):
+    def replacing_post(url, data=b"", timeout=None, proxies=None, headers=None, stream=False):
         replacement = upload_env.tmp_path / "other-empty.bin"
         replacement.write_bytes(b"")
         os.replace(replacement, source)  # new inode/mtime, still zero bytes
@@ -348,7 +352,7 @@ def test_zero_byte_file_disappearing_is_rejected(upload_env, monkeypatch):
     source = _make_source(upload_env.tmp_path, 0)
     api = _DummyAPI()
 
-    def deleting_post(url, data=b"", timeout=None, proxies=None, headers=None):
+    def deleting_post(url, data=b"", timeout=None, proxies=None, headers=None, stream=False):
         source.unlink()
         return _FakeResponse(b"COMPLETION")
 

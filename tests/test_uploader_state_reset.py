@@ -15,6 +15,10 @@ class _FakeResponse:
         self.status_code = 200
         self.content = body
 
+    def iter_content(self, chunk_size: int = 65536):
+        for start in range(0, len(self.content), chunk_size):
+            yield self.content[start : start + chunk_size]
+
     def close(self) -> None:
         pass
 
