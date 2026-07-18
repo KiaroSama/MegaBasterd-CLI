@@ -19,7 +19,7 @@ jobs:
       # Keep this specifier identical to the `dev` extra in pyproject.toml,
       # or the lint job and a local dev install can resolve different black
       # majors and disagree on formatting.
-      - run: pip install ruff "black>=23.9.0,<27"
+      - run: pip install ruff "black>=23.9.0,<26"
       - name: Ruff lint
         run: ruff check src tests
       - name: Black format check
