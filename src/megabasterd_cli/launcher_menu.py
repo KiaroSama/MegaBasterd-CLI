@@ -28,10 +28,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from rich.text import Text
+
 from .cli import _redacted_argv
 from .ui.prompts import ask_password
 from .ui.theme import literal, make_console
 from .utils.redaction import REDACTED, SECRET_FIELD_NAMES, redact_text, sanitize
+from .utils.secure_log import append_line
 
 console = make_console()
 
@@ -65,14 +68,18 @@ def project_root() -> Path:
 
 
 def log(level: str, message: str) -> None:
-    """Append to the launcher log Run.ps1 opened. Never fatal."""
+    """Append to the launcher log Run.ps1 opened. Never fatal.
+
+    Via ``secure_log`` rather than ``open(path, "a")``: the plain append
+    created the file with the ambient umask (0644) on POSIX whenever Run.ps1
+    had not created it first, which silently undid the owner-only guarantee.
+    """
     path = os.environ.get("MEGABASTERD_LAUNCHER_LOG_FILE")
     if not path:
         return
     try:
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        with open(path, "a", encoding="utf-8") as handle:
-            handle.write(f"{stamp} [{level}] {redact_text(message)}\n")
+        append_line(path, f"{stamp} [{level}] {redact_text(message)}")
     except OSError:
         pass
 
@@ -115,12 +122,26 @@ def redact_args(args: Sequence[str]) -> list[str]:
 
 def _section(title: str) -> None:
     console.print()
-    console.print(literal(f"{title}:"), style="mb.header")
+    console.print(literal(f"{title}:"), style="mb.title")
 
 
 def _option_line(key: str, label: str) -> None:
-    suffix = " [1]" if key == "1" else ""
-    console.print(literal(f"  {key}. {label}{suffix}"), style="mb.value")
+    """One menu row, coloured per part rather than as one flat string.
+
+    The number, the label and the `[1]` default marker carry different
+    information, so they get different colours - printing the whole row in a
+    single style made the list read as a wall of text and hid which entry is
+    the default.
+    """
+    row = Text("  ")
+    row.append(f"{key:>2}.", style="mb.menu.key")
+    row.append(" ")
+    row.append(label, style="mb.menu.label")
+    if key == "1":
+        row.append(" [", style="mb.menu.bracket")
+        row.append("1", style="mb.menu.default")
+        row.append("]", style="mb.menu.bracket")
+    console.print(row)
 
 
 def _note(message: str, style: str = "mb.info") -> None:
@@ -162,10 +183,35 @@ def _classify(answer: str, allow_back: bool, back_token: str) -> None:
         raise _Back()
 
 
+_PROMPT_PART = re.compile(r"(\[[^\]]*\]|\{[^}]*\})")
+
+
+def _styled_prompt(prompt: str) -> Text:
+    """Colour a prompt's bracketed default and braced hint separately.
+
+    Done here rather than at each call site: every prompt in the launcher
+    already has the shape `label [default] {hints}: `, so one pass over that
+    shape keeps them all consistent, and a new prompt is styled correctly
+    without its author having to remember anything.
+    """
+    styled = Text()
+    for part in _PROMPT_PART.split(prompt):
+        if not part:
+            continue
+        if part.startswith("[") or part.startswith("{"):
+            styled.append(part[0], style="mb.menu.bracket")
+            styled.append(part[1:-1], style="mb.prompt.token")
+            styled.append(part[-1], style="mb.menu.bracket")
+        else:
+            styled.append(part, style="mb.prompt.label")
+    return styled
+
+
 def _read_line(prompt: str) -> str:
     console.print()
+    console.print(_styled_prompt(prompt), end="")
     try:
-        return input(prompt)
+        return input("")
     except EOFError as exc:
         raise _Quit() from exc
 

@@ -15,6 +15,10 @@ from megabasterd_cli.core.state import (
 
 def test_save_and_load_roundtrip(tmp_path: Path):
     dest = tmp_path / "myfile.bin"
+    # A download that has committed chunks always has a destination file: the
+    # state vouches for those bytes. Creating it keeps the fixture faithful to
+    # that rather than relaxing the durability rule to accommodate it.
+    dest.write_bytes(b"\x00" * 1024)
     state = TransferState(
         transfer_type="download",
         source="https://example/x",

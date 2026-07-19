@@ -5,10 +5,12 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import parse_qsl, urlsplit
 
 import click
 from rich.table import Table
@@ -18,7 +20,7 @@ from ..proxy.smart_proxy import SmartProxyPool
 from ..ui.prompts import confirm, print_error, print_info, print_success, print_warn
 from ..ui.theme import make_console
 from ..utils.filelock import FileLock
-from ..utils.redaction import redact_text
+from ..utils.redaction import REDACTED, redact_text
 
 _console = make_console()
 
@@ -294,6 +296,57 @@ def proxy_serve(ctx: click.Context, port: int | None, password: str | None, any_
         proxy.stop()
 
 
+# Query parameters whose value is credential-ish. Deliberately wider than the
+# exact names `redact_text` knows, because a signed URL names its signature
+# `sig`, `X-Amz-Signature`, `hmac`, ... and any of them identifies the caller.
+_SECRETISH_PARAM = re.compile(r"(?i)(token|key|sig|hmac|secret|auth|pass|cred|session|sid|nonce)")
+
+
+def _url_secrets(url: str) -> list[str]:
+    """The literal secret substrings of a source URL, longest first.
+
+    `redact_text` recognises secrets by SHAPE (`user:pass@host`, `token=x`).
+    An exception message routinely echoes the same value stripped of that
+    shape - urllib3 reports a bare `user:hunter2@host` with no scheme, and a
+    signed query value can sit under any parameter name - and then no pattern
+    matches. Here the raw values are known, so they are also removed by
+    identity, after the shape pass.
+
+    Short values are skipped: substituting a 4-character string everywhere
+    would mangle ordinary words in the message for no real protection.
+    """
+    parsed = urlsplit(url)
+    values = [parsed.password or "", parsed.username or ""]
+    values += [v for k, v in parse_qsl(parsed.query) if _SECRETISH_PARAM.search(k)]
+    return sorted({v for v in values if len(v) >= 5}, key=len, reverse=True)
+
+
+def _scrub(text: str, secrets: list[str]) -> str:
+    """Shape-based redaction first, then removal of known literal values."""
+    text = redact_text(text)
+    for secret in secrets:
+        text = text.replace(secret, REDACTED)
+    return text
+
+
+def _safe_source(url: str) -> str:
+    """The source URL as it may be shown: host and path kept, secrets gone."""
+    return _scrub(url, _url_secrets(url))
+
+
+def _safe_fetch_error(url: str, exc: BaseException, secrets: list[str]) -> str:
+    """A structured, display-safe line for one failed source.
+
+    Never `f"{url}: {exc}"`: both halves repeat whatever secret the user put in
+    `--source`. The exception is reduced to its class name plus a scrubbed
+    message so the failure stays diagnosable without the credential.
+
+    `secrets` covers EVERY source of this run, not only the one that failed: a
+    redirect or fallback makes the error for source A quote source B's URL.
+    """
+    return f"{_safe_source(url)}: {type(exc).__name__}: {_scrub(str(exc), secrets)}"
+
+
 def _read_capped(resp) -> str:
     """Read at most MAX_FETCH_BYTES of a streamed response body.
 
@@ -357,6 +410,13 @@ def proxy_fetch(
     selector = ProxySelector.from_config(ctx.obj["config"])
     added = 0
     errors: list[str] = []
+    # Every source in this run is user-supplied, and any of them can surface in
+    # any error message, so they are scrubbed as one set.
+    secrets = sorted(
+        {s for u in sources for s in _url_secrets(u)},
+        key=len,
+        reverse=True,
+    )
     for url in sources:
         try:
             request_proxies, _picked = selector.select()
@@ -367,10 +427,13 @@ def proxy_fetch(
             finally:
                 resp.close()
         except ProxyRequiredError as exc:
-            print_error(str(exc))
+            print_error(redact_text(str(exc)))
             ctx.exit(1)
         except Exception as exc:  # noqa: BLE001
-            errors.append(f"{url}: {exc}")
+            # Sanitized at APPEND time, not at print time: `errors` is the one
+            # thing that outlives this frame, so a future consumer of it
+            # (machine output, a log line) cannot reintroduce the leak.
+            errors.append(_safe_fetch_error(url, exc, secrets))
             continue
         for raw in body.splitlines():
             line = raw.strip()
@@ -386,7 +449,11 @@ def proxy_fetch(
             break
 
     if added == 0:
-        print_error(f"No proxies fetched. Errors: {errors}")
+        # One line per source. The old `Errors: {errors}` printed a Python repr
+        # of raw exception strings - the source URL and its credentials twice.
+        print_error(f"No proxies fetched ({len(errors)} source error(s)).")
+        for e in errors:
+            print_error(e)
         return
 
     # The lock is taken only for the merge, never across the network fetch -

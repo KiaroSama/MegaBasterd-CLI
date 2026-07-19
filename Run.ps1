@@ -49,6 +49,14 @@ $env:MEGABASTERD_LAUNCHER_LOG_FILE = $LauncherLogPath
 
 $script:NoColor = [string]::Equals($env:NO_COLOR, "1", [System.StringComparison]::OrdinalIgnoreCase)
 $script:LauncherExitRequested = $false
+$script:IsWindowsHost = ([System.Environment]::OSVersion.Platform -eq "Win32NT")
+# Resolved lazily-ish: the type only exists on .NET 7+, and only POSIX uses it.
+$script:UnixOwnerOnly = if ($script:IsWindowsHost) { $null } else {
+    [System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite
+}
+# Paths whose owner-only creation has already been verified this run, so the
+# per-line check stays a Test-Path rather than a Get-Acl.
+$script:SecuredLogs = @{}
 $script:Palette = [ordered]@{
     success = "#22FF44"
     warning = "#F59E0B"
@@ -75,33 +83,80 @@ function Get-RedactedText {
     return $Text
 }
 
+function Test-OwnerOnlyLogFile {
+    param([string] $Path)
+    try {
+        if ($script:IsWindowsHost) {
+            return (Get-Acl -LiteralPath $Path).AreAccessRulesProtected
+        }
+        return ([System.IO.File]::GetUnixFileMode($Path) -eq $script:UnixOwnerOnly)
+    } catch {
+        return $false
+    }
+}
+
+function New-SecureLogFile {
+    param([string] $Path)
+    # Owner-only from the FIRST byte on BOTH platforms. This used to be Windows
+    # only: Get-Acl/Set-Acl/SetAccessRuleProtection are Windows APIs, so on
+    # POSIX the hardening threw, the catch swallowed it, and Add-Content then
+    # created the log with the ambient umask - normally 0644, world-readable.
+    # The POSIX branch below creates the file atomically with mode 0600; it is
+    # never created permissively and chmod'd afterwards, because that leaves a
+    # window in which anyone can read it.
+    if ($script:SecuredLogs.ContainsKey($Path) -and (Test-Path -LiteralPath $Path)) {
+        return
+    }
+    if (Test-Path -LiteralPath $Path) {
+        # A file already sitting at this run's log path is not trusted: it can
+        # be world-readable or a planted link. Replaced, never appended to.
+        if (Test-OwnerOnlyLogFile $Path) {
+            $script:SecuredLogs[$Path] = $true
+            return
+        }
+        Remove-Item -LiteralPath $Path -Force
+    }
+    $options = [System.IO.FileStreamOptions]::new()
+    $options.Mode = [System.IO.FileMode]::CreateNew
+    $options.Access = [System.IO.FileAccess]::Write
+    if (-not $script:IsWindowsHost) {
+        $options.UnixCreateMode = $script:UnixOwnerOnly
+    }
+    ([System.IO.FileStream]::new($Path, $options)).Dispose()
+    if ($script:IsWindowsHost) {
+        $acl = Get-Acl -LiteralPath $Path
+        $acl.SetAccessRuleProtection($true, $false)
+        $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        $acl.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $me, "FullControl", "Allow")))
+        Set-Acl -LiteralPath $Path -AclObject $acl
+    }
+    $script:SecuredLogs[$Path] = $true
+}
+
+function Write-SecureLogLine {
+    param(
+        [string] $Path,
+        [string] $Line
+    )
+    # $Line is already redacted by the caller; Add-Content on an existing file
+    # appends without touching its mode or its DACL.
+    if (-not (Test-Path -LiteralPath $LogDir)) {
+        New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+    }
+    New-SecureLogFile $Path
+    Add-Content -LiteralPath $Path -Value $Line -Encoding UTF8
+}
+
 function Write-RunLog {
     param(
         [string] $Level,
         [string] $Message
     )
     try {
-        if (-not (Test-Path -LiteralPath $LogDir)) {
-            New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
-        }
-        if (-not (Test-Path -LiteralPath $LauncherLogPath)) {
-            # Owner-only from the FIRST byte, not fixed up afterwards.
-            New-Item -ItemType File -Path $LauncherLogPath -Force | Out-Null
-            try {
-                $acl = Get-Acl -LiteralPath $LauncherLogPath
-                $acl.SetAccessRuleProtection($true, $false)
-                $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-                $acl.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
-                    $me, "FullControl", "Allow")))
-                Set-Acl -LiteralPath $LauncherLogPath -AclObject $acl
-            } catch {
-                # An ACL failure must not stop the launcher; the content is
-                # already redacted, so this is defence in depth, not the guard.
-            }
-        }
         $safe = Get-RedactedText $Message
         $line = "{0} [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"), $Level, $safe
-        Add-Content -LiteralPath $LauncherLogPath -Value $line -Encoding UTF8
+        Write-SecureLogLine $LauncherLogPath $line
     } catch {
         # Logging must never prevent the launcher from running.
     }
@@ -110,11 +165,12 @@ function Write-RunLog {
 function Write-CliLogNote {
     param([string] $Message)
     try {
-        if (-not (Test-Path -LiteralPath $LogDir)) {
-            New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
-        }
-        $line = "{0} [INFO] launcher - {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"), $Message
-        Add-Content -LiteralPath $CliLogPath -Value $line -Encoding UTF8
+        # The CLI log gets the same treatment as the launcher log. It used to
+        # get none at all - not even on Windows - although it is the file the
+        # CLI itself then appends its whole run to.
+        $safe = Get-RedactedText $Message
+        $line = "{0} [INFO] launcher - {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"), $safe
+        Write-SecureLogLine $CliLogPath $line
     } catch {
         # Logging must never prevent the launcher from running.
     }

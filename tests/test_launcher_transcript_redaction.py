@@ -124,6 +124,9 @@ def test_every_log_line_passes_through_the_redactor():
     """
     body = _extract_function("Write-RunLog")
     assert "Get-RedactedText $Message" in body, "a log line can bypass redaction"
+    # `Write-SecureLogLine` is the single writer (it also owns owner-only
+    # creation); match it rather than a raw cmdlet so the assertion tracks the
+    # writer instead of one particular implementation of writing.
     assert body.index("Get-RedactedText") < body.index(
-        "Add-Content"
+        "Write-SecureLogLine"
     ), "redaction must happen before the write, not after"
