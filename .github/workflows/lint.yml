@@ -24,3 +24,28 @@ jobs:
         run: ruff check src tests
       - name: Black format check
         run: black --check src tests
+
+  # The type gate lives here, not in the runtime matrix. mypy is a STATIC
+  # check: running it eight times tells you nothing extra, and it forced the
+  # pinned stubs onto Python 3.9 jobs that cannot install them (both require
+  # >=3.10). One pinned interpreter gives one deterministic verdict, which is
+  # what "required" was supposed to mean.
+  types:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e "."
+      # EXACT pins: a range is what let three environments disagree about this
+      # gate's verdict once already. These are the versions the green run
+      # 29682008787 used.
+      - run: pip install "mypy==2.3.0" "types-requests==2.33.0.20260712"
+      - name: Show pinned type-check versions
+        run: |
+          python -m mypy --version
+          python -m pip show types-requests | head -2
+      - name: Type check (required, whole production tree)
+        run: mypy src/megabasterd_cli --ignore-missing-imports

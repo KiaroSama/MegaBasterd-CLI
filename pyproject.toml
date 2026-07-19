@@ -44,13 +44,13 @@ dev = [
     "pytest-cov>=4.1.0",
     "pytest-asyncio>=0.21.0",
     "black>=23.9.0,<26",
-    # EXACT pins, not lower bounds. The required mypy gate is only meaningful
-    # if every runner checks the identical thing; a range lets the resolver
-    # change the verdict on a future run with no code change. These are the
-    # versions the green run 29682008787 actually used.
-    "types-requests==2.33.0.20260712",
+    # NOT pinned here: these two are pinned in the Lint workflow, which is the
+    # only place the type gate runs. They require Python >=3.10, and the test
+    # matrix includes 3.9 - pinning them in the dev extra makes `pip install
+    # -e ".[dev]"` unsatisfiable on those jobs.
+    "types-requests>=2.31",
     "ruff>=0.1.0",
-    "mypy==2.3.0",
+    "mypy>=1.6.0",
     "pre-commit>=3.5.0",
 ]
 build = [
