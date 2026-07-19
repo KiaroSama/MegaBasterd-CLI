@@ -158,7 +158,7 @@ class MegaUploader:
         url = _expect_field(_expect_mapping(self.api.request_upload(size), what), "p", str, what)
         if not url:
             raise MegaError(message=f"Malformed MEGA response for {what}: 'p' is empty")
-        return url
+        return str(url)
 
     def _reset_per_file_state(self) -> None:
         """Clear every per-file mutable field so a prior file (failed, canceled,
@@ -318,6 +318,11 @@ class MegaUploader:
                 },
             )
 
+        # Either the resumed state supplied a slot or the branch above just
+        # requested one; stating it once here saves every later use from
+        # re-proving it.
+        assert upload_url is not None
+
         all_chunks = list(iter_chunks(file_size))
         refreshed_upload_url = False
 
@@ -470,9 +475,10 @@ class MegaUploader:
 
         # Build file MAC and wrapped key
         chunk_macs = [state.get_chunk_mac(c.index) for c in all_chunks]
-        if any(m is None for m in chunk_macs):
+        complete_macs = [m for m in chunk_macs if m is not None]
+        if len(complete_macs) != len(chunk_macs):
             raise TransferError(message="Missing chunk MAC after upload")
-        file_mac = combine_chunk_macs(chunk_macs, aes_key)
+        file_mac = combine_chunk_macs(complete_macs, aes_key)
         mac_iv = condense_mac(file_mac)
         file_handle = self._register_node(
             upload_name, target, aes_key, nonce, mac_iv, self._completion_token

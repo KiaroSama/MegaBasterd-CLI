@@ -18,6 +18,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .errors import MegaError
+
 log = logging.getLogger(__name__)
 STATE_FORMAT_VERSION = 1
 
@@ -46,6 +48,20 @@ _MAX_TOKEN_HEX_LENGTH = 8192
 # file there. MEGA hands out upload slots on its own storage domains only, so
 # the host is pinned the same way `links.py` and the CONNECT proxy pin theirs.
 _UPLOAD_HOST_SUFFIXES = ("mega.nz", "mega.co.nz")
+
+
+class StateDurabilityError(MegaError):
+    """The transferred DATA could not be forced to disk, so nothing may commit.
+
+    `save_state` fsyncs the state file, which means a state file easily
+    outlives the bytes it describes. Resume trusts it and SKIPS those chunks,
+    producing a silently wrong output file.
+
+    A failed flush therefore cannot be a warning: if the barrier did not hold,
+    the snapshot behind it must not be written. A `MegaError` so every existing
+    command handler already reports it as a normal failure - non-zero exit with
+    a sanitized message - rather than a traceback.
+    """
 
 
 class StateCorruptionError(Exception):
@@ -403,20 +419,32 @@ def _flush_transferred_data(state: TransferState) -> None:
     HTTP 200 for the chunk, which already happens before `mark_chunk_done`.
 
     Flushing from a second descriptor is sound - fsync/FlushFileBuffers act on
-    the file, not on one handle's buffers - and a failure here is logged, not
-    fatal: losing resume progress beats corrupting it.
+    the file, not on one handle's buffers.
+
+    A FAILED flush raises. It used to warn and return, after which the caller
+    committed a snapshot vouching for chunks whose bytes may never have reached
+    the platter - the precise corruption this barrier exists to prevent, made
+    invisible by the very failure that should have stopped it. Losing resume
+    progress does beat corrupting it, but only if the loss is what happens.
     """
     if state.transfer_type != "download":
         return
     try:
         fd = os.open(state.destination, os.O_RDWR)
     except OSError as exc:
+        # No destination to flush (not yet created, or not ours to open). There
+        # is nothing to vouch for, so this is not a durability failure.
         log.debug("Not flushing %s before saving state: %s", state.destination, exc)
         return
     try:
         os.fsync(fd)
     except OSError as exc:
-        log.warning("Could not flush %s before saving resume state: %s", state.destination, exc)
+        raise StateDurabilityError(
+            message=(
+                f"Could not flush transferred data to disk ({exc}); "
+                "refusing to record those chunks as complete."
+            )
+        ) from exc
     finally:
         os.close(fd)
 
@@ -484,16 +512,26 @@ def save_state(state: TransferState) -> None:
                 os.fsync(tf.fileno())
                 temp_path = tf.name
 
-            # Windows: replace can transiently fail while the destination is
-            # held open (previous replace, antivirus scan). Retry briefly.
-            for attempt in range(5):
-                try:
-                    os.replace(temp_path, sp)
-                    return
-                except PermissionError:
-                    if attempt == 4:
-                        raise
-                    time.sleep(0.05 * (attempt + 1))
+            # `delete=False` means WE own this file until os.replace consumes
+            # it. Every exit that is not a successful replace has to unlink it,
+            # or a destination held open by antivirus quietly accumulates
+            # `.mbstate.*.tmp` orphans beside the download. BaseException so an
+            # interrupt mid-retry cleans up too; the original error always wins.
+            try:
+                # Windows: replace can transiently fail while the destination is
+                # held open (previous replace, antivirus scan). Retry briefly.
+                for attempt in range(5):
+                    try:
+                        os.replace(temp_path, sp)
+                        return
+                    except PermissionError:
+                        if attempt == 4:
+                            raise
+                        time.sleep(0.05 * (attempt + 1))
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(temp_path)
+                raise
         finally:
             file_lock.release()
 

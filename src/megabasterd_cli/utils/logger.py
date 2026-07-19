@@ -183,7 +183,7 @@ def setup_logging(
         try:
             from rich.logging import RichHandler
 
-            handler = RichHandler(
+            handler: logging.Handler = RichHandler(
                 rich_tracebacks=True,
                 show_path=False,
                 show_time=True,

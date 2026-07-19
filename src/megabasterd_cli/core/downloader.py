@@ -52,8 +52,8 @@ from .download_verify import (
 )
 from .errors import (
     IntegrityError,
-    NonRetryableTransferError,
     QuotaError,
+    RetryableTransferError,
     TransferCancelled,
     TransferError,
 )
@@ -104,19 +104,31 @@ class DownloadResult:
 
 
 def _is_transient_chunk_failure(exc: BaseException) -> bool:
-    """Retry only faults that a later attempt could plausibly survive.
+    """An ALLOWLIST: retry only what a later attempt can plausibly survive.
 
-    The predicate used to be `retry_if_exception_type(..., TransferError, ...)`,
-    which matches the BASE class - so every deterministic refusal that happens
-    to subclass it was replayed eight times with exponential backoff: a proxy
-    policy refusal, a cancellation, a range the server will ignore again.
-    `NonRetryableTransferError` is checked first precisely because it is a
-    subclass of `TransferError` and would otherwise match.
+    Two iterations of this predicate were denylists. The first matched the
+    `TransferError` BASE class, so every deterministic refusal that subclasses
+    it was replayed eight times with exponential backoff. The second excluded
+    `NonRetryableTransferError` and then still matched the base - better, but
+    it kept the wrong default: anything new is retryable until someone
+    remembers to opt out, and a short read or a fixed 4xx never opted out.
+
+    Naming what MAY be retried flips that. A deterministic failure has to be
+    added here on purpose to be replayed, which is the safe direction: the
+    cost of wrongly not retrying is one honest error, the cost of wrongly
+    retrying is minutes of backoff hiding a settled answer.
     """
-    if isinstance(exc, NonRetryableTransferError):
-        return False
     return isinstance(
-        exc, (requests.ConnectionError, requests.Timeout, TransferError, CdnUrlExpired)
+        exc,
+        (
+            requests.ConnectionError,
+            requests.Timeout,
+            # The URL is refreshed and the chunk genuinely can succeed next try.
+            CdnUrlExpired,
+            # 5xx only; `download_transport` raises the non-retryable type
+            # for a fixed 4xx and for length/protocol mismatches.
+            RetryableTransferError,
+        ),
     )
 
 
@@ -286,7 +298,10 @@ class MegaDownloader:
     def _run_download(
         self,
         cdn_url: str,
-        file_size: int,
+        # `object`, not `int`: this is the size the REMOTE claims, and the
+        # first statement below is what turns it into a trusted int. Declaring
+        # it `int` here asserted the very thing the validation exists to prove.
+        file_size: object,
         aes_key: bytes,
         nonce: bytes,
         mac_iv_a32: list[int],
@@ -360,9 +375,13 @@ class MegaDownloader:
         all_chunks: list[Chunk],
     ) -> DownloadResult:
         # Load existing state for resume
-        state = load_state(destination) if self.auto_resume else None
-        if not self._is_usable_download_state(
-            state=state,
+        # Written as resume-or-fresh rather than assign-then-maybe-replace so
+        # `state` is a TransferState from here on: the old shape left it
+        # Optional for the whole function and every later use had to be
+        # re-proven, which the type checker could not do and a reader had to.
+        loaded = load_state(destination) if self.auto_resume else None
+        if loaded is not None and self._is_usable_download_state(
+            state=loaded,
             destination=destination,
             source=source,
             file_size=file_size,
@@ -370,6 +389,8 @@ class MegaDownloader:
             nonce=nonce,
             all_chunks=all_chunks,
         ):
+            state = loaded
+        else:
             state = TransferState(
                 transfer_type="download",
                 source=source,

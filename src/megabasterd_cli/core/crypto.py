@@ -18,6 +18,7 @@ import base64
 import json
 import struct
 from collections.abc import Iterable
+from typing import Any
 
 from Crypto.Cipher import AES
 from Crypto.Util import Counter
@@ -149,7 +150,7 @@ def derive_key_v2(password: str, salt: bytes, iterations: int = 100_000) -> byte
     from Crypto.Protocol.KDF import PBKDF2
 
     return PBKDF2(
-        password.encode("utf-8"),
+        password.encode("utf-8"),  # type: ignore[arg-type]  # bytes ok at runtime
         salt,
         dkLen=32,
         count=iterations,
@@ -173,7 +174,7 @@ def stringhash(string: str, aeskey_a32: list[int]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def make_ctr_cipher(key: bytes, nonce: bytes, initial_value: int = 0) -> AES:
+def make_ctr_cipher(key: bytes, nonce: bytes, initial_value: int = 0) -> Any:
     """Create an AES-128-CTR cipher.
 
     MEGA uses a 64-bit nonce and a 64-bit counter that starts at byte_offset / 16.
@@ -262,7 +263,7 @@ def decrypt_attributes(data: bytes, key: bytes) -> dict | None:
         return None
     body = plaintext[len(ATTR_PREFIX) :].rstrip(b"\x00").decode("utf-8", errors="replace")
     try:
-        return json.loads(body)
+        return dict(json.loads(body))
     except json.JSONDecodeError:
         return None
 
@@ -286,7 +287,7 @@ def derive_password_link_keys(password: str, salt: bytes, algo: int = 2) -> tupl
     if algo not in (1, 2):
         raise ValueError(f"Unsupported password-link algorithm {algo}")
     derived = PBKDF2(
-        password.encode("utf-8"),
+        password.encode("utf-8"),  # type: ignore[arg-type]  # bytes ok at runtime
         salt,
         dkLen=64,
         count=100_000,

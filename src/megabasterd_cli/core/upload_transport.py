@@ -18,10 +18,9 @@ from pathlib import Path
 import requests
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
-from ..proxy.selector import ProxyRequiredError
 from .chunks import Chunk, chunk_mac
 from .crypto import ctr_offset_to_counter, make_ctr_cipher
-from .errors import TransferCancelled, TransferError
+from .errors import NonRetryableTransferError, RetryableTransferError
 from .state import TransferState, save_state, snapshot_state
 
 UPLOAD_URL_EXPIRY_STATUS = {403, 404, 410, 509}
@@ -42,23 +41,50 @@ def read_bounded_body(resp: requests.Response, limit: int = MAX_UPLOAD_RESPONSE_
     for block in resp.iter_content(chunk_size=limit + 1):
         body += block
         if len(body) > limit:
-            raise TransferError(
+            # Deterministic: the endpoint answered the wrong shape, and it will
+            # answer the same way next time.
+            raise NonRetryableTransferError(
                 message=f"Upload endpoint returned more than {limit} bytes instead of a token"
             )
     return body
 
 
-def is_retryable_upload_error(exc: BaseException) -> bool:
-    """Retry transport hiccups only.
+def is_final_chunk(chunk: Chunk, total_size: int) -> bool:
+    """True when this chunk carries the LAST byte of the file.
 
-    `TransferError` is also the base of deterministic failures — a missing
-    proxy under force mode (`ProxyRequiredError`) or a deliberate cancellation
-    — and retrying those only burns five exponential backoffs before returning
-    the same answer.
+    The upload endpoint returns a completion token for exactly one chunk - the
+    one containing the final byte. Deciding that from the offset is the only
+    honest test; trusting "whichever response happened to be non-empty" lets a
+    broken or hostile endpoint nominate any chunk as the finaliser.
     """
-    if isinstance(exc, (ProxyRequiredError, TransferCancelled)):
-        return False
-    return isinstance(exc, (requests.ConnectionError, requests.Timeout, TransferError))
+    return chunk.offset + chunk.size >= total_size
+
+
+def is_retryable_upload_error(exc: BaseException) -> bool:
+    """An ALLOWLIST: retry only what a later attempt can plausibly survive.
+
+    This used to be a denylist over the `TransferError` base - exclude two
+    subclasses, retry everything else. That silently opted in every future
+    deterministic failure, and several present ones: a local short read, an
+    oversized body, a fixed HTTP status. Five exponential backoffs later they
+    returned the identical answer.
+
+    Listing what MAY be retried inverts the default, so a new deterministic
+    error is non-retryable unless someone deliberately adds it here.
+    """
+    return isinstance(
+        exc,
+        (
+            requests.ConnectionError,
+            requests.Timeout,
+            # 5xx only; `upload_chunk` raises the non-retryable type for 4xx.
+            RetryableTransferError,
+            # NOT UploadUrlExpiredError: a dead slot is refreshed by the
+            # ORCHESTRATOR, which needs to see the exception. Retrying it here
+            # replays the same request against the same expired slot until the
+            # attempts run out, and the refresh never happens.
+        ),
+    )
 
 
 @retry(
@@ -85,7 +111,7 @@ def upload_chunk(
         f.seek(chunk.offset)
         plaintext = f.read(chunk.size)
     if len(plaintext) != chunk.size:
-        raise TransferError(message=f"Local chunk {chunk.index} short read")
+        raise NonRetryableTransferError(message=f"Local chunk {chunk.index} short read")
 
     # Compute MAC on plaintext
     mac = chunk_mac(plaintext, aes_key, nonce)
@@ -122,20 +148,46 @@ def upload_chunk(
         if picked_proxy and up.proxy_pool is not None:
             up.proxy_pool.report_failure(picked_proxy)
         resp.close()
-        raise TransferError(message=f"Upload chunk {chunk.index} HTTP {resp.status_code}")
-    if picked_proxy and up.proxy_pool is not None:
-        up.proxy_pool.report_success(picked_proxy)
+        if resp.status_code >= 500:
+            raise RetryableTransferError(
+                message=f"Upload chunk {chunk.index} HTTP {resp.status_code}"
+            )
+        raise NonRetryableTransferError(
+            message=f"Upload chunk {chunk.index} HTTP {resp.status_code}"
+        )
 
-    # The MEGA upload endpoint returns a non-empty body ONLY for the
-    # chunk that contains the last byte of the file — this is the
-    # completion token used to finalise the upload. Save it whenever
-    # we see a non-empty body, regardless of which worker finishes
-    # last; otherwise a race between the offset-final chunk and any
-    # earlier chunk causes the token to be dropped.
+    # The endpoint returns a non-empty body for EXACTLY ONE chunk: the one
+    # holding the file's last byte. That body is the completion token.
+    #
+    # This used to accept a token from whichever chunk happened to return one,
+    # on the theory that it avoided a race. It did the opposite: any chunk
+    # could nominate itself as the finaliser, so a broken or hostile endpoint
+    # could hand back a token early and have the upload finalised against it.
+    # The offset decides, not the response.
+    final = is_final_chunk(chunk, state.total_size)
     try:
         body = read_bounded_body(resp)
     finally:
         resp.close()
+
+    if body and not final:
+        raise NonRetryableTransferError(
+            message=(
+                f"Upload endpoint returned a completion token for chunk "
+                f"{chunk.index}, which is not the final chunk of the file"
+            )
+        )
+    if final and not body:
+        raise NonRetryableTransferError(
+            message=f"Upload endpoint returned no completion token for final chunk {chunk.index}"
+        )
+
+    # Only now is the response known to be well-formed. Reporting success
+    # before this credited a proxy that returned HTTP 200 with a garbage body,
+    # and `SmartProxyPool.pick` weights by success ratio - so the broken proxy
+    # was progressively PREFERRED.
+    if picked_proxy and up.proxy_pool is not None:
+        up.proxy_pool.report_success(picked_proxy)
     # Data before state: an upload has no local destination to flush, so
     # its durability point is the HTTP 200 above - the endpoint already
     # holds the chunk before the state below claims it does. The ordering
@@ -146,12 +198,16 @@ def upload_chunk(
         up._bytes_done += chunk.size
         up._chunks_done += 1
         bytes_done_now = up._bytes_done
-        if body:
+        # `final` is proven above, so a body here is the real finaliser.
+        # `not up._completion_token` guards a stale worker: a retried final
+        # chunk landing after the token was recorded must not replace one
+        # already held. First valid token for the final offset wins.
+        if body and not up._completion_token:
             up._completion_token = body
             state.metadata["completion_token"] = body.hex()
         should_save = up._chunks_done % 8 == 0 or bool(body)
         state_to_save = snapshot_state(state) if should_save else None
     # Feed the rolling meter outside the state lock (it has its own).
     up._speed_meter.update(bytes_done_now)
-    if should_save:
+    if state_to_save is not None:
         save_state(state_to_save)

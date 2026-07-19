@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import click
@@ -37,55 +38,91 @@ def _load_pool() -> SmartProxyPool:
     return _load_persisted_pool()
 
 
-def _save_pool(pool: SmartProxyPool) -> None:
-    """Write the pool atomically under the cross-process lock.
-
-    Same contract as accounts/config/state/queue: serialize first, write to a
-    temp file in the destination directory, then `os.replace`. A plain
-    `open(path, "w")` truncated the live file before writing, so a crash or a
-    second process mid-write left a half-written (and now unloadable) pool.
-    """
+def _pool_lock() -> FileLock:
+    """The one lock guarding the proxy store, for reads AND writes."""
     path = _pool_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps({"proxies": [e.url for e in pool.list()]}, indent=2)
-    lock = FileLock(
+    return FileLock(
         path.parent / (path.name + ".lock"),
         message=(
             f"Could not lock the proxy pool within {_POOL_LOCK_TIMEOUT_SECONDS:.0f}s; "
             "another proxy command is holding it. Retry after it finishes."
         ),
     )
+
+
+@contextmanager
+def pool_transaction():
+    """Hold the lock across the WHOLE read-modify-write, then save.
+
+    Locking only the write made the write atomic and the transaction not.
+    Every command did `_load_pool()` outside the lock, mutated that snapshot,
+    and saved it - so two concurrent `proxy add` processes both read the same
+    pool and the second save silently discarded the first one's entry, with
+    the lock dutifully held the entire time.
+
+    Yield the pool, mutate it, and the save happens here on a clean exit. The
+    lock is NOT re-entrant, so this deliberately uses the non-locking writer.
+    """
+    path = _pool_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock = _pool_lock()
     lock.acquire(timeout=_POOL_LOCK_TIMEOUT_SECONDS)
     try:
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=path.name + ".",
-            suffix=".tmp",
-            delete=False,
-        ) as tf:
-            tf.write(payload)
-            tf.flush()
-            os.fsync(tf.fileno())
-            tmp_path = tf.name
-        try:
-            for attempt in range(5):
-                try:
-                    os.replace(tmp_path, path)
-                    break
-                except PermissionError:
-                    # Windows: a transient lock from AV or another replace.
-                    if attempt == 4:
-                        raise
-                    time.sleep(0.05 * (attempt + 1))
-        except OSError:
-            # Never leave the temp file behind when the swap did not happen.
-            with contextlib.suppress(OSError):
-                os.unlink(tmp_path)
-            raise
+        # Re-read INSIDE the lock: this is what makes the loser of a race
+        # observe the winner's write instead of overwriting it.
+        pool = _load_persisted_pool()
+        yield pool
+        _write_pool_locked(pool)
     finally:
         lock.release()
+
+
+def _save_pool(pool: SmartProxyPool) -> None:
+    """Write the pool atomically under the cross-process lock.
+
+    Kept for any caller that already holds a complete pool and just needs it
+    persisted. Prefer `pool_transaction()` for read-modify-write.
+    """
+    lock = _pool_lock()
+    lock.acquire(timeout=_POOL_LOCK_TIMEOUT_SECONDS)
+    try:
+        _write_pool_locked(pool)
+    finally:
+        lock.release()
+
+
+def _write_pool_locked(pool: SmartProxyPool) -> None:
+    """Serialize + atomic replace. The caller MUST already hold the lock."""
+    path = _pool_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({"proxies": [e.url for e in pool.list()]}, indent=2)
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=path.parent,
+        prefix=path.name + ".",
+        suffix=".tmp",
+        delete=False,
+    ) as tf:
+        tf.write(payload)
+        tf.flush()
+        os.fsync(tf.fileno())
+        tmp_path = tf.name
+    try:
+        for attempt in range(5):
+            try:
+                os.replace(tmp_path, path)
+                break
+            except PermissionError:
+                # Windows: a transient lock from AV or another replace.
+                if attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+    except BaseException:
+        # Never leave the temp file behind when the swap did not happen.
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
 
 
 @click.group("proxy", short_help="Manage the Smart Proxy pool.")
@@ -136,46 +173,49 @@ def proxy_list(ctx: click.Context, config_urls: bool) -> None:
 @proxy_cmd.command("add", short_help="Add one or more proxies.")
 @click.argument("urls", nargs=-1, required=True)
 def proxy_add(urls: tuple[str, ...]) -> None:
-    pool = _load_pool()
-    for u in urls:
-        pool.add(u)
-    _save_pool(pool)
+    with pool_transaction() as pool:
+        for u in urls:
+            pool.add(u)
     print_success(f"Added {len(urls)} proxy/proxies.")
 
 
 @proxy_cmd.command("remove", short_help="Remove a proxy by URL.")
 @click.argument("url")
 def proxy_remove(url: str) -> None:
-    pool = _load_pool()
-    if pool.remove(url):
-        _save_pool(pool)
-        print_success(f"Removed {url}")
+    # Matching uses the RAW url; only what reaches the terminal is redacted.
+    # A proxy URL routinely carries `user:pass@`, and both branches used to
+    # print it verbatim.
+    shown = redact_text(url)
+    removed = False
+    with pool_transaction() as pool:
+        removed = pool.remove(url)
+    if removed:
+        print_success(f"Removed {shown}")
     else:
-        print_error(f"Not found: {url}")
+        print_error(f"Not found: {shown}")
 
 
 @proxy_cmd.command("clear", short_help="Remove all proxies.")
 def proxy_clear() -> None:
     if not confirm("Clear the entire proxy pool?", default=False):
         return
-    pool = SmartProxyPool()
-    _save_pool(pool)
+    with pool_transaction() as pool:
+        for entry in list(pool.list()):
+            pool.remove(entry.url)
     print_success("Proxy pool cleared.")
 
 
 @proxy_cmd.command("import", short_help="Import proxies from a text file (one per line).")
 @click.argument("path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 def proxy_import(path: Path) -> None:
-    pool = _load_pool()
     added = 0
-    with open(path, encoding="utf-8") as f:
+    with pool_transaction() as pool, open(path, encoding="utf-8") as f:
         for raw in f:
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
             pool.add(line)
             added += 1
-    _save_pool(pool)
     print_success(f"Imported {added} proxy/proxies.")
 
 
@@ -305,7 +345,10 @@ def proxy_fetch(
         print_error(f"No fetch source configured for protocol {protocol}")
         return
 
-    pool = _load_pool()
+    # No pool read here: the egress proxy for the fetch comes from the
+    # selector below, and the pool that gets WRITTEN is re-read inside the
+    # transaction, so there is nothing to load up front.
+    fetched: list[str] = []
     # Fetching the proxy list is itself outbound traffic, so it obeys the same
     # policy: under force mode it routes through an already-known proxy and is
     # refused when none exists (bootstrap a first proxy with `mb proxy add`).
@@ -337,7 +380,7 @@ def proxy_fetch(
                 break
             if "://" not in line:
                 line = f"{protocol}://{line}"
-            pool.add(line)
+            fetched.append(line)
             added += 1
         if added >= limit:
             break
@@ -346,7 +389,12 @@ def proxy_fetch(
         print_error(f"No proxies fetched. Errors: {errors}")
         return
 
-    _save_pool(pool)
+    # The lock is taken only for the merge, never across the network fetch -
+    # holding it for a multi-second HTTP round trip would stall every other
+    # proxy command for no benefit.
+    with pool_transaction() as live:
+        for url in fetched:
+            live.add(url)
     print_success(f"Fetched {added} {protocol} proxy/proxies.")
     if errors:
         for e in errors:

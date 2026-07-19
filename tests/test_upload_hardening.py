@@ -19,12 +19,17 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import requests
 from tenacity import wait_none
 
 import megabasterd_cli.config as config_module
 import megabasterd_cli.core.uploader as uploader_module
 from megabasterd_cli.core.chunks import iter_chunks
-from megabasterd_cli.core.errors import TransferCancelled, TransferError
+from megabasterd_cli.core.errors import (
+    RetryableTransferError,
+    TransferCancelled,
+    TransferError,
+)
 from megabasterd_cli.core.state import load_state
 from megabasterd_cli.core.uploader import (
     MAX_UPLOAD_RESPONSE_BYTES,
@@ -181,7 +186,15 @@ def upload_env(tmp_path, monkeypatch):
     monkeypatch.setattr(config_module, "data_dir", lambda: tmp_path / "data")
 
     def fake_post(url, data=b"", timeout=None, proxies=None, headers=None, stream=False):
-        return _FakeResponse(b"COMPLETION")
+        # Faithful to the real endpoint: a completion token comes back for the
+        # chunk holding the file's LAST byte and for no other. The double used
+        # to answer every chunk with a token, which the uploader now rejects as
+        # the protocol violation it always was.
+        offset = int(url.rsplit("/", 1)[-1])
+        source = tmp_path / "file.bin"
+        total = source.stat().st_size if source.exists() else offset + len(data)
+        final = offset + len(data) >= total
+        return _FakeResponse(b"COMPLETION" if final else b"")
 
     monkeypatch.setattr(uploader_module.requests, "post", fake_post)
     return tmp_path
@@ -233,7 +246,7 @@ def test_oversized_completion_body_is_rejected(upload_env, monkeypatch):
     )
     uploader = _uploader_for({"f": [{"h": "HANDLE"}]})
     chunk = next(iter(iter_chunks(4096)))
-    state = SimpleNamespace(metadata={}, mark_chunk_done=lambda *a: None)
+    state = SimpleNamespace(metadata={}, mark_chunk_done=lambda *a: None, total_size=4096)
 
     with pytest.raises(TransferError, match="more than"):
         MegaUploader._upload_chunk.retry_with(wait=wait_none())(
@@ -260,7 +273,7 @@ def _count_chunk_attempts(tmp_path: Path, exc: BaseException) -> int:
 
     uploader._proxies_for_request = _raise
     chunk = next(iter(iter_chunks(4096)))
-    state = SimpleNamespace(metadata={}, mark_chunk_done=lambda *a: None)
+    state = SimpleNamespace(metadata={}, mark_chunk_done=lambda *a: None, total_size=4096)
     with pytest.raises(type(exc)):
         # `wait_none` keeps the assertion about ATTEMPT COUNT, not backoff time.
         MegaUploader._upload_chunk.retry_with(wait=wait_none())(
@@ -277,6 +290,20 @@ def test_transfer_cancelled_is_not_retried(tmp_path: Path):
     assert _count_chunk_attempts(tmp_path, TransferCancelled(message="canceled")) == 1
 
 
-def test_generic_transfer_error_is_still_retried(tmp_path: Path):
+def test_a_genuine_transport_failure_is_still_retried(tmp_path: Path):
     """The narrowing must not disable retries for genuine transport failures."""
-    assert _count_chunk_attempts(tmp_path, TransferError(message="flaky")) == 5
+    assert _count_chunk_attempts(tmp_path, requests.ConnectionError("reset")) == 5
+    assert _count_chunk_attempts(tmp_path, requests.Timeout("slow")) == 5
+    assert _count_chunk_attempts(tmp_path, RetryableTransferError(message="HTTP 503")) == 5
+
+
+def test_an_unclassified_transfer_error_is_not_retried(tmp_path: Path):
+    """The retry predicate is an allowlist, so an unclassified error is final.
+
+    This assertion is the inverse of the one it replaces. A bare
+    `TransferError` was being used to stand in for "genuine transport
+    failure", but it is the BASE of every deterministic failure too - short
+    read, oversized body, fixed 4xx - so matching it retried all of them.
+    Transport failures now assert themselves by their own types above.
+    """
+    assert _count_chunk_attempts(tmp_path, TransferError(message="unclassified")) == 1

@@ -42,6 +42,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from urllib.parse import urlparse
 
+from .errors import MegaError
+
 
 class LinkType(str, Enum):
     FILE = "file"
@@ -489,3 +491,18 @@ def __getattr__(name: str):
 
 def __dir__() -> list[str]:
     return sorted({*globals(), *__all__})
+
+
+def require_link_key(parsed, what: str) -> str:
+    """Return the link's decryption key, or fail with a message that says so.
+
+    `ParsedLink.key` is genuinely optional - a MEGA link can be pasted without
+    its `#fragment`. Callers that need to decrypt were passing it straight to
+    `str_to_a32`, which raised a `TypeError` about NoneType from deep inside
+    the crypto layer instead of telling the user their link is missing a key.
+    """
+    if not parsed.key:
+        raise MegaError(
+            message=f"{what} needs a link that includes its decryption key (the part after '#')"
+        )
+    return str(parsed.key)

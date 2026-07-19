@@ -64,6 +64,17 @@ class NonRetryableTransferError(TransferError):
     """
 
 
+class RetryableTransferError(TransferError):
+    """A server-side fault a later attempt could plausibly survive (5xx).
+
+    The counterpart to `NonRetryableTransferError`, and the reason both chunk
+    retry predicates can be pure allowlists: without a positive type for "this
+    one is worth replaying", the only way to express it was to match the
+    `TransferError` base and subtract, which keeps retry as the default for
+    anything added later.
+    """
+
+
 class TransferCancelled(NonRetryableTransferError):  # noqa: N818 - a decision, not a fault
     """The user (or the caller) stopped the transfer before it completed.
 

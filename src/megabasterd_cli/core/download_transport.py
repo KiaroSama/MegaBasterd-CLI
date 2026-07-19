@@ -17,7 +17,7 @@ import requests
 
 from .chunks import Chunk, chunk_mac
 from .crypto import ctr_offset_to_counter, make_ctr_cipher
-from .errors import NonRetryableTransferError, TransferError
+from .errors import NonRetryableTransferError, RetryableTransferError, TransferError
 from .range_validation import RangeNotHonoredError, validate_range_response
 from .state import TransferState, save_state, snapshot_state
 
@@ -74,7 +74,13 @@ def fetch_chunk(
             if resp.status_code not in (200, 206):
                 if picked_proxy and dl.proxy_pool is not None:
                     dl.proxy_pool.report_failure(picked_proxy)
-                raise TransferError(message=f"HTTP {resp.status_code} for chunk {chunk.index}")
+                if resp.status_code >= 500:
+                    raise RetryableTransferError(
+                        message=f"HTTP {resp.status_code} for chunk {chunk.index}"
+                    )
+                raise NonRetryableTransferError(
+                    message=f"HTTP {resp.status_code} for chunk {chunk.index}"
+                )
 
             # These bytes are about to be decrypted with a CTR counter
             # derived from THIS chunk's offset and written at that offset.
@@ -127,7 +133,7 @@ def fetch_chunk(
     if len(encrypted) != chunk.size:
         if picked_proxy and dl.proxy_pool is not None:
             dl.proxy_pool.report_failure(picked_proxy)
-        raise TransferError(
+        raise NonRetryableTransferError(
             message=f"Chunk {chunk.index} short read: got {len(encrypted)}, expected {chunk.size}"
         )
 
@@ -157,7 +163,7 @@ def fetch_chunk(
         state_to_save = snapshot_state(state) if should_save else None
     # Feed the rolling meter outside the state lock (it has its own).
     dl._speed_meter.update(bytes_done_now)
-    if should_save:
+    if state_to_save is not None:
         save_state(state_to_save)
 
     if picked_proxy and dl.proxy_pool is not None:

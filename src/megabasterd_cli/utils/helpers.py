@@ -71,11 +71,12 @@ def format_bytes(num: int) -> str:
     """Render a byte count as a human-readable string (KB / MB / GB)."""
     if num < 0:
         return f"-{format_bytes(-num)}"
+    scaled = float(num)
     for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
-        if num < 1024:
-            return f"{num:.2f} {unit}" if unit != "B" else f"{num} B"
-        num /= 1024
-    return f"{num:.2f} EB"
+        if scaled < 1024:
+            return f"{scaled:.2f} {unit}" if unit != "B" else f"{num} B"
+        scaled /= 1024
+    return f"{scaled:.2f} EB"
 
 
 def format_speed(bytes_per_sec: float) -> str:
@@ -259,7 +260,7 @@ def available_disk_space(path: Path) -> int:
     try:
         stat = os.statvfs(path) if hasattr(os, "statvfs") else None
         if stat:
-            return stat.f_bavail * stat.f_frsize
+            return int(stat.f_bavail * stat.f_frsize)
     except OSError:
         pass
     # Windows fallback

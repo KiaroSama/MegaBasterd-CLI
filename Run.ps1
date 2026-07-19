@@ -38,7 +38,6 @@ if (-not [string]::IsNullOrWhiteSpace($env:MEGABASTERD_LAUNCHER_LOG_DIR)) {
 $UserDir = Join-Path $ProjectRoot "User"
 $RunId = Get-Date -Format "yyyyMMdd-HHmmss-fff"
 $LauncherLogPath = Join-Path $LogDir "launcher-$RunId.log"
-$LauncherTranscriptPath = Join-Path $LogDir "launcher-transcript-$RunId.log"
 $CliLogPath = Join-Path $LogDir "cli-$RunId.log"
 $env:MEGABASTERD_PROJECT_ROOT = $ProjectRoot
 $env:MEGABASTERD_RUN_ID = $RunId
@@ -61,6 +60,21 @@ $script:Palette = [ordered]@{
     python  = "#60A5FA"
 }
 
+function Get-RedactedText {
+    param([string] $Text)
+    # The ONE place launcher text is scrubbed. It runs on every line before it
+    # is written, so a raw secret is never on disk at any instant - the old
+    # design wrote a raw transcript and scrubbed it afterwards, which left the
+    # secret readable for the whole run and left it forever on a hard kill.
+    if ([string]::IsNullOrEmpty($Text)) { return $Text }
+    $sensitive = "--token|--password|--share-password|--vault-passphrase|--mfa-code|--elc-api-key"
+    $Text = [regex]::Replace($Text, "(?<opt>$sensitive)(?<sep>=|\s+)(?<val>\S+)", '${opt}${sep}<redacted>')
+    $Text = [regex]::Replace($Text, '(?m)(?<lead>^|\s)-p(?<sep>\s+)(?:"[^"]*"|''[^'']*''|\S+)', '${lead}-p${sep}<redacted>')
+    $Text = [regex]::Replace($Text, '("(?:api_key|password|passphrase|token|mfa_code|secret)"\s*:\s*)"[^"]*"', '$1"<redacted>"')
+    $Text = [regex]::Replace($Text, "\S*(?:mega\.nz/|mega\.co\.nz/|mc://|mega://)\S*", "<redacted-link>")
+    return $Text
+}
+
 function Write-RunLog {
     param(
         [string] $Level,
@@ -70,7 +84,23 @@ function Write-RunLog {
         if (-not (Test-Path -LiteralPath $LogDir)) {
             New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
         }
-        $line = "{0} [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"), $Level, $Message
+        if (-not (Test-Path -LiteralPath $LauncherLogPath)) {
+            # Owner-only from the FIRST byte, not fixed up afterwards.
+            New-Item -ItemType File -Path $LauncherLogPath -Force | Out-Null
+            try {
+                $acl = Get-Acl -LiteralPath $LauncherLogPath
+                $acl.SetAccessRuleProtection($true, $false)
+                $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+                $acl.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+                    $me, "FullControl", "Allow")))
+                Set-Acl -LiteralPath $LauncherLogPath -AclObject $acl
+            } catch {
+                # An ACL failure must not stop the launcher; the content is
+                # already redacted, so this is defence in depth, not the guard.
+            }
+        }
+        $safe = Get-RedactedText $Message
+        $line = "{0} [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"), $Level, $safe
         Add-Content -LiteralPath $LauncherLogPath -Value $line -Encoding UTF8
     } catch {
         # Logging must never prevent the launcher from running.
@@ -381,59 +411,9 @@ function Install-Dependencies {
     }
 }
 
-function Stop-LauncherTranscript {
-    # Idempotent: safe to call from the finally block, from a trap, and from
-    # the engine-exiting handler, in any order and more than once.
-    if (-not $script:transcriptStarted) {
-        return
-    }
-    $script:transcriptStarted = $false
-    try {
-        Stop-Transcript | Out-Null
-    } catch {
-        Write-RunLog "WARN" "Stop-Transcript failed: $($_.Exception.Message)"
-    }
-    Protect-TranscriptFile $LauncherTranscriptPath
-}
-
-function Protect-TranscriptFile {
-    param([string] $Path)
-    # PowerShell's Start-Transcript writes a "Host Application:" header line
-    # containing the raw outer command line, which can include a stream --token
-    # value, a password, or a MEGA link. Scrub those out of the finished
-    # transcript so secrets passed on the launcher command line are not retained.
-    # This half stays in PowerShell: the transcript is a PowerShell artifact and
-    # must be scrubbed even when Python never starts.
-    try {
-        if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
-            return
-        }
-        $content = Get-Content -LiteralPath $Path -Raw
-        if ([string]::IsNullOrEmpty($content)) {
-            return
-        }
-        $sensitive = "--token|--password|--share-password|--vault-passphrase|--mfa-code|--elc-api-key"
-        # `--option value` and `--option=value`
-        $content = [regex]::Replace($content, "(?<opt>$sensitive)(?<sep>=|\s+)(?<val>\S+)", '${opt}${sep}<redacted>')
-        # `-p value` (short password option). The old pattern required a
-        # LEADING whitespace character, so `-p` at the start of a line was
-        # missed, and `\S+` stopped at the first space inside a quoted
-        # password. Match start-of-line too, and consume a quoted value whole.
-        $content = [regex]::Replace($content, '(?m)(?<lead>^|\s)-p(?<sep>\s+)(?:"[^"]*"|''[^'']*''|\S+)', '${lead}-p${sep}<redacted>')
-        # Secrets embedded in a JSON positional (e.g. `config set elc_accounts`).
-        $content = [regex]::Replace($content, '("(?:api_key|password|passphrase|token|mfa_code|secret)"\s*:\s*)"[^"]*"', '$1"<redacted>"')
-        # MEGA-style links
-        $content = [regex]::Replace($content, "\S*(?:mega\.nz/|mega\.co\.nz/|mc://|mega://)\S*", "<redacted-link>")
-        Set-Content -LiteralPath $Path -Value $content -Encoding UTF8 -NoNewline
-    } catch {
-        Write-RunLog "WARN" "Transcript redaction failed: $($_.Exception.Message)"
-    }
-}
-
 $oldPythonPath = $env:PYTHONPATH
 $launchedWithoutArgs = ($CliArgs.Count -eq 0)
 $exitCode = 1
-$transcriptStarted = $false
 try {
     if (-not (Test-Path -LiteralPath $LogDir)) {
         New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
@@ -451,22 +431,19 @@ try {
             New-Item -ItemType Directory -Path $userSubdir -Force | Out-Null
         }
     }
-    try {
-        Start-Transcript -LiteralPath $LauncherTranscriptPath -Append | Out-Null
-        $transcriptStarted = $true
-        # Ctrl+C or a closed window unwinds WITHOUT running the finally block,
-        # so without this the transcript keeps whatever secrets it captured.
-        [void](Register-EngineEvent PowerShell.Exiting -Action { Stop-LauncherTranscript })
-    } catch {
-        Write-RunLog "WARN" "Start-Transcript failed: $($_.Exception.Message)"
-    }
+    # Deliberately NO Start-Transcript. PowerShell's transcript opens with a
+    # "Host Application:" header carrying the raw outer command line, so the
+    # launcher used to write every secret passed on the command line to disk
+    # in clear and scrub it only at exit - readable for the whole run, and
+    # left behind permanently by Ctrl+C, a closed window, or a crash. The
+    # structured log below is redacted BEFORE each line is written, so there
+    # is no window in which a raw secret exists.
 
     Write-RunLog "INFO" "RunId=$RunId"
     Write-RunLog "INFO" "ProjectRoot=$ProjectRoot"
     Write-RunLog "INFO" "SourceRoot=$SourceRoot"
     Write-RunLog "INFO" "UserDir=$UserDir"
     Write-RunLog "INFO" "LauncherLog=$LauncherLogPath"
-    Write-RunLog "INFO" "LauncherTranscript=$LauncherTranscriptPath"
     Write-RunLog "INFO" "CliLog=$CliLogPath"
     Write-CliLogNote "CLI log prepared by launcher. Some commands such as --help may exit before Python logging is initialized."
 
@@ -538,7 +515,6 @@ try {
     # come first, so a failed run left an UNREDACTED transcript sitting on disk
     # for as long as nobody pressed Enter - which is exactly the window in which
     # someone reads the log to find out what went wrong.
-    Stop-LauncherTranscript
     if ($shouldPause) {
         Write-Launcher "Command failed. Check the Logs directory for details." "error"
         [void](Read-Host "Press Enter to close")

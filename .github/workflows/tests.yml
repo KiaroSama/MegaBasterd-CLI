@@ -36,54 +36,18 @@ jobs:
       - name: Lint with Ruff
         run: ruff check src tests
 
-      - name: Type check (required, stable checked set)
-        # These modules are mypy-clean and must stay clean. The legacy core
-        # modules still carry a known error baseline and are covered by the
-        # advisory full-tree run below.
-        run: >
-          mypy --ignore-missing-imports
-          src/megabasterd_cli/cli.py
-          src/megabasterd_cli/config.py
-          src/megabasterd_cli/commands/download_cmd.py
-          src/megabasterd_cli/commands/upload_cmd.py
-          src/megabasterd_cli/commands/queue_cmd.py
-          src/megabasterd_cli/commands/account_cmd.py
-          src/megabasterd_cli/commands/cloud_cmd.py
-          src/megabasterd_cli/commands/share_cmd.py
-          src/megabasterd_cli/commands/config_cmd.py
-          src/megabasterd_cli/commands/watch_cmd.py
-          src/megabasterd_cli/core/state.py
-          src/megabasterd_cli/core/chunks.py
-          src/megabasterd_cli/core/errors.py
-          src/megabasterd_cli/queue
-          src/megabasterd_cli/accounts
-          src/megabasterd_cli/ui
-          src/megabasterd_cli/utils/speed.py
-          src/megabasterd_cli/utils/hooks.py
-          src/megabasterd_cli/utils/selection.py
-          src/megabasterd_cli/utils/filelock.py
-          src/megabasterd_cli/utils/redaction.py
-          src/megabasterd_cli/core/nodes.py
-          src/megabasterd_cli/core/auth.py
-          src/megabasterd_cli/core/session_store.py
-          src/megabasterd_cli/core/download_verify.py
-          src/megabasterd_cli/core/upload_identity.py
-          src/megabasterd_cli/core/upload_tree.py
-          src/megabasterd_cli/core/range_validation.py
-          src/megabasterd_cli/core/crypter.py
-          src/megabasterd_cli/core/splitter.py
-          src/megabasterd_cli/proxy/selector.py
-          src/megabasterd_cli/utils/corruption.py
-          src/megabasterd_cli/launcher_menu.py
-
-      - name: Type check with mypy (advisory, full tree)
+      - name: Type check (required, whole production tree)
+        # Every production module, not an allowlist. The allowlist form meant
+        # the heaviest files - downloader, uploader, crypter, hashcash, proxy,
+        # streaming - were covered only by an advisory run that could not fail
+        # the build, which is the same as not being covered.
         run: mypy src/megabasterd_cli --ignore-missing-imports
-        continue-on-error: true
+
 
       - name: Run tests
         # Coverage baseline is ~61%; fail the build if local coverage regresses
         # below 55% (Codecov upload stays non-fatal for network failures).
-        run: pytest --cov=megabasterd_cli --cov-report=xml --cov-fail-under=55
+        run: pytest --cov=megabasterd_cli --cov-report=xml --cov-fail-under=76
 
       - name: Smoke-test script launcher
         shell: pwsh

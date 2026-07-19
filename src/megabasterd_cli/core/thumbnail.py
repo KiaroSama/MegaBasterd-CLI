@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -32,7 +33,10 @@ def create_thumbnail(source: Path, dest: Path) -> bool:
         return False
 
     try:
-        with Image.open(source) as img:
+        with Image.open(source) as opened:
+            # PIL yields ImageFile but convert() returns Image; one name for
+            # both is simpler than threading two types through five lines.
+            img: Any = opened
             img.thumbnail((THUMB_SIZE, THUMB_SIZE))
             if img.mode in ("RGBA", "P"):
                 img = img.convert("RGB")

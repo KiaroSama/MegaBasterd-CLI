@@ -94,16 +94,15 @@ class _ProxyHandler:
 
             connect_m = CONNECT_RE.match(request_line)
             http_m = None if connect_m else HTTP_FORWARD_RE.match(request_line)
-            if not connect_m and not http_m:
-                self._reply(client_sock, 400, "Bad Request")
-                return
-
-            if connect_m:
+            if connect_m is not None:
                 host = connect_m.group("host")
                 port = int(connect_m.group("port"))
-            else:
+            elif http_m is not None:
                 host = http_m.group("host")
                 port = int(http_m.group("port") or "80")
+            else:
+                self._reply(client_sock, 400, "Bad Request")
+                return
 
             reason = check_destination(host, port, bool(connect_m), self.allow_any_port)
             if reason:
@@ -137,6 +136,10 @@ class _ProxyHandler:
             # (path only, not absolute URL), strip the Proxy-Authorization
             # header, then forward the request + any pipelined body bytes and
             # stream the response back unchanged.
+            # Reached only through the `elif http_m is not None` branch above;
+            # the assert states that for the checker without changing control
+            # flow (it can never fire).
+            assert http_m is not None
             method = http_m.group("method").upper()
             path = http_m.group("path")
             version = http_m.group("ver")

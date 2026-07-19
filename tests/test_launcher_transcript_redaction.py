@@ -1,11 +1,15 @@
-"""The transcript half of launcher redaction must stay in PowerShell.
+"""Launcher redaction rules, now applied at the WRITE instead of at exit.
 
-The interactive menu moved to Python, but ``Start-Transcript`` is a PowerShell
-artifact: its "Host Application:" header captures the raw outer command line,
-and it has to be scrubbed even when Python never starts. These tests execute
-the real ``Protect-TranscriptFile`` out of Run.ps1 against a crafted transcript
-and assert the four shapes that were fixed recently still redact, plus the
-structural invariants (scrub before the pause prompt, scrub on Ctrl+C).
+These tests used to drive ``Protect-TranscriptFile``, which scrubbed a raw
+transcript after the fact. That whole design is gone: it left the secret
+readable on disk for the length of the run and forever if the process was
+killed. The rules it enforced are still exactly right, so they moved with it -
+they now execute ``Get-RedactedText``, the single function every launcher log
+line passes through before it is written.
+
+The structural invariants that used to guard the scrub ordering are replaced
+by a stronger one in test_launcher_no_raw_transcript.py: there is no raw
+artifact to order anything against.
 """
 
 from __future__ import annotations
@@ -66,8 +70,9 @@ def scrubbed(tmp_path_factory) -> str:
     script.write_text(
         "param([string] $Target)\n"
         "function Write-RunLog { param([string] $Level, [string] $Message) }\n"
-        + _extract_function("Protect-TranscriptFile")
-        + "\nProtect-TranscriptFile -Path $Target\n",
+        + _extract_function("Get-RedactedText")
+        + "\n$raw = Get-Content -LiteralPath $Target -Raw\n"
+        + "Set-Content -LiteralPath $Target -Value (Get-RedactedText $raw) -NoNewline\n",
         encoding="utf-8",
     )
     proc = subprocess.run(
@@ -105,22 +110,20 @@ def test_quoted_short_password_value_is_consumed_whole(scrubbed):
 # --- structural invariants -------------------------------------------------
 
 
-def test_transcript_scrub_stayed_in_powershell():
-    assert "function Protect-TranscriptFile" in RUN_TEXT
-    assert "Protect-TranscriptFile $LauncherTranscriptPath" in RUN_TEXT
+def test_redaction_stayed_in_powershell():
+    """Python may never start, so the launcher needs its own guard."""
+    assert "function Get-RedactedText" in RUN_TEXT
 
 
-def test_scrub_runs_before_the_pause_prompt():
-    stop = RUN_TEXT.index("    Stop-LauncherTranscript\n")
-    pause = RUN_TEXT.index("Press Enter to close")
-    assert stop < pause, "the transcript must be scrubbed before the pause prompt"
+def test_every_log_line_passes_through_the_redactor():
+    """The invariant that replaces "scrub before the pause prompt".
 
-
-def test_engine_exiting_handler_still_scrubs_on_ctrl_c():
-    assert "Register-EngineEvent PowerShell.Exiting -Action { Stop-LauncherTranscript }" in RUN_TEXT
-
-
-def test_stop_is_idempotent_guarded():
-    body = _extract_function("Stop-LauncherTranscript")
-    assert "if (-not $script:transcriptStarted)" in body
-    assert "$script:transcriptStarted = $false" in body
+    Ordering only mattered while a raw file existed. What matters now is that
+    nothing reaches disk unredacted - a property of the single writer, not of
+    when cleanup happens to run.
+    """
+    body = _extract_function("Write-RunLog")
+    assert "Get-RedactedText $Message" in body, "a log line can bypass redaction"
+    assert body.index("Get-RedactedText") < body.index(
+        "Add-Content"
+    ), "redaction must happen before the write, not after"

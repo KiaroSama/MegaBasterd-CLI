@@ -62,8 +62,11 @@ def test_run_ps1_keeps_only_the_powershell_specific_work():
         assert moved not in text, f"{moved} belongs in launcher_menu.py"
     # ...while the PowerShell-only half stays put.
     for kept in (
-        "Start-Transcript",
-        "Protect-TranscriptFile",
+        # The transcript is gone on purpose (see
+        # tests/test_launcher_no_raw_transcript.py): it wrote the raw command
+        # line to disk and scrubbed it only at exit. Redaction now happens at
+        # the write, so `Get-RedactedText` is the PowerShell-side guard.
+        "Get-RedactedText",
         "Find-SystemPython",
         "New-ProjectVenv",
     ):

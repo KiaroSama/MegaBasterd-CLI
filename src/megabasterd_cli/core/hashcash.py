@@ -110,7 +110,7 @@ def _check_nonce(nonce_bytes: bytes, token_repeated: bytes, threshold: int) -> b
     """Return True if the given 4-byte nonce satisfies the challenge."""
     digest = hashlib.sha256(nonce_bytes + token_repeated).digest()
     head = struct.unpack(">I", digest[:4])[0]
-    return head <= threshold
+    return bool(head <= threshold)
 
 
 def _project_root() -> Path | None:

@@ -16,7 +16,7 @@ from ..core.crypto import (
 )
 from ..core.errors import MegaError
 from ..core.link_services import get_megacrypter_info, resolve_elc_links, resolve_megacrypter_link
-from ..core.links import LinkType, parse_link, resolve_password_link
+from ..core.links import LinkType, parse_link, require_link_key, resolve_password_link
 from ..proxy.selector import ProxySelector
 from ..ui.prompts import print_error
 from ..ui.theme import SafeTable, make_console
@@ -172,7 +172,7 @@ def info_cmd(
             # folder share key to unwrap the file's key.
             folder_id = parsed.public_id
             file_handle = parsed.subpath
-            folder_key = a32_to_bytes(str_to_a32(parsed.key))
+            folder_key = a32_to_bytes(str_to_a32(require_link_key(parsed, "link info")))
             listing = api.get_public_folder_listing(folder_id)
             raw_nodes = listing.get("f", [])
             file_raw = next(
@@ -186,14 +186,17 @@ def info_cmd(
                 if folder_raw is None:
                     print_error(f"Node {file_handle!r} not found in folder {folder_id!r}")
                     return
-                children: dict[str, list[str]] = {}
+                # Reached only via `folder_raw`, which was found BY this
+                # handle, so it cannot be None here.
+                assert file_handle is not None
+                subtree_children: dict[str, list[str]] = {}
                 for n in raw_nodes:
-                    children.setdefault(n.get("p", ""), []).append(n.get("h", ""))
+                    subtree_children.setdefault(n.get("p", ""), []).append(n.get("h", ""))
                 keep = {file_handle}
                 stack = [file_handle]
                 while stack:
                     current = stack.pop()
-                    for child in children.get(current, []):
+                    for child in subtree_children.get(current, []):
                         if child and child not in keep:
                             keep.add(child)
                             stack.append(child)
@@ -226,7 +229,9 @@ def info_cmd(
                 table.add_row("Size", format_bytes(int(info.get("s", 0))))
                 _console.print(table)
                 return
-            aes_key, _nonce, _mac = unpack_file_key(str_to_a32(parsed.key))
+            aes_key, _nonce, _mac = unpack_file_key(
+                str_to_a32(require_link_key(parsed, "link info"))
+            )
             attrs = decrypt_attributes(b64_url_decode(info.get("at", "") or ""), aes_key) or {}
             table.add_row("Type", "File")
             table.add_row("Name", attrs.get("n", "?"))
