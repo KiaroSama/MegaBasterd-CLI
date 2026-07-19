@@ -59,7 +59,7 @@ utils/        Logging, helpers, hooks, speed limiting
 
 ## Coding Conventions
 
-- Target Python 3.9+.
+- Target Python 3.10+.
 - Prefer tested core helpers over command-level logic.
 - Keep command modules thin.
 - Use `ui.theme.make_console()` for Rich output.

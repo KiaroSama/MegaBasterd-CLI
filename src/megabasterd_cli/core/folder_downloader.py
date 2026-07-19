@@ -10,10 +10,9 @@ A MEGA folder share gives access to a tree of nodes under a folder key. We:
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from ..utils.helpers import ensure_within_directory, sanitize_filename
 from .crypto import (

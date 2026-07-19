@@ -5,8 +5,9 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from .crypto import (
     a32_to_bytes,

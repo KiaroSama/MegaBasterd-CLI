@@ -29,10 +29,10 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 import requests
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential

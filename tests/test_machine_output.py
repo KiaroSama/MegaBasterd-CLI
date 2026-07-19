@@ -23,10 +23,14 @@ FILE_URL = "https://mega.nz/file/abc123#supersecretkey"
 def _runner() -> CliRunner:
     """CliRunner with stdout/stderr separated across click versions.
 
-    click < 8.2 (installed on Python 3.9) mixes stderr into stdout by
-    default, which would fold the human progress lines into the JSONL
-    stream; `mix_stderr=False` restores the real-terminal separation.
-    click >= 8.2 removed the parameter (streams are always separate).
+    click < 8.2 mixes stderr into stdout by default, which would fold the
+    human progress lines into the JSONL stream; `mix_stderr=False` restores
+    the real-terminal separation. click >= 8.2 removed the parameter (streams
+    are always separate).
+
+    Kept after the Python 3.9 drop: `click>=8.1.0` still permits an 8.1
+    resolution, so the fallback is about the click version, not the
+    interpreter it happened to ship with.
     """
     try:
         return CliRunner(mix_stderr=False)

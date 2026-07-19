@@ -359,7 +359,7 @@ function Test-PythonSpec {
     }
     $major = [int]$parts[0]
     $minor = [int]$parts[1]
-    return ($major -gt 3 -or ($major -eq 3 -and $minor -ge 9))
+    return ($major -gt 3 -or ($major -eq 3 -and $minor -ge 10))
 }
 
 function Find-SystemPython {
@@ -368,7 +368,7 @@ function Find-SystemPython {
         if (Test-PythonSpec $spec) {
             return $spec
         }
-        throw "MEGABASTERD_PYTHON does not point to a usable Python 3.9+ interpreter."
+        throw "MEGABASTERD_PYTHON does not point to a usable Python 3.10+ interpreter."
     }
 
     $candidates = @(
@@ -386,7 +386,7 @@ function Find-SystemPython {
             return $spec
         }
     }
-    throw "Python 3.9+ was not found. Install Python, then run this launcher again."
+    throw "Python 3.10+ was not found. Install Python, then run this launcher again."
 }
 
 function Get-Python {

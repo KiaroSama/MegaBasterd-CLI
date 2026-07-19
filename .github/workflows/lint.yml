@@ -26,10 +26,9 @@ jobs:
         run: black --check src tests
 
   # The type gate lives here, not in the runtime matrix. mypy is a STATIC
-  # check: running it eight times tells you nothing extra, and it forced the
-  # pinned stubs onto Python 3.9 jobs that cannot install them (both require
-  # >=3.10). One pinned interpreter gives one deterministic verdict, which is
-  # what "required" was supposed to mean.
+  # check: running it once per supported runtime tells you nothing extra, and
+  # a range there is what let three environments disagree about its verdict.
+  # One pinned interpreter gives one deterministic answer.
   types:
     runs-on: ubuntu-latest
     timeout-minutes: 15

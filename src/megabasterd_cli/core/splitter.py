@@ -18,10 +18,9 @@ import contextlib
 import hashlib
 import os
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 # Same temp-file-then-os.replace helper the Crypter uses, including its Windows
 # PermissionError retry and its BaseException cleanup. Reused rather than copied

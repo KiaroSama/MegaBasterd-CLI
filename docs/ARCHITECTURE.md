@@ -7,7 +7,7 @@ and the importable package lives under `src/megabasterd_cli`.
 
 ```text
 Run.ps1
-  |-- find Python 3.9+
+  |-- find Python 3.10+
   |-- create per-run logs under Logs/
   |-- check/import dependency modules
   |-- optionally create .venv and install requirements.txt

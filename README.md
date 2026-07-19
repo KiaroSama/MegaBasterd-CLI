@@ -12,7 +12,7 @@ This project is inspired by [tonikelope/megabasterd](https://github.com/tonikelo
 and is focused on CLI/source-script usage rather than a desktop GUI.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)](#requirements)
 
 ## Features
@@ -47,7 +47,7 @@ trust, because the returned URLs are supplied by that third-party service.
 
 ## Requirements
 
-- Python 3.9 or newer.
+- Python 3.10 or newer.
 - PowerShell 5.1 or PowerShell 7+ for `Run.ps1`.
 - Internet access for MEGA transfers and first-time dependency installation.
 

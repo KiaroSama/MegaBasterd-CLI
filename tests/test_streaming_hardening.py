@@ -126,7 +126,7 @@ def test_a_half_open_request_is_dropped_within_the_header_budget():
         started = time.monotonic()
         data = sock.recv(4096)  # blocks until the server gives up on us
         elapsed = time.monotonic() - started
-    except socket.timeout:  # pragma: no cover - this IS the regression
+    except TimeoutError:  # pragma: no cover - this IS the regression
         pytest.fail("the server never dropped a half-open connection")
     finally:
         sock.close()
@@ -157,7 +157,7 @@ def test_a_dribbling_client_cannot_hold_a_connection_open_forever():
                 if sock.recv(4096) == b"":
                     dropped = True
                     break
-            except (socket.timeout, BlockingIOError):
+            except (TimeoutError, BlockingIOError):
                 pass
             except OSError:
                 dropped = True
@@ -267,7 +267,7 @@ def test_a_short_upstream_body_is_never_served_as_a_complete_file(monkeypatch, c
             with pytest.raises((http.client.IncompleteRead, ConnectionError)):
                 body = resp.read()
                 pytest.fail(f"served {len(body)} bytes as a complete 4096-byte file")
-    except socket.timeout:  # pragma: no cover - regression: no abort, no close
+    except TimeoutError:  # pragma: no cover - regression: no abort, no close
         pytest.fail("the truncated response neither completed nor aborted")
     finally:
         conn.close()

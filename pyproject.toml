@@ -9,7 +9,7 @@ description = "A script-first MEGA.nz downloader/uploader inspired by MegaBaster
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     { name = "Kiaro Sama" }
 ]
@@ -21,7 +21,6 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -44,10 +43,8 @@ dev = [
     "pytest-cov>=4.1.0",
     "pytest-asyncio>=0.21.0",
     "black>=23.9.0,<26",
-    # NOT pinned here: these two are pinned in the Lint workflow, which is the
-    # only place the type gate runs. They require Python >=3.10, and the test
-    # matrix includes 3.9 - pinning them in the dev extra makes `pip install
-    # -e ".[dev]"` unsatisfiable on those jobs.
+    # Kept unpinned here; the type gate pins them exactly in the Lint
+    # workflow, which is the one place it runs.
     "types-requests>=2.31",
     "ruff>=0.1.0",
     "mypy>=1.6.0",
@@ -86,18 +83,18 @@ megabasterd_cli = ["py.typed", "native/windows/*.c"]
 
 [tool.black]
 line-length = 100
-target-version = ["py39", "py310", "py311", "py312"]
+target-version = ["py310", "py311", "py312"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM"]
 ignore = ["E501", "B008"]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false

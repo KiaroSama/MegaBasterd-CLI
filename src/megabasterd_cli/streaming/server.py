@@ -22,8 +22,8 @@ import mimetypes
 import socket
 import threading
 import time
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Callable
 from urllib.parse import parse_qs, quote, urlsplit
 
 import requests
