@@ -5,9 +5,11 @@ from __future__ import annotations
 import logging
 import os
 import re
+import subprocess
 import sys
 import time
 import uuid
+from contextlib import suppress
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -132,6 +134,56 @@ class RedactingFormatter(logging.Formatter):
         return redact_log_text(super().format(record))
 
 
+def _owner_only(path: str) -> None:
+    """Make `path` exist and be readable only by its owner, before it is written.
+
+    Redaction is the guard for what lands in the log; this is defence in depth
+    for what redaction misses, so a failure here must never stop logging.
+    """
+    # sys.platform (not os.name) so type checkers narrow away the branch that
+    # cannot exist on the platform they are checking.
+    if sys.platform == "win32":
+        if os.path.exists(path):
+            return
+        Path(path).touch()
+        # ponytail: icacls subprocess instead of SetNamedSecurityInfo via ctypes -
+        # it runs once per file creation, so swap only if that cost shows up.
+        with suppress(OSError, subprocess.SubprocessError):
+            import getpass
+
+            subprocess.run(
+                # /inheritance:r drops the inherited (world/Users) ACEs; /grant:r
+                # then leaves the current account as the only entry.
+                ["icacls", path, "/inheritance:r", "/grant:r", f"{getpass.getuser()}:(F)"],
+                capture_output=True,
+                check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        return
+    # O_NOFOLLOW: never chmod through a symlink someone planted in the log dir.
+    # No O_EXCL, so an already-permissive file from an older run is tightened too.
+    fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+    finally:
+        os.close(fd)
+
+
+class OwnerOnlyRotatingFileHandler(RotatingFileHandler):
+    """RotatingFileHandler that never leaves a world-readable window.
+
+    The base class opens through the ambient umask, so a typical 0o022 umask
+    published the log as 0o644. Rotation targets inherit the mode of the primary
+    file (rollover is a rename), so pre-creating each opened file owner-only
+    covers the backups too.
+    """
+
+    def _open(self):
+        with suppress(OSError):
+            _owner_only(self.baseFilename)
+        return super()._open()
+
+
 def _register_shutdown_log() -> None:
     global _shutdown_log_registered
     if _shutdown_log_registered:
@@ -209,7 +261,7 @@ def setup_logging(
 
     if log_file:
         log_file.parent.mkdir(parents=True, exist_ok=True)
-        fh = RotatingFileHandler(
+        fh = OwnerOnlyRotatingFileHandler(
             log_file,
             maxBytes=max_bytes,
             backupCount=backup_count,
