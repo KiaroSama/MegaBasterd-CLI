@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import click
 
@@ -134,7 +135,7 @@ def crypter_make_link(
         print_error("MEGA_URL must be a valid MEGA link.")
         return
 
-    payload: dict[str, object] = {"m": "add", "link": mega_url}
+    payload: dict[str, Any] = {"m": "add", "link": mega_url}
     if password:
         payload["password"] = password
         # Some servers also accept the older field name `pass`.

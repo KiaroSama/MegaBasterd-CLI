@@ -16,6 +16,7 @@ import contextlib
 import ipaddress
 import json
 import re
+from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from .links import (
@@ -466,7 +467,9 @@ def _megacrypter_api_url(parsed: ParsedLink) -> str:
 
 def _post_megacrypter(
     parsed: ParsedLink,
-    payload: dict[str, object],
+    # `Any`, not `object`: these are heterogeneous JSON values on their
+    # way to `requests.post(json=...)`, and `object` is not JSON-compatible.
+    payload: dict[str, Any],
     timeout: int,
     selector=None,  # ProxySelector | None
 ) -> dict:

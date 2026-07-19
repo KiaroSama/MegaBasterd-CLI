@@ -44,6 +44,9 @@ dev = [
     "pytest-cov>=4.1.0",
     "pytest-asyncio>=0.21.0",
     "black>=23.9.0,<26",
+    # Pinned so the required mypy gate checks the SAME thing on every
+    # runner; without stubs it silently degraded to import-untyped.
+    "types-requests>=2.31",
     "ruff>=0.1.0",
     "mypy>=1.6.0",
     "pre-commit>=3.5.0",
