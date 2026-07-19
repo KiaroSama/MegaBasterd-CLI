@@ -15,7 +15,6 @@ Uploading a file to MEGA:
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import logging
 import os
 import threading
@@ -26,41 +25,42 @@ from pathlib import Path
 from typing import Callable
 
 import requests
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
-from ..proxy.selector import ProxyRequiredError, ProxySelector
+from ..proxy.selector import ProxySelector
 from ..utils.helpers import sanitize_filename
 from ..utils.speed import RollingSpeedMeter, make_limiter
-from .chunks import Chunk, chunk_mac, combine_chunk_macs, condense_mac, iter_chunks
+from . import upload_identity as _identity
+from . import upload_transport as _transport
+from . import upload_tree as _tree
+from .chunks import combine_chunk_macs, condense_mac, iter_chunks
 from .crypto import (
     a32_to_bytes,
     aes_key_wrap_encrypt,
     b64_url_encode,
-    ctr_offset_to_counter,
     encrypt_attributes,
-    make_ctr_cipher,
     pack_file_key,
 )
-from .errors import TransferCancelled, TransferError
+from .errors import MegaError, TransferError
+from .responses import _expect_field, _expect_mapping
 from .state import TransferState, clear_state, load_state, save_state, snapshot_state
 
 log = logging.getLogger(__name__)
 
-UPLOAD_URL_EXPIRY_STATUS = {403, 404, 410, 509}
+# --- Re-exports -----------------------------------------------------------
+# This module stays THE entry point for uploads: every name that was ever
+# importable from it still is, so existing imports and monkeypatch targets
+# (including `uploader.requests`) keep working after the responsibility split.
+walk_upload_entries = _tree.walk_upload_entries
 
-# An upload endpoint answers a chunk POST with either an empty body or a small
-# (~27 byte) completion token. Reading it unbounded would let a broken or
-# hostile endpoint stream arbitrary data straight into memory.
-MAX_UPLOAD_RESPONSE_BYTES = 4096
+UPLOAD_URL_EXPIRY_STATUS = _transport.UPLOAD_URL_EXPIRY_STATUS
+MAX_UPLOAD_RESPONSE_BYTES = _transport.MAX_UPLOAD_RESPONSE_BYTES
+UploadUrlExpiredError = _transport.UploadUrlExpiredError
+_read_bounded_body = _transport.read_bounded_body
+_is_retryable_upload_error = _transport.is_retryable_upload_error
 
-# Versioned identity of the local source file stored in upload resume state.
-# v2 uses a FULL streaming SHA-256 of the content plus path/size/mtime_ns and
-# the platform file id, so resume/finalization detects any byte change
-# anywhere in the file. v1 (a sampled head/middle/tail fingerprint) is never
-# treated as a strict identity: v1 or missing identities restart fresh.
-SOURCE_IDENTITY_VERSION = 2
-_HASH_BLOCK = 1024 * 1024  # Streaming hash block size (bounded memory).
-_HASH_LOG_THRESHOLD = 256 * 1024 * 1024  # Log hashing cost above this size.
+SOURCE_IDENTITY_VERSION = _identity.SOURCE_IDENTITY_VERSION
+_HASH_BLOCK = _identity._HASH_BLOCK
+_HASH_LOG_THRESHOLD = _identity._HASH_LOG_THRESHOLD
 
 
 @dataclass
@@ -79,62 +79,6 @@ class UploadResult:
     size: int
     elapsed_seconds: float
     public_link: str | None = None
-
-
-def walk_upload_entries(root: Path) -> tuple[list[Path], int]:
-    """Sorted ``rglob("*")`` of `root` with every symlink skipped.
-
-    A symlinked FILE passes `is_file()` and would be uploaded, publishing
-    whatever it points at (`notes.lnk -> ~/.ssh/id_rsa`); a symlinked DIRECTORY
-    would be recreated as an empty remote folder, silently producing an
-    incomplete tree. Anything below a skipped symlinked directory is skipped
-    too. Returns the kept entries and how many were skipped, so callers can
-    tell the user the upload is deliberately incomplete.
-    """
-    kept: list[Path] = []
-    skipped_dirs: set[Path] = set()
-    skipped = 0
-    # Sorting puts a parent directly before its children, so a symlinked
-    # directory is always recorded before the entries underneath it.
-    for path in sorted(root.rglob("*")):
-        if path.is_symlink():
-            skipped_dirs.add(path)
-            skipped += 1
-            continue
-        if skipped_dirs and any(parent in skipped_dirs for parent in path.parents):
-            skipped += 1
-            continue
-        kept.append(path)
-    return kept, skipped
-
-
-def _read_bounded_body(resp: requests.Response, limit: int = MAX_UPLOAD_RESPONSE_BYTES) -> bytes:
-    """Read at most `limit` bytes from a streamed upload response body."""
-    body = b""
-    for block in resp.iter_content(chunk_size=limit + 1):
-        body += block
-        if len(body) > limit:
-            raise TransferError(
-                message=f"Upload endpoint returned more than {limit} bytes instead of a token"
-            )
-    return body
-
-
-def _is_retryable_upload_error(exc: BaseException) -> bool:
-    """Retry transport hiccups only.
-
-    `TransferError` is also the base of deterministic failures — a missing
-    proxy under force mode (`ProxyRequiredError`) or a deliberate cancellation
-    — and retrying those only burns five exponential backoffs before returning
-    the same answer.
-    """
-    if isinstance(exc, (ProxyRequiredError, TransferCancelled)):
-        return False
-    return isinstance(exc, (requests.ConnectionError, requests.Timeout, TransferError))
-
-
-class UploadUrlExpiredError(Exception):
-    """Raised when an upload slot is no longer usable and must be refreshed."""
 
 
 class UploadInProgressError(TransferError):
@@ -199,6 +143,22 @@ class MegaUploader:
 
     def stop(self) -> None:
         self._stop_event.set()
+
+    def _request_upload_url(self, size: int) -> str:
+        """Request an upload slot and return its base URL, shape-checked.
+
+        Every upload path (fresh slot, expiry refresh, zero-byte slot,
+        zero-byte refresh) used to read `upload_info["p"]` unguarded, so a
+        malformed or hostile `a:u` answer escaped as a raw `KeyError: 'p'` /
+        `TypeError` and reached the user as `Error: 'p'`. Validating once,
+        here, covers all four - the same discipline `core/responses.py`
+        applies with these helpers and `core/api.py` applies in `_parse_body`.
+        """
+        what = "upload slot request"
+        url = _expect_field(_expect_mapping(self.api.request_upload(size), what), "p", str, what)
+        if not url:
+            raise MegaError(message=f"Malformed MEGA response for {what}: 'p' is empty")
+        return url
 
     def _reset_per_file_state(self) -> None:
         """Clear every per-file mutable field so a prior file (failed, canceled,
@@ -343,8 +303,7 @@ class MegaUploader:
 
         if state is None:
             # Request a fresh upload slot
-            upload_info = self.api.request_upload(file_size)
-            upload_url = upload_info["p"]
+            upload_url = self._request_upload_url(file_size)
             self._completion_token = None
             state = TransferState(
                 transfer_type="upload",
@@ -463,8 +422,7 @@ class MegaUploader:
                             )
                         ) from exc
                     refreshed_upload_url = True
-                    upload_info = self.api.request_upload(file_size)
-                    upload_url = upload_info["p"]
+                    upload_url = self._request_upload_url(file_size)
                     state.metadata["upload_url"] = upload_url
                     state.metadata.pop("completion_token", None)
                     state.completed_chunks.clear()
@@ -593,8 +551,7 @@ class MegaUploader:
         and before the node is registered, so a file that changed, grew, was
         replaced, or disappeared mid-flight is never registered.
         """
-        upload_info = self.api.request_upload(0)
-        upload_url = upload_info["p"]
+        upload_url = self._request_upload_url(0)
         token: bytes | None = None
         for attempt in range(2):
             request_proxies, picked_proxy = self._proxies_for_request()
@@ -617,8 +574,7 @@ class MegaUploader:
             finally:
                 resp.close()
             if status in UPLOAD_URL_EXPIRY_STATUS and attempt == 0:
-                upload_info = self.api.request_upload(0)
-                upload_url = upload_info["p"]
+                upload_url = self._request_upload_url(0)
                 continue
             if status != 200:
                 if picked_proxy and self.proxy_pool is not None:
@@ -669,261 +625,20 @@ class MegaUploader:
             elapsed_seconds=time.monotonic() - op_start,
         )
 
-    @staticmethod
-    def _upload_state_destination(source: Path) -> Path:
-        from ..config import data_dir
+    # --- Source identity / resume-state addressing ------------------------
+    # Real implementations live in `upload_identity`; these thin static
+    # delegates keep `MegaUploader._source_identity(...)` and friends working
+    # for every existing caller and test.
+    _upload_state_destination = staticmethod(_identity.upload_state_destination)
+    _file_sha256 = staticmethod(_identity.file_sha256)
+    _source_identity = staticmethod(_identity.source_identity)
+    _identities_match = staticmethod(_identity.identities_match)
+    _is_resumable_upload_state = staticmethod(_identity.is_resumable_upload_state)
 
-        identity = f"{source.resolve()}|{source.stat().st_size}".encode("utf-8", errors="replace")
-        digest = hashlib.sha256(identity).hexdigest()[:24]
-        return data_dir() / "upload-state" / f"{sanitize_filename(source.name)}.{digest}.upload"
+    # --- Directory walking / whole-tree upload ----------------------------
+    upload_directory = _tree.upload_directory
 
-    @staticmethod
-    def _file_sha256(source: Path, size: int, stop_event: threading.Event | None = None) -> str:
-        """Full streaming SHA-256 of the file content in bounded memory.
-
-        Reads fixed-size blocks (never the whole file), stays responsive to
-        `stop()` cancellation, and logs the cost for very large files so the
-        hashing phase is visible.
-        """
-        if size >= _HASH_LOG_THRESHOLD:
-            log.info(
-                "Computing full-file hash of %s (%d bytes) for resume identity...",
-                source.name,
-                size,
-            )
-        h = hashlib.sha256()
-        with open(source, "rb") as f:
-            while True:
-                if stop_event is not None and stop_event.is_set():
-                    raise TransferError(message="Upload canceled while hashing the source file")
-                block = f.read(_HASH_BLOCK)
-                if not block:
-                    break
-                h.update(block)
-        return h.hexdigest()
-
-    @classmethod
-    def _source_identity(cls, source: Path, stop_event: threading.Event | None = None) -> dict:
-        """Snapshot the properties that must be unchanged to resume/finalize."""
-        st = source.stat()
-        identity: dict = {
-            "v": SOURCE_IDENTITY_VERSION,
-            "path": str(source.resolve()),
-            "size": st.st_size,
-            "mtime_ns": st.st_mtime_ns,
-            "sha256": cls._file_sha256(source, st.st_size, stop_event),
-        }
-        # Platform file identity (inode / NTFS file index) when available.
-        if getattr(st, "st_ino", 0):
-            identity["file_id"] = f"{getattr(st, 'st_dev', 0)}:{st.st_ino}"
-        return identity
-
-    @staticmethod
-    def _identities_match(recorded: dict | None, current: dict) -> bool:
-        if not isinstance(recorded, dict):
-            return False
-        if recorded.get("v") != SOURCE_IDENTITY_VERSION:
-            # v1 sampled fingerprints (or unknown versions) are NOT a strict
-            # identity; never treat them as proof of an unchanged file.
-            return False
-        for field in ("path", "size", "mtime_ns", "sha256"):
-            if recorded.get(field) != current.get(field):
-                return False
-        # Compare the platform file id only when both sides recorded one.
-        recorded_id, current_id = recorded.get("file_id"), current.get("file_id")
-        return not (recorded_id and current_id and recorded_id != current_id)
-
-    def _is_resumable_upload_state(
-        self, state: TransferState, source: Path, file_size: int, identity: dict
-    ) -> bool:
-        """Resume only when the state provably belongs to this exact file."""
-        if state.transfer_type != "upload":
-            return False
-        if state.total_size != file_size or state.source != str(source):
-            return False
-        return self._identities_match((state.metadata or {}).get("source_identity"), identity)
-
-    def upload_directory(
-        self,
-        source_dir: Path,
-        target_handle: str | None = None,
-        on_progress: Callable[[UploadProgress], None] | None = None,
-        on_file_done: Callable[[UploadResult, Path], None] | None = None,
-        keep_going: bool = False,
-        on_manifest: Callable[[list[tuple[Path, int]]], None] | None = None,
-        on_file_progress: Callable[[Path, UploadProgress], None] | None = None,
-    ) -> list[UploadResult]:
-        """Upload an entire local directory tree, preserving structure.
-
-        Creates remote folders as needed and uploads each file in place.
-        `on_manifest` receives the complete `(path, size)` file list before any
-        byte is uploaded; `on_file_progress` identifies which file a progress
-        report belongs to. Remote directory creation is not part of the byte
-        totals.
-        """
-        self.last_directory_failures = []
-        if not source_dir.is_dir():
-            raise FileNotFoundError(f"Not a directory: {source_dir}")
-
-        # Complete file manifest first: total files and bytes are known before
-        # any upload starts. Symlinks are excluded, so the manifest is the
-        # truth about what will actually be uploaded.
-        entries, skipped_links = walk_upload_entries(source_dir)
-        if skipped_links:
-            log.warning(
-                "Skipped %d symlink(s) under %s; symlinked files are never uploaded, "
-                "so the remote tree is deliberately incomplete.",
-                skipped_links,
-                source_dir,
-            )
-        if on_manifest:
-            on_manifest([(p, p.stat().st_size) for p in entries if p.is_file()])
-
-        base_parent = target_handle or self.client.find_root()
-        if not base_parent:
-            raise TransferError(message="No target folder available")
-
-        # Map local Path → remote handle
-        handle_for: dict[Path, str] = {source_dir: base_parent}
-        # Create the root remote folder
-        root_handle = self.client.mkdir(source_dir.name, parent_handle=base_parent)
-        handle_for[source_dir] = root_handle
-
-        results: list[UploadResult] = []
-        failures: list[str] = []
-        failed_dirs: set[Path] = set()
-        for local_path in entries:
-            if any(parent in failed_dirs for parent in local_path.parents):
-                failures.append(f"{local_path}: parent folder creation failed")
-                continue
-            try:
-                if local_path.is_dir():
-                    parent_remote = handle_for.get(local_path.parent, root_handle)
-                    handle_for[local_path] = self.client.mkdir(
-                        local_path.name, parent_handle=parent_remote
-                    )
-                elif local_path.is_file():
-                    parent_remote = handle_for.get(local_path.parent, root_handle)
-
-                    def _file_progress(p: UploadProgress, fp: Path = local_path) -> None:
-                        if on_file_progress:
-                            on_file_progress(fp, p)
-                        if on_progress:
-                            on_progress(p)
-
-                    result = self.upload_file(
-                        local_path,
-                        target_handle=parent_remote,
-                        on_progress=(_file_progress if (on_file_progress or on_progress) else None),
-                    )
-                    results.append(result)
-                    if on_file_done:
-                        on_file_done(result, local_path)
-            except Exception as exc:  # noqa: BLE001
-                log.error("Failed to upload %s: %s", local_path, exc)
-                failures.append(f"{local_path}: {exc}")
-                if local_path.is_dir():
-                    failed_dirs.add(local_path)
-
-        self.last_directory_failures = list(failures)
-        if failures and not keep_going:
-            sample = "; ".join(failures[:3])
-            more = "" if len(failures) <= 3 else f"; and {len(failures) - 3} more"
-            raise TransferError(message=f"{len(failures)} upload item(s) failed: {sample}{more}")
-
-        return results
-
-    @retry(
-        retry=retry_if_exception(_is_retryable_upload_error),
-        stop=stop_after_attempt(5),
-        wait=wait_exponential(multiplier=2, min=2, max=30),
-        reraise=True,
-    )
-    def _upload_chunk(
-        self,
-        upload_url: str,
-        source: Path,
-        chunk: Chunk,
-        aes_key: bytes,
-        nonce: bytes,
-        state: TransferState,
-        total_chunks: int,
-    ) -> None:
-        """Read, encrypt, POST one chunk."""
-        if self._stop_event.is_set():
-            return
-
-        with open(source, "rb") as f:
-            f.seek(chunk.offset)
-            plaintext = f.read(chunk.size)
-        if len(plaintext) != chunk.size:
-            raise TransferError(message=f"Local chunk {chunk.index} short read")
-
-        # Compute MAC on plaintext
-        mac = chunk_mac(plaintext, aes_key, nonce)
-
-        # Encrypt with AES-CTR
-        cipher = make_ctr_cipher(
-            aes_key,
-            nonce,
-            initial_value=ctr_offset_to_counter(chunk.offset),
-        )
-        encrypted = cipher.encrypt(plaintext)
-
-        self.limiter.consume(len(encrypted))
-
-        put_url = f"{upload_url}/{chunk.offset}"
-        request_proxies, picked_proxy = self._proxies_for_request()
-        try:
-            resp = requests.post(
-                put_url,
-                data=encrypted,
-                timeout=self.timeout,
-                proxies=request_proxies,
-                headers={"User-Agent": self.user_agent},
-                stream=True,
-            )
-        except (requests.ConnectionError, requests.Timeout):
-            if picked_proxy and self.proxy_pool is not None:
-                self.proxy_pool.report_failure(picked_proxy)
-            raise
-        if resp.status_code in UPLOAD_URL_EXPIRY_STATUS:
-            resp.close()
-            raise UploadUrlExpiredError(f"Upload URL expired on chunk {chunk.index}")
-        if resp.status_code != 200:
-            if picked_proxy and self.proxy_pool is not None:
-                self.proxy_pool.report_failure(picked_proxy)
-            resp.close()
-            raise TransferError(message=f"Upload chunk {chunk.index} HTTP {resp.status_code}")
-        if picked_proxy and self.proxy_pool is not None:
-            self.proxy_pool.report_success(picked_proxy)
-
-        # The MEGA upload endpoint returns a non-empty body ONLY for the
-        # chunk that contains the last byte of the file — this is the
-        # completion token used to finalise the upload. Save it whenever
-        # we see a non-empty body, regardless of which worker finishes
-        # last; otherwise a race between the offset-final chunk and any
-        # earlier chunk causes the token to be dropped.
-        try:
-            body = _read_bounded_body(resp)
-        finally:
-            resp.close()
-        # Data before state: an upload has no local destination to flush, so
-        # its durability point is the HTTP 200 above - the endpoint already
-        # holds the chunk before the state below claims it does. The ordering
-        # is therefore satisfied by construction here; `save_state` enforces
-        # the equivalent flush for a download's destination file.
-        with self._lock:
-            state.mark_chunk_done(chunk.index, mac)
-            self._bytes_done += chunk.size
-            self._chunks_done += 1
-            bytes_done_now = self._bytes_done
-            if body:
-                self._completion_token = body
-                state.metadata["completion_token"] = body.hex()
-            should_save = self._chunks_done % 8 == 0 or bool(body)
-            state_to_save = snapshot_state(state) if should_save else None
-        # Feed the rolling meter outside the state lock (it has its own).
-        self._speed_meter.update(bytes_done_now)
-        if should_save:
-            save_state(state_to_save)
+    # --- Chunk transport ---------------------------------------------------
+    # Assigned (not wrapped) so the tenacity decorator stays reachable as
+    # `MegaUploader._upload_chunk.retry_with(...)`, which tests rely on.
+    _upload_chunk = _transport.upload_chunk

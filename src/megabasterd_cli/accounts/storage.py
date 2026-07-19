@@ -19,6 +19,7 @@ import contextlib
 import json
 import logging
 import os
+import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
@@ -291,7 +292,18 @@ class AccountStorage:
             os.fsync(f.fileno())
             tmp = f.name
         try:
-            os.replace(tmp, self.path)
+            # Same bounded retry as ConfigStore.save: on Windows an antivirus
+            # or indexer holding accounts.json open makes replace fail with a
+            # transient PermissionError, and losing a vault write is worse
+            # than losing a config write.
+            for attempt in range(5):
+                try:
+                    os.replace(tmp, self.path)
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
         except BaseException:
             # Includes KeyboardInterrupt: a failed replace (file held open by
             # antivirus, disk full) must not orphan accounts.json.*.tmp next to

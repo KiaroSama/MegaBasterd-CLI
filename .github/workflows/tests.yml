@@ -63,6 +63,18 @@ jobs:
           src/megabasterd_cli/utils/selection.py
           src/megabasterd_cli/utils/filelock.py
           src/megabasterd_cli/utils/redaction.py
+          src/megabasterd_cli/core/nodes.py
+          src/megabasterd_cli/core/auth.py
+          src/megabasterd_cli/core/session_store.py
+          src/megabasterd_cli/core/download_verify.py
+          src/megabasterd_cli/core/upload_identity.py
+          src/megabasterd_cli/core/upload_tree.py
+          src/megabasterd_cli/core/range_validation.py
+          src/megabasterd_cli/core/crypter.py
+          src/megabasterd_cli/core/splitter.py
+          src/megabasterd_cli/proxy/selector.py
+          src/megabasterd_cli/utils/corruption.py
+          src/megabasterd_cli/launcher_menu.py
 
       - name: Type check with mypy (advisory, full tree)
         run: mypy src/megabasterd_cli --ignore-missing-imports
