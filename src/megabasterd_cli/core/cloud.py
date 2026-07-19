@@ -62,19 +62,21 @@ class CloudOperations(NodeOperations):
         node = self.find_node(handle=handle)
         if not node:
             raise MegaError(message=f"Node not found: {handle}")
+        # Resolve the wrapping key in the SAME branch that proves which one
+        # exists; recomputing the condition later just to pick a key made the
+        # invariant impossible to follow (and impossible to type-check).
         if node.is_file and node.file_key_a32:
             aes_key, _, _ = unpack_file_key(node.file_key_a32)
+            raw_key = a32_to_bytes(node.file_key_a32)
         elif node.decrypted_key:
             aes_key = node.decrypted_key[:16]
+            raw_key = node.decrypted_key
         else:
             raise MegaError(message="Cannot rename: missing node key")
 
         enc_attrs = encrypt_attributes({"n": new_name}, aes_key)
         # Re-wrap the original raw key with the master key (key-wrap mode)
-        wrapped_raw = aes_key_wrap_encrypt(
-            a32_to_bytes(node.file_key_a32) if node.file_key_a32 else node.decrypted_key,
-            self.session.master_key,
-        )
+        wrapped_raw = aes_key_wrap_encrypt(raw_key, self.session.master_key)
         self.api.rename_node(
             handle=handle,
             encrypted_attrs=b64_url_encode(enc_attrs),

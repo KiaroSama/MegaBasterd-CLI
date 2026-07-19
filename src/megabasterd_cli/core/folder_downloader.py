@@ -27,7 +27,7 @@ from .crypto import (
 )
 from .downloader import DownloadProgress, DownloadResult, MegaDownloader
 from .errors import NonRetryableTransferError, TransferError
-from .links import LinkType, parse_link
+from .links import LinkType, parse_link, require_link_key
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ class MegaFolderDownloader:
         if parsed.type not in (LinkType.FOLDER, LinkType.FOLDER_IN_FOLDER):
             raise ValueError(f"Link is not a folder share: {parsed.type}")
 
-        folder_key = a32_to_bytes(str_to_a32(parsed.key))
+        folder_key = a32_to_bytes(str_to_a32(require_link_key(parsed, "folder download")))
         listing = self.api.get_public_folder_listing(parsed.public_id)
         raw_nodes = listing.get("f", [])
 
@@ -156,7 +156,7 @@ class MegaFolderDownloader:
         if parsed.type != LinkType.FILE_IN_FOLDER or not parsed.subpath:
             raise ValueError(f"Link is not a node inside a folder share: {parsed.type}")
 
-        folder_key = a32_to_bytes(str_to_a32(parsed.key))
+        folder_key = a32_to_bytes(str_to_a32(require_link_key(parsed, "folder download")))
         listing = self.api.get_public_folder_listing(parsed.public_id)
         nodes = self._decrypt_folder_nodes(listing.get("f", []), folder_key)
         if not nodes:
@@ -201,7 +201,7 @@ class MegaFolderDownloader:
         if parsed.type != LinkType.FILE_IN_FOLDER or not parsed.subpath:
             raise ValueError(f"Link is not a file inside a folder share: {parsed.type}")
 
-        folder_key = a32_to_bytes(str_to_a32(parsed.key))
+        folder_key = a32_to_bytes(str_to_a32(require_link_key(parsed, "folder download")))
         listing = self.api.get_public_folder_listing(parsed.public_id)
         nodes = self._decrypt_folder_nodes(listing.get("f", []), folder_key)
         if not nodes:
@@ -547,6 +547,8 @@ class MegaFolderDownloader:
 
         from .crypto import unpack_file_key
 
+        if node.raw_key_a32 is None:
+            raise TransferError(message=f"No decryption key for {node.name}")
         aes_key, nonce, mac_iv_a32 = unpack_file_key(node.raw_key_a32)
 
         # Closure that the downloader can call when the URL expires
@@ -559,7 +561,7 @@ class MegaFolderDownloader:
             )
             if "g" not in fresh:
                 raise TransferError(message=f"Resolver got no URL for {node.handle}")
-            return fresh["g"]
+            return str(fresh["g"])
 
         return self.downloader._run_download(
             cdn_url=info["g"],

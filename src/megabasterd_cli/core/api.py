@@ -24,6 +24,7 @@ from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait
 
 from ..proxy.selector import ProxySelector
 from .errors import MegaError, RateLimitError, raise_for_code
+from .responses import _expect_mapping
 
 # --- Retry policy -----------------------------------------------------------
 # Actions whose replay has no side effects. Everything NOT listed here is
@@ -464,27 +465,36 @@ class MegaAPIClient:
     # ------------------------------------------------------------------
     def get_user_info(self) -> dict:
         """Get account info (requires session)."""
-        return self.request({"a": "ug"})
+        return _expect_mapping(self.request({"a": "ug"}), "get_user_info")
 
     def get_account_quota(self) -> dict:
         """Get bandwidth and storage quota usage."""
-        return self.request({"a": "uq", "strg": 1, "xfer": 1, "pro": 1})
+        return _expect_mapping(
+            self.request({"a": "uq", "strg": 1, "xfer": 1, "pro": 1}), "get_account_quota"
+        )
 
     def get_public_file_info(self, public_id: str) -> dict:
         """Get metadata for a public file link (returns size, encrypted attrs, download URL)."""
-        return self.request({"a": "g", "g": 1, "p": public_id})
+        return _expect_mapping(
+            self.request({"a": "g", "g": 1, "p": public_id}), "get_public_file_info"
+        )
 
     def get_public_folder_listing(self, public_id: str) -> dict:
         """Get the node listing inside a public folder."""
-        return self.request({"a": "f", "c": 1, "r": 1, "ca": 1}, extra_params={"n": public_id})
+        return _expect_mapping(
+            self.request({"a": "f", "c": 1, "r": 1, "ca": 1}, extra_params={"n": public_id}),
+            "get_public_folder_listing",
+        )
 
     def get_download_url(self, file_handle: str) -> dict:
         """Get a download URL for a file you own (uses session)."""
-        return self.request({"a": "g", "g": 1, "n": file_handle})
+        return _expect_mapping(
+            self.request({"a": "g", "g": 1, "n": file_handle}), "get_download_url"
+        )
 
     def request_upload(self, size: int) -> dict:
         """Get an upload URL slot for a file of the given size."""
-        return self.request({"a": "u", "s": size})
+        return _expect_mapping(self.request({"a": "u", "s": size}), "request_upload")
 
     def complete_upload(
         self,
@@ -494,19 +504,22 @@ class MegaAPIClient:
         wrapped_key: str,
     ) -> dict:
         """Tell MEGA that an upload is complete and register the new node."""
-        return self.request(
-            {
-                "a": "p",
-                "t": target_handle,
-                "n": [
-                    {
-                        "h": upload_token,
-                        "t": 0,  # 0 = file
-                        "a": encrypted_attrs,
-                        "k": wrapped_key,
-                    }
-                ],
-            }
+        return _expect_mapping(
+            self.request(
+                {
+                    "a": "p",
+                    "t": target_handle,
+                    "n": [
+                        {
+                            "h": upload_token,
+                            "t": 0,  # 0 = file
+                            "a": encrypted_attrs,
+                            "k": wrapped_key,
+                        }
+                    ],
+                }
+            ),
+            "complete_upload",
         )
 
     # ------------------------------------------------------------------
@@ -519,19 +532,22 @@ class MegaAPIClient:
         wrapped_key: str,
     ) -> dict:
         """Create a new folder under `parent_handle`."""
-        return self.request(
-            {
-                "a": "p",
-                "t": parent_handle,
-                "n": [
-                    {
-                        "h": "xxxxxxxx",  # MEGA replaces with the real handle
-                        "t": 1,  # 1 = folder
-                        "a": encrypted_attrs,
-                        "k": wrapped_key,
-                    }
-                ],
-            }
+        return _expect_mapping(
+            self.request(
+                {
+                    "a": "p",
+                    "t": parent_handle,
+                    "n": [
+                        {
+                            "h": "xxxxxxxx",  # MEGA replaces with the real handle
+                            "t": 1,  # 1 = folder
+                            "a": encrypted_attrs,
+                            "k": wrapped_key,
+                        }
+                    ],
+                }
+            ),
+            "create_folder",
         )
 
     def delete_node(self, handle: str) -> Any:
@@ -576,25 +592,29 @@ class MegaAPIClient:
         """
         if node_type not in (0, 1):
             raise ValueError(f"node_type must be 0 or 1, got {node_type!r}")
-        return self.request(
-            {
-                "a": "p",
-                "t": target_parent,
-                "n": [
-                    {
-                        "h": source_handle,
-                        "t": node_type,
-                        "a": encrypted_attrs,
-                        "k": wrapped_key,
-                    }
-                ],
-                "sm": 1,
-            },
-            extra_params={"n": share_handle},
+        return _expect_mapping(
+            self.request(
+                {
+                    "a": "p",
+                    "t": target_parent,
+                    "n": [
+                        {
+                            "h": source_handle,
+                            "t": node_type,
+                            "a": encrypted_attrs,
+                            "k": wrapped_key,
+                        }
+                    ],
+                    "sm": 1,
+                },
+                extra_params={"n": share_handle},
+            ),
+            "import_public_node",
         )
 
     def login_with_mfa(self, email: str, password_hash: str, mfa_code: str) -> dict:
         """Login including a TOTP/MFA code for accounts that require 2FA."""
-        return self.request(
-            {"a": "us", "user": email.lower(), "uh": password_hash, "mfa": mfa_code}
+        return _expect_mapping(
+            self.request({"a": "us", "user": email.lower(), "uh": password_hash, "mfa": mfa_code}),
+            "import_node_from_share",
         )

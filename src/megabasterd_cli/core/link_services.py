@@ -542,7 +542,7 @@ def _decrypt_megacrypter_password_info(body: dict, password: str | None) -> tupl
     salt = _std_b64_decode(parts[2])
     iv = _std_b64_decode(parts[3])
     info_key = PBKDF2(
-        password.encode("utf-8"),
+        password.encode("utf-8"),  # type: ignore[arg-type]  # bytes ok
         salt,
         dkLen=32,
         count=iterations,
@@ -592,7 +592,7 @@ def get_megacrypter_info(
 
     size_value = body.get("size")
     try:
-        size = int(size_value) if size_value not in (None, False, "") else None
+        size = int(str(size_value)) if size_value not in (None, False, "") else None
     except (TypeError, ValueError):
         size = None
 

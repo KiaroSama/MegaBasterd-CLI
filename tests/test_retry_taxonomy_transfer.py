@@ -18,6 +18,7 @@ from megabasterd_cli.core.downloader import CdnUrlExpired, _is_transient_chunk_f
 from megabasterd_cli.core.errors import (
     IntegrityError,
     NonRetryableTransferError,
+    RetryableTransferError,
     TransferCancelled,
     TransferError,
 )
@@ -31,6 +32,9 @@ from megabasterd_cli.proxy.selector import ProxyRequiredError
         pytest.param(TransferCancelled(message="cancelled"), id="cancellation"),
         pytest.param(NonRetryableTransferError(message="range"), id="protocol-violation"),
         pytest.param(IntegrityError(message="mac"), id="integrity"),
+        # An unclassified TransferError is now final too: the predicate is an
+        # allowlist, so anything not named as transient does not get replayed.
+        pytest.param(TransferError(message="unclassified"), id="unclassified-base"),
     ],
 )
 def test_deterministic_failures_are_not_retried(exc):
@@ -43,7 +47,7 @@ def test_deterministic_failures_are_not_retried(exc):
         pytest.param(requests.ConnectionError("reset"), id="connection-reset"),
         pytest.param(requests.Timeout("slow"), id="timeout"),
         pytest.param(CdnUrlExpired(message="expired"), id="cdn-url-expiry"),
-        pytest.param(TransferError(message="upstream 503"), id="generic-transfer"),
+        pytest.param(RetryableTransferError(message="upstream 503"), id="server-5xx"),
     ],
 )
 def test_transient_failures_are_still_retried(exc):

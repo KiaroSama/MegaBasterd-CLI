@@ -54,4 +54,4 @@ def _first_node_handle(result: Any, what: str) -> str:
     nodes = _expect_field(_expect_mapping(result, what), "f", list, what, default=[])
     if not nodes:
         return ""
-    return _expect_field(_expect_mapping(nodes[0], what), "h", str, what)
+    return str(_expect_field(_expect_mapping(nodes[0], what), "h", str, what))

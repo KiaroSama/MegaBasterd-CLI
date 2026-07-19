@@ -92,7 +92,15 @@ def upload_env(tmp_path, monkeypatch):
 
     def fake_post(url, data=b"", timeout=None, proxies=None, headers=None, stream=False):
         posts.append(url)
-        return _FakeResponse(b"COMPLETION")
+        # Faithful to the real endpoint: only the chunk holding the file's LAST
+        # byte returns a completion token. The double used to answer every
+        # chunk with one, which the uploader now rejects as a protocol
+        # violation - correctly, since any chunk could otherwise finalise.
+        offset = int(url.rsplit("/", 1)[-1])
+        source = tmp_path / "file.bin"
+        total = source.stat().st_size if source.exists() else offset + len(data)
+        final = offset + len(data) >= total
+        return _FakeResponse(b"COMPLETION" if final else b"")
 
     monkeypatch.setattr(uploader_module.requests, "post", fake_post)
     return SimpleNamespace(tmp_path=tmp_path, posts=posts)

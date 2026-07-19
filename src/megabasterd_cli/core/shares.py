@@ -93,7 +93,7 @@ class ShareOperations(NodeOperations):
         bytes are transferred: MEGA does a server-side copy by re-wrapping
         each node's key with the caller's master key.
         """
-        from .links import LinkType, parse_link
+        from .links import LinkType, parse_link, require_link_key
 
         if not self.session:
             raise AuthError(message="Not logged in")
@@ -106,7 +106,7 @@ class ShareOperations(NodeOperations):
         if not target:
             raise MegaError(message="No target folder for import")
 
-        folder_key = a32_to_bytes(str_to_a32(parsed.key))
+        folder_key = a32_to_bytes(str_to_a32(require_link_key(parsed, "importing a share")))
         listing = _expect_mapping(
             self.api.get_public_folder_listing(parsed.public_id), "share listing"
         )
@@ -177,7 +177,7 @@ class ShareOperations(NodeOperations):
         # of an included node so the hierarchy stays intact.
         if include:
             wanted = set(include)
-            keep: set[str] = set()
+            keep = set()
             for h in wanted:
                 node = by_handle.get(h)
                 while node is not None and node["h"] not in keep:

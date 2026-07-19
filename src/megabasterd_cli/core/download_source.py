@@ -27,7 +27,13 @@ from .link_services import (
     get_megacrypter_info,
     resolve_megacrypter_link,
 )
-from .links import LinkType, parse_link, resolve_encrypted_container_link, resolve_password_link
+from .links import (
+    LinkType,
+    parse_link,
+    require_link_key,
+    resolve_encrypted_container_link,
+    resolve_password_link,
+)
 
 log = logging.getLogger(__name__)
 
@@ -86,7 +92,7 @@ def resolve_download_source(
         info = dl._get_with_quota_wait(lambda: dl.api.get_public_file_info(parsed.public_id))
         if "g" not in info:
             raise TransferError(message=f"No download URL returned: {info}")
-        key_a32 = str_to_a32(parsed.key)
+        key_a32 = str_to_a32(require_link_key(parsed, "download"))
         encrypted_attrs = b64_url_decode(info.get("at", "") or "")
 
     cdn_url = info["g"]
@@ -122,7 +128,7 @@ def resolve_download_source(
             )
             if "g" not in fresh:
                 raise TransferError(message=f"Resolver got no URL: {fresh}")
-            return fresh["g"]
+            return str(fresh["g"])
 
     else:
         _resolver_public_id = parsed.public_id
@@ -131,7 +137,7 @@ def resolve_download_source(
             fresh = dl.api.get_public_file_info(_resolver_public_id)
             if "g" not in fresh:
                 raise TransferError(message=f"Resolver got no URL: {fresh}")
-            return fresh["g"]
+            return str(fresh["g"])
 
     return ResolvedSource(
         cdn_url=cdn_url,
@@ -157,7 +163,7 @@ def _resolve_folder_file(dl, parsed) -> tuple[dict, list[int], bytes]:
     file_handle = parsed.subpath
     if not file_handle:
         raise ValueError("FILE_IN_FOLDER link is missing the file handle")
-    folder_key = a32_to_bytes(str_to_a32(parsed.key))
+    folder_key = a32_to_bytes(str_to_a32(require_link_key(parsed, "download")))
 
     listing = dl._get_with_quota_wait(lambda: dl.api.get_public_folder_listing(folder_id))
     file_raw = next(

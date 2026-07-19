@@ -35,7 +35,7 @@ from ..core.crypto import (
     str_to_a32,
     unpack_file_key,
 )
-from ..core.links import parse_link
+from ..core.links import parse_link, require_link_key
 from ..core.range_validation import RangeNotHonoredError, validate_range_response
 from ..proxy.selector import ProxyRequiredError, ProxySelector
 from ..utils.helpers import sanitize_filename
@@ -193,7 +193,7 @@ class _StreamSource:
             #   4. Request the CDN URL for that specific node in the folder context
             folder_id = parsed.public_id
             file_handle = parsed.subpath
-            folder_key = a32_to_bytes(str_to_a32(parsed.key))
+            folder_key = a32_to_bytes(str_to_a32(require_link_key(parsed, "streaming")))
             listing = api.get_public_folder_listing(folder_id)
             file_raw = next(
                 (n for n in listing.get("f", []) if n.get("h") == file_handle and n.get("t") == 0),
@@ -221,7 +221,7 @@ class _StreamSource:
                 )
                 if "g" not in fresh:
                     raise RuntimeError(f"No refreshed CDN URL returned for {file_handle}: {fresh}")
-                return fresh["g"]
+                return str(fresh["g"])
 
             self._resolver = _resolver
             # The attribute blob lives on the listing node, not the get response.
@@ -237,14 +237,14 @@ class _StreamSource:
                     raise RuntimeError(
                         f"No refreshed CDN URL returned for {parsed.public_id}: {fresh}"
                     )
-                return fresh["g"]
+                return str(fresh["g"])
 
             self._resolver = _resolver
-            key_a32 = str_to_a32(parsed.key)
+            key_a32 = str_to_a32(require_link_key(parsed, "streaming"))
             encrypted_attrs = b64_url_decode(info.get("at", "") or "")
 
-        self.cdn_url: str = info["g"]
-        self.size: int = int(info["s"])
+        self.cdn_url = str(info["g"])
+        self.size = int(info["s"])
         self.aes_key, self.nonce, _ = unpack_file_key(key_a32)
         attrs = decrypt_attributes(encrypted_attrs, self.aes_key) or {}
         self.filename = sanitize_filename(attrs.get("n") or parsed.public_id)
