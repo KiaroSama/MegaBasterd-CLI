@@ -393,7 +393,7 @@ Useful logging config keys:
 
 ### Dependency install fails
 
-Check that Python 3.9+ is installed and that the shell has internet access.
+Check that Python 3.10+ is installed and that the shell has internet access.
 Then run:
 
 ```powershell

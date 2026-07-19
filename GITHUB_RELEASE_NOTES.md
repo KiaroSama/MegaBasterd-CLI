@@ -36,7 +36,7 @@ No intentional breaking CLI changes are included.
 
 ## Requirements
 
-- Python 3.9 or newer.
+- Python 3.10 or newer.
 - PowerShell 5.1 or PowerShell 7+ for `Run.ps1`.
 - Internet access for MEGA transfers and first-time dependency installation.
 

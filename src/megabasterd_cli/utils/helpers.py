@@ -5,9 +5,8 @@ from __future__ import annotations
 import os
 import re
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Callable
 
 _INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 # NAME_MAX is 255 *bytes* on ext4/APFS, not 255 characters. Cap below it so the

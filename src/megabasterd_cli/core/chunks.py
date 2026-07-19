@@ -139,7 +139,9 @@ def combine_chunk_macs(chunk_macs: list[bytes], aes_key: bytes) -> bytes:
     cipher_iv = b"\x00" * 16
     for mac in chunk_macs:
         # XOR state with chunk MAC, then AES-CBC encrypt one block.
-        block = bytes(a ^ b for a, b in zip(state, mac))
+        # strict: a short MAC would silently shorten the block and produce
+        # a wrong file MAC rather than an error.
+        block = bytes(a ^ b for a, b in zip(state, mac, strict=True))
         cipher = AES.new(aes_key, AES.MODE_CBC, cipher_iv)
         state = cipher.encrypt(block)
     return state

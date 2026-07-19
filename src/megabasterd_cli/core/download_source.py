@@ -14,9 +14,9 @@ validated by the caller before any allocation happens.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from ..utils.helpers import ensure_within_directory, sanitize_filename
 from .crypto import b64_url_decode, decrypt_attributes, str_to_a32, unpack_file_key

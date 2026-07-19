@@ -330,7 +330,10 @@ def decrypt_password_link(encoded_blob: str, password: str) -> tuple[int, bytes,
     if not _hmac.compare_digest(computed_hmac, expected_hmac):
         raise ValueError("Wrong password (HMAC verification failed)")
 
-    plain_key = bytes(a ^ b for a, b in zip(encrypted_key, aes_xor_key[:key_len]))
+    # strict: a truncated link would otherwise yield a SHORT key that is
+    # silently wrong instead of an error (the HMAC above already covers
+    # this case, so strict is the belt to that braces).
+    plain_key = bytes(a ^ b for a, b in zip(encrypted_key, aes_xor_key[:key_len], strict=True))
     return node_type, public_handle, plain_key
 
 
@@ -352,7 +355,7 @@ def encrypt_password_link(
 
     salt = os.urandom(32)
     aes_xor_key, hmac_key = derive_password_link_keys(password, salt, algo=algo)
-    enc_key = bytes(a ^ b for a, b in zip(raw_key, aes_xor_key[:expected_len]))
+    enc_key = bytes(a ^ b for a, b in zip(raw_key, aes_xor_key[:expected_len], strict=True))
 
     body = bytes([algo, node_type]) + public_handle + salt + enc_key
     mac = _hmac.new(hmac_key, body, hashlib.sha256).digest()

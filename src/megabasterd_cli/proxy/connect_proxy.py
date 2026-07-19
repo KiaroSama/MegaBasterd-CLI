@@ -203,7 +203,7 @@ class _ProxyHandler:
             sock.settimeout(remaining)
             try:
                 chunk = sock.recv(4096)
-            except socket.timeout:
+            except TimeoutError:
                 return "", [], b""
             if not chunk:
                 break
