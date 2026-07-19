@@ -13,6 +13,15 @@ The downloader:
 CDN URLs returned by MEGA are time-limited. If a chunk request fails with one
 of the "URL expired" responses (403, 410, 509), the downloader transparently
 re-fetches a fresh URL via the supplied resolver and retries.
+
+This module is the entry point and owns the orchestration: quota recovery, CDN
+URL generation state, the destination claim, the worker pool, and the
+completion gate. The pieces it drives live next door and are re-exported here
+so the public surface is unchanged:
+
+* `download_source`    - link -> CDN URL, key, destination, refresh resolver
+* `download_transport` - one chunk over the wire (guards, decrypt, write, MAC)
+* `download_verify`    - declared-size refusal, resume-state match, file MAC
 """
 
 from __future__ import annotations
@@ -23,36 +32,23 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, cast
+from typing import Callable
 
 import requests
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from ..proxy.selector import ProxySelector
-from ..utils.helpers import (
-    available_disk_space,
-    claim_destination,
-    ensure_within_directory,
-    release_destination,
-    sanitize_filename,
-)
+from ..utils.helpers import available_disk_space, claim_destination, release_destination
 from ..utils.speed import RollingSpeedMeter, make_limiter
-from .chunks import (
-    MAX_CHUNKS,
-    MAX_FILE_SIZE,
-    Chunk,
-    chunk_count,
-    chunk_mac,
-    combine_chunk_macs,
-    condense_mac,
-    iter_chunks,
-)
-from .crypto import (
-    b64_url_decode,
-    decrypt_attributes,
-    make_ctr_cipher,
-    str_to_a32,
-    unpack_file_key,
+from .chunks import Chunk, iter_chunks
+from .download_source import ResolvedSource, resolve_download_source
+from .download_transport import URL_EXPIRY_STATUS, CdnUrlExpired, fetch_chunk
+from .download_verify import (
+    DeclaredSizeError,
+    InsufficientDiskSpaceError,
+    _validate_declared_size,
+    is_usable_download_state,
+    verify_file_integrity,
 )
 from .errors import (
     IntegrityError,
@@ -61,13 +57,7 @@ from .errors import (
     TransferCancelled,
     TransferError,
 )
-from .link_services import (
-    get_megacrypter_download_url,
-    get_megacrypter_info,
-    resolve_megacrypter_link,
-)
-from .links import LinkType, parse_link, resolve_encrypted_container_link, resolve_password_link
-from .range_validation import RangeNotHonoredError, validate_range_response
+from .range_validation import validate_range_response
 from .state import (
     TransferState,
     clear_state,
@@ -79,10 +69,17 @@ from .state import (
 
 log = logging.getLogger(__name__)
 
-
-# HTTP status codes that indicate the CDN URL has expired or is unusable
-# and should be re-fetched rather than retried as-is.
-URL_EXPIRY_STATUS = {403, 410, 509}
+__all__ = [
+    "CdnUrlExpired",
+    "DeclaredSizeError",
+    "DownloadProgress",
+    "DownloadResult",
+    "InsufficientDiskSpaceError",
+    "MegaDownloader",
+    "ResolvedSource",
+    "URL_EXPIRY_STATUS",
+    "validate_range_response",
+]
 
 
 @dataclass
@@ -104,44 +101,6 @@ class DownloadResult:
     size: int
     elapsed_seconds: float
     integrity_ok: bool
-
-
-class CdnUrlExpired(TransferError):  # noqa: N818 - internal retry sentinel name
-    """Raised when the CDN URL has expired and needs to be refreshed."""
-
-
-class DeclaredSizeError(NonRetryableTransferError):
-    """The remote declared a file size we refuse to plan a transfer around.
-
-    The size is not a fact, it is a claim: for a `mc://` link it comes from a
-    server the LINK chose. Retrying cannot change the answer, hence
-    non-retryable.
-    """
-
-
-class InsufficientDiskSpaceError(NonRetryableTransferError):
-    """The destination filesystem cannot hold the file we are about to preallocate."""
-
-
-def _validate_declared_size(file_size: object) -> int:
-    """Return a size we are willing to allocate a chunk plan for, or raise.
-
-    Called before ANY per-chunk work: the whole point is that the allocation
-    loop never starts. `bool` is rejected explicitly because it is an `int`
-    subclass and `True` would otherwise pass as a one-byte file.
-    """
-    if isinstance(file_size, bool) or not isinstance(file_size, int):
-        raise DeclaredSizeError(message=f"Declared file size is not an integer: {file_size!r}")
-    if file_size < 0:
-        raise DeclaredSizeError(message=f"Declared file size is negative: {file_size}")
-    if file_size > MAX_FILE_SIZE or chunk_count(file_size) > MAX_CHUNKS:
-        raise DeclaredSizeError(
-            message=(
-                f"Declared file size {file_size} exceeds the supported maximum "
-                f"{MAX_FILE_SIZE} bytes ({MAX_CHUNKS} chunks)"
-            )
-        )
-    return file_size
 
 
 def _is_transient_chunk_failure(exc: BaseException) -> bool:
@@ -308,176 +267,17 @@ class MegaDownloader:
         on_progress: Callable[[DownloadProgress], None] | None = None,
     ) -> DownloadResult:
         """Download a single MEGA public file link to `output_dir`."""
-        parsed = parse_link(url)
-
-        # Transparently resolve password / MegaCrypter wrappers down to a
-        # standard file/folder link.
-        if parsed.type == LinkType.PASSWORD_PROTECTED:
-            if not password:
-                raise ValueError("This link is password-protected; supply password=")
-            parsed = resolve_password_link(parsed, password)
-        elif parsed.type == LinkType.ENCRYPTED_CONTAINER:
-            parsed = resolve_encrypted_container_link(parsed)
-        elif parsed.type == LinkType.MEGACRYPTER:
-            mc_parsed = parsed
-            try:
-                parsed = resolve_megacrypter_link(
-                    parsed,
-                    timeout=self.timeout,
-                    password=password,
-                    selector=self._selector,
-                )
-            except ValueError as exc:
-                mc_info = get_megacrypter_info(
-                    mc_parsed,
-                    timeout=self.timeout,
-                    password=password,
-                    selector=self._selector,
-                )
-                if not mc_info.key or mc_info.size is None:
-                    raise ValueError("MegaCrypter metadata is missing key or size") from exc
-                cdn_url = get_megacrypter_download_url(
-                    mc_parsed,
-                    info=mc_info,
-                    timeout=self.timeout,
-                    password=password,
-                    selector=self._selector,
-                )
-                key_a32 = str_to_a32(mc_info.key)
-                aes_key, nonce, mac_iv_a32 = unpack_file_key(key_a32)
-                filename = rename_to or sanitize_filename(
-                    mc_info.name or mc_parsed.crypter_token or "megacrypter"
-                )
-                output_dir.mkdir(parents=True, exist_ok=True)
-                destination = output_dir / filename
-                ensure_within_directory(output_dir, destination)
-
-                def _resolver() -> str:
-                    return get_megacrypter_download_url(
-                        mc_parsed,
-                        info=mc_info,
-                        timeout=self.timeout,
-                        password=password,
-                        selector=self._selector,
-                    )
-
-                return self._run_download(
-                    cdn_url=cdn_url,
-                    file_size=mc_info.size,
-                    aes_key=aes_key,
-                    nonce=nonce,
-                    mac_iv_a32=mac_iv_a32,
-                    destination=destination,
-                    source=url,
-                    on_progress=on_progress,
-                    url_resolver=_resolver,
-                )
-
-        if parsed.type not in (LinkType.FILE, LinkType.FILE_IN_FOLDER):
-            raise ValueError(f"Link is not a single-file link: {parsed.type}")
-
-        if parsed.type == LinkType.FILE_IN_FOLDER:
-            # The link points to a node inside a public folder share. The
-            # public_id is the FOLDER's handle, not the file's; we must look
-            # up the file in the folder listing to get its wrapped key, and
-            # request the CDN URL with `n=<folder_id>` as an extra parameter.
-            from .crypto import a32_to_bytes, aes_key_wrap_decrypt, bytes_to_a32
-
-            folder_id = parsed.public_id
-            file_handle = parsed.subpath
-            if not file_handle:
-                raise ValueError("FILE_IN_FOLDER link is missing the file handle")
-            folder_key = a32_to_bytes(str_to_a32(parsed.key))
-
-            listing = self._get_with_quota_wait(
-                lambda: self.api.get_public_folder_listing(folder_id)
-            )
-            file_raw = next(
-                (n for n in listing.get("f", []) if n.get("h") == file_handle and n.get("t") == 0),
-                None,
-            )
-            if file_raw is None:
-                raise TransferError(
-                    message=f"File {file_handle!r} not in folder share {folder_id!r}"
-                )
-
-            raw_k = file_raw.get("k", "") or ""
-            _, wrapped = raw_k.split(":", 1) if ":" in raw_k else ("", raw_k)
-            if not wrapped:
-                raise TransferError(message=f"Empty wrapped key on {file_handle!r}")
-            key_bytes = aes_key_wrap_decrypt(b64_url_decode(wrapped), folder_key)
-            key_a32 = bytes_to_a32(key_bytes[:32])
-
-            info = self._get_with_quota_wait(
-                lambda: self.api.request(
-                    {"a": "g", "g": 1, "n": file_handle},
-                    extra_params={"n": folder_id},
-                )
-            )
-            if "g" not in info:
-                raise TransferError(message=f"No download URL returned for folder-file: {info}")
-            encrypted_attrs = b64_url_decode(file_raw.get("a", "") or "")
-        else:
-            info = self._get_with_quota_wait(
-                lambda: self.api.get_public_file_info(parsed.public_id)
-            )
-            if "g" not in info:
-                raise TransferError(message=f"No download URL returned: {info}")
-            key_a32 = str_to_a32(parsed.key)
-            encrypted_attrs = b64_url_decode(info.get("at", "") or "")
-
-        cdn_url = info["g"]
-        try:
-            file_size = int(info["s"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise DeclaredSizeError(
-                message=f"Upstream did not declare a usable file size: {info.get('s')!r}"
-            ) from exc
-        aes_key, nonce, mac_iv_a32 = unpack_file_key(key_a32)
-
-        # Decrypt the filename
-        attrs = decrypt_attributes(encrypted_attrs, aes_key)
-        original_name = (attrs or {}).get("n") or (
-            parsed.subpath if parsed.subpath else parsed.public_id
-        )
-        filename = rename_to or sanitize_filename(original_name)
-        destination = output_dir / filename
-        ensure_within_directory(output_dir, destination)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-
-        # Resolver that re-fetches a fresh CDN URL when the existing one expires
-        if parsed.type == LinkType.FILE_IN_FOLDER:
-            _resolver_folder_id = parsed.public_id
-            _resolver_file_handle = parsed.subpath
-
-            def _resolver() -> str:
-                fresh = self.api.request(
-                    {"a": "g", "g": 1, "n": _resolver_file_handle},
-                    extra_params={"n": _resolver_folder_id},
-                )
-                if "g" not in fresh:
-                    raise TransferError(message=f"Resolver got no URL: {fresh}")
-                return fresh["g"]
-
-        else:
-            _resolver_public_id = parsed.public_id
-
-            def _resolver() -> str:
-                fresh = self.api.get_public_file_info(_resolver_public_id)
-                if "g" not in fresh:
-                    raise TransferError(message=f"Resolver got no URL: {fresh}")
-                return fresh["g"]
-
+        resolved = resolve_download_source(self, url, output_dir, password, rename_to)
         return self._run_download(
-            cdn_url=cdn_url,
-            file_size=file_size,
-            aes_key=aes_key,
-            nonce=nonce,
-            mac_iv_a32=mac_iv_a32,
-            destination=destination,
+            cdn_url=resolved.cdn_url,
+            file_size=resolved.file_size,
+            aes_key=resolved.aes_key,
+            nonce=resolved.nonce,
+            mac_iv_a32=resolved.mac_iv_a32,
+            destination=resolved.destination,
             source=url,
             on_progress=on_progress,
-            url_resolver=_resolver,
+            url_resolver=resolved.url_resolver,
         )
 
     # ------------------------------------------------------------------
@@ -758,32 +558,16 @@ class MegaDownloader:
         all_chunks: list[Chunk],
     ) -> bool:
         """Return True only when a resume state matches this exact transfer."""
-        if not self.auto_resume:
-            return False
-        if state is None:
-            return False
-        if state.transfer_type != "download":
-            return False
-        if state.total_size != file_size:
-            return False
-        if state.source != source:
-            return False
-        if Path(state.destination) != destination:
-            return False
-        metadata = state.metadata or {}
-        if metadata.get("aes_key") and metadata.get("aes_key") != aes_key.hex():
-            return False
-        if metadata.get("nonce") and metadata.get("nonce") != nonce.hex():
-            return False
-        chunk_indexes = {c.index for c in all_chunks}
-        completed = set(state.completed_chunks)
-        if not completed:
-            return True
-        if not destination.exists() or destination.stat().st_size != file_size:
-            return False
-        if not completed.issubset(chunk_indexes):
-            return False
-        return all(state.get_chunk_mac(index) is not None for index in completed)
+        return is_usable_download_state(
+            auto_resume=self.auto_resume,
+            state=state,
+            destination=destination,
+            source=source,
+            file_size=file_size,
+            aes_key=aes_key,
+            nonce=nonce,
+            all_chunks=all_chunks,
+        )
 
     @retry(
         retry=retry_if_exception(_is_transient_chunk_failure),
@@ -801,127 +585,10 @@ class MegaDownloader:
     ) -> None:
         """Download one chunk, decrypt, write, MAC, update state.
 
-        Reads the current CDN URL fresh on every attempt so refreshes by other
-        workers propagate to this one.
+        The retry policy is declared here; the per-attempt body lives in
+        `download_transport.fetch_chunk`.
         """
-        if self._stop_event.is_set():
-            return
-
-        cdn_url, generation = self._current_url()
-        headers = {
-            "Range": f"bytes={chunk.offset}-{chunk.offset + chunk.size - 1}",
-            "User-Agent": self.user_agent,
-        }
-        request_proxies, picked_proxy = self._proxies_for_request()
-        encrypted = bytearray()
-        try:
-            with requests.get(
-                cdn_url,
-                headers=headers,
-                timeout=self.timeout,
-                stream=True,
-                proxies=request_proxies,
-            ) as resp:
-                if resp.status_code in URL_EXPIRY_STATUS:
-                    # Refresh the URL exactly once per generation, then retry.
-                    # These are not proxy faults, so don't penalise the proxy.
-                    self._refresh_url(generation)
-                    raise CdnUrlExpired(
-                        message=f"CDN URL expired (HTTP {resp.status_code}) for chunk {chunk.index}"
-                    )
-                if resp.status_code not in (200, 206):
-                    if picked_proxy and self.proxy_pool is not None:
-                        self.proxy_pool.report_failure(picked_proxy)
-                    raise TransferError(message=f"HTTP {resp.status_code} for chunk {chunk.index}")
-
-                # These bytes are about to be decrypted with a CTR counter
-                # derived from THIS chunk's offset and written at that offset.
-                # If the CDN or a proxy ignored `Range` and sent the whole file
-                # - or a different window of the same length - the result is
-                # silent on-disk corruption that only a full MAC check would
-                # ever notice, and only if integrity verification is enabled.
-                # Same rule the streaming server enforces, from one module.
-                try:
-                    validate_range_response(
-                        resp.status_code,
-                        resp.headers,
-                        chunk.offset,
-                        chunk.offset + chunk.size - 1,
-                        state.total_size,
-                    )
-                except RangeNotHonoredError as exc:
-                    if picked_proxy and self.proxy_pool is not None:
-                        self.proxy_pool.report_failure(picked_proxy)
-                    # A protocol violation, not a transient fault: retrying the
-                    # same request against the same server would repeat it.
-                    raise NonRetryableTransferError(
-                        message=f"Upstream ignored the requested range for chunk {chunk.index}: {exc}"
-                    ) from exc
-
-                # Read encrypted bytes, never more than this chunk is worth.
-                # `validate_range_response` can only check Content-Length when
-                # the server sends one, so a 206 with a plausible Content-Range
-                # and chunked transfer-encoding streamed into this bytearray
-                # without any ceiling at all.
-                for block in resp.iter_content(chunk_size=65536):
-                    if self._stop_event.is_set():
-                        return
-                    if len(encrypted) + len(block) > chunk.size:
-                        if picked_proxy and self.proxy_pool is not None:
-                            self.proxy_pool.report_failure(picked_proxy)
-                        raise NonRetryableTransferError(
-                            message=(
-                                f"Upstream sent more than the requested range for chunk "
-                                f"{chunk.index}: expected {chunk.size} bytes"
-                            )
-                        )
-                    encrypted.extend(block)
-                    self.limiter.consume(len(block))
-        except (requests.ConnectionError, requests.Timeout):
-            if picked_proxy and self.proxy_pool is not None:
-                self.proxy_pool.report_failure(picked_proxy)
-            raise
-
-        if len(encrypted) != chunk.size:
-            if picked_proxy and self.proxy_pool is not None:
-                self.proxy_pool.report_failure(picked_proxy)
-            raise TransferError(
-                message=f"Chunk {chunk.index} short read: got {len(encrypted)}, expected {chunk.size}"
-            )
-
-        # Decrypt with AES-CTR starting at this chunk's offset
-        from .crypto import ctr_offset_to_counter
-
-        cipher = make_ctr_cipher(
-            aes_key,
-            nonce,
-            initial_value=ctr_offset_to_counter(chunk.offset),
-        )
-        plaintext = cipher.decrypt(bytes(encrypted))
-
-        # Compute per-chunk MAC for later combining
-        mac = chunk_mac(plaintext, aes_key, nonce)
-
-        # Write plaintext to destination at the right offset
-        with open(destination, "r+b") as f:
-            f.seek(chunk.offset)
-            f.write(plaintext)
-
-        with self._lock:
-            state.mark_chunk_done(chunk.index, mac)
-            self._bytes_done += chunk.size
-            self._chunks_done += 1
-            bytes_done_now = self._bytes_done
-            # Save state periodically (every ~16 chunks) to limit IO overhead
-            should_save = self._chunks_done % 16 == 0
-            state_to_save = snapshot_state(state) if should_save else None
-        # Feed the rolling meter outside the state lock (it has its own).
-        self._speed_meter.update(bytes_done_now)
-        if should_save:
-            save_state(state_to_save)
-
-        if picked_proxy and self.proxy_pool is not None:
-            self.proxy_pool.report_success(picked_proxy)
+        fetch_chunk(self, chunk, aes_key, nonce, destination, state)
 
     def _verify_integrity(
         self,
@@ -931,14 +598,7 @@ class MegaDownloader:
         mac_iv_a32: list[int],
     ) -> bool:
         """Combine per-chunk MACs and compare against the expected file MAC."""
-        chunk_macs = [state.get_chunk_mac(c.index) for c in all_chunks]
-        if any(m is None for m in chunk_macs):
-            missing = [c.index for c in all_chunks if state.get_chunk_mac(c.index) is None]
-            log.error("Missing chunk MACs for chunk(s) %s; integrity verification failed", missing)
-            return False
-        file_mac = combine_chunk_macs(cast(list[bytes], chunk_macs), aes_key)
-        condensed = condense_mac(file_mac)
-        return condensed[0] == mac_iv_a32[0] and condensed[1] == mac_iv_a32[1]
+        return verify_file_integrity(state, all_chunks, aes_key, mac_iv_a32)
 
     def _progress_snapshot(self) -> tuple[int, int]:
         with self._lock:

@@ -13,6 +13,8 @@ AmbiguousMutationError.
 
 from __future__ import annotations
 
+import json as _json
+
 import pytest
 import requests
 
@@ -44,7 +46,7 @@ class _Recorder:
         self.headers = {}
         self.proxies = {}
 
-    def post(self, url, json=None, timeout=None, headers=None, proxies=None):
+    def post(self, url, json=None, timeout=None, headers=None, proxies=None, stream=False):
         self.sent.append(json)
         return self._behavior(len(self.sent))
 
@@ -55,6 +57,7 @@ class _Recorder:
 class _Response:
     status_code = 200
     headers: dict = {}
+    encoding = "utf-8"
 
     def __init__(self, payload):
         self._payload = payload
@@ -62,8 +65,12 @@ class _Response:
     def raise_for_status(self):
         return None
 
-    def json(self):
-        return self._payload
+    def iter_content(self, chunk_size=None):
+        # The client streams the body and bounds it while reading.
+        yield _json.dumps(self._payload).encode()
+
+    def close(self):
+        return None
 
 
 def _client(behavior) -> MegaAPIClient:

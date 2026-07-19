@@ -39,8 +39,9 @@ MAX_EASINESS = 255  # The wire format packs easiness into a single byte.
 # Ceiling on the base64 blob so a hostile header cannot be decoded wholesale
 # before the 48-byte length check. 48 raw bytes is 64 base64 chars padded.
 MAX_TOKEN_B64_CHARS = 128
-# api.py retries a rejected request up to 3 times, each solving a fresh
-# challenge on this default, so the default is a third of the tolerable stall.
+# Per-solve cap for direct callers. api.py does NOT rely on it: its 402 retry
+# loop owns a single total budget (HASHCASH_TOTAL_BUDGET_S) and passes the time
+# REMAINING into each solve, so extra attempts cannot multiply the stall.
 DEFAULT_TIMEOUT_S = 30.0
 NATIVE_TIMEOUT_MARGIN_S = 5.0
 

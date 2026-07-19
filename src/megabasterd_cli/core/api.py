@@ -13,8 +13,10 @@ The session ID (`sid`) and a sequence number (`sn`) are passed as query params.
 
 from __future__ import annotations
 
+import json
 import logging
 import random
+import time
 from typing import Any
 
 import requests
@@ -62,6 +64,16 @@ def _retrying(retry_on: tuple) -> Retrying:
     )
 
 
+class HashcashBudgetExceededError(MegaError):
+    """One request spent its whole hashcash allowance without getting through.
+
+    The 402 retry loop solves a FRESH challenge per attempt, so a per-solve
+    timeout was multiplied by the attempt count: an attacker-chosen easiness
+    could hold a single API call for minutes of full-CPU work. The budget is
+    now computed once per request and shared by every attempt.
+    """
+
+
 class AmbiguousMutationError(MegaError):
     """A state-changing request failed after it may already have been applied.
 
@@ -98,6 +110,12 @@ DEFAULT_APP_KEY = "BdARkQSQ"
 # stays well under this. Anything bigger is a proxy error page, a redirect
 # chain or a hostile body, and must not be handed to the JSON parser.
 MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+RESPONSE_CHUNK_BYTES = 64 * 1024
+
+# Total wall-clock one request may spend on hashcash, ACROSS all 402 retries.
+# hashcash.DEFAULT_TIMEOUT_S is the per-solve cap for direct callers; this is
+# the cap for the whole phase, so extra attempts cost patience, not minutes.
+HASHCASH_TOTAL_BUDGET_S = 30.0
 
 # HTTP statuses that are the PROXY's own refusal rather than MEGA's answer.
 # Every other 4xx/5xx came from the origin and says nothing about proxy health:
@@ -129,17 +147,32 @@ def _parse_body(response) -> Any:
                 "(a proxy or captive portal may have replaced the response)"
             )
         )
-    # ponytail: requests has already buffered the body by now, so this bounds
-    # the PARSE, not the download. Passing stream=True would bound the download
-    # too, but the request goes through session doubles whose post() does not
-    # accept the kwarg; upgrade both together.
-    body = getattr(response, "content", None)
-    if body is not None and len(body) > MAX_RESPONSE_BYTES:
-        raise MegaError(message="MEGA API response too large; refusing to parse it")
     try:
-        return response.json()
+        return json.loads(_read_bounded(response))
     except ValueError as exc:
         raise MegaError(message="MEGA API returned a body that is not valid JSON") from exc
+
+
+def _read_bounded(response) -> str:
+    """Return the body as text, refusing to buffer more than MAX_RESPONSE_BYTES.
+
+    Requires `stream=True`. Reading `response.content`/`.json()` first and
+    checking the length afterwards is no defence at all: by then `requests` has
+    downloaded the whole body AND transparently inflated any
+    `Content-Encoding: gzip`, so a bomb is fully materialised before the cap is
+    consulted. `iter_content` yields the DECODED bytes, so the cap applies to
+    what actually lands in memory and an oversized body is dropped mid-read.
+    """
+    total = 0
+    parts: list[bytes] = []
+    for block in response.iter_content(chunk_size=RESPONSE_CHUNK_BYTES):
+        total += len(block)
+        if total > MAX_RESPONSE_BYTES:
+            response.close()
+            raise MegaError(message="MEGA API response too large; refusing to parse it")
+        parts.append(block)
+    encoding = getattr(response, "encoding", None) or "utf-8"
+    return b"".join(parts).decode(encoding, errors="replace")
 
 
 def default_user_agent() -> str:
@@ -333,6 +366,9 @@ class MegaAPIClient:
 
         extra_headers: dict[str, str] = {}
         request_proxies, picked_proxy = self._request_proxies()
+        # ONE deadline for the whole hashcash phase. Computed here, not per
+        # attempt, so three challenges cost one budget between them.
+        hashcash_deadline = time.monotonic() + HASHCASH_TOTAL_BUDGET_S
         try:
             for _attempt in range(3):  # Initial request plus up to two hashcash retries
                 response = self._session.post(
@@ -341,13 +377,33 @@ class MegaAPIClient:
                     timeout=self.timeout,
                     headers=extra_headers,
                     proxies=request_proxies,
+                    stream=True,
                 )
                 if response.status_code == 402 and "X-Hashcash" in response.headers:
                     from .hashcash import build_solution_header
 
                     challenge = response.headers["X-Hashcash"]
+                    response.close()  # nothing in this body is read; free the connection
+                    remaining = hashcash_deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise HashcashBudgetExceededError(
+                            message=(
+                                "MEGA kept demanding hashcash proof-of-work and the "
+                                f"{HASHCASH_TOTAL_BUDGET_S:g}s budget for this request ran out"
+                            )
+                        )
                     log.info("Solving MEGA hashcash challenge: %s", challenge.split(":", 2)[:2])
-                    extra_headers["X-Hashcash"] = build_solution_header(challenge)
+                    try:
+                        extra_headers["X-Hashcash"] = build_solution_header(
+                            challenge, timeout=remaining
+                        )
+                    except TimeoutError as exc:
+                        raise HashcashBudgetExceededError(
+                            message=(
+                                "The MEGA hashcash challenge was not solved within the "
+                                f"{HASHCASH_TOTAL_BUDGET_S:g}s budget for this request"
+                            )
+                        ) from exc
                     continue
                 break
             response.raise_for_status()

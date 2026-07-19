@@ -15,6 +15,7 @@ Two defects, one seam:
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -43,6 +44,10 @@ class _Pool:
 
 
 class _Response:
+    """A streamed response double: the client reads the body via iter_content."""
+
+    encoding = "utf-8"
+
     def __init__(self, payload=None, status_code=200, headers=None, raises=None):
         self._payload = payload
         self.status_code = status_code
@@ -53,10 +58,14 @@ class _Response:
         if self._raises is not None:
             raise self._raises
 
-    def json(self):
+    def iter_content(self, chunk_size=None):
         if isinstance(self._payload, Exception):
-            raise self._payload
-        return self._payload
+            yield b"<html>not json at all</html>"  # what a captive portal sends
+        else:
+            yield json.dumps(self._payload).encode()
+
+    def close(self):
+        return None
 
 
 class _Session:
@@ -66,7 +75,7 @@ class _Session:
         self.proxies: dict = {}
         self.sent: list = []
 
-    def post(self, url, json=None, timeout=None, headers=None, proxies=None):
+    def post(self, url, json=None, timeout=None, headers=None, proxies=None, stream=False):
         self.sent.append(json)
         if isinstance(self._response, Exception):
             raise self._response

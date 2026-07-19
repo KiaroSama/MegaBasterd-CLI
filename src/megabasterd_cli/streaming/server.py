@@ -48,6 +48,11 @@ URL_EXPIRY_STATUS = {403, 410, 509}
 # Defaults for the three resource bounds. A media player opens a handful of
 # parallel Range connections, so the cap is generous while still finite.
 DEFAULT_MAX_CONNECTIONS = 16
+# Inner bound: a single peer may hold at most this many of the global slots, so
+# one hostile address can never own the whole pool. Browsers cap themselves at
+# 6 connections per host and players open fewer, so 8 leaves normal playback
+# untouched while still keeping half the pool available to everyone else.
+DEFAULT_MAX_CONNECTIONS_PER_CLIENT = 8
 DEFAULT_HANDLER_TIMEOUT = 60.0  # per socket operation, once a request is parsed
 DEFAULT_HEADER_TIMEOUT = 15.0  # TOTAL budget for one request line + headers
 _REJECT_LINGER = 0.3  # graceful-close budget for a refused connection
@@ -595,6 +600,7 @@ class StreamingServer(ThreadingHTTPServer):
         auth_token: str | None = None,
         allow_query_token: bool = False,
         max_connections: int = DEFAULT_MAX_CONNECTIONS,
+        max_connections_per_client: int = DEFAULT_MAX_CONNECTIONS_PER_CLIENT,
         handler_timeout: float = DEFAULT_HANDLER_TIMEOUT,
         header_timeout: float = DEFAULT_HEADER_TIMEOUT,
     ):
@@ -609,6 +615,14 @@ class StreamingServer(ThreadingHTTPServer):
         self.max_connections = max_connections
         self._slots = threading.BoundedSemaphore(max_connections)
         self._reject_slots = threading.BoundedSemaphore(_MAX_REJECT_THREADS)
+        # The global cap alone still lets one address take every slot, which
+        # starves every other client. This inner cap keeps one peer to a share
+        # of the pool. The map holds one entry per LIVE connection and the key
+        # is dropped at zero, so it is bounded by max_connections, not by the
+        # number of addresses ever seen.
+        self.max_connections_per_client = max_connections_per_client
+        self._peer_lock = threading.Lock()
+        self._peer_counts: dict[str, int] = {}
         # Client sockets were fully blocking: socketserver only calls
         # settimeout() when the handler's `timeout` attribute is non-None.
         self.handler_timeout = handler_timeout
@@ -623,24 +637,59 @@ class StreamingServer(ThreadingHTTPServer):
         # is explicitly enabled (they leak into logs/history).
         self.allow_query_token = allow_query_token
 
+    def _acquire_peer(self, client_address) -> bool:
+        """Claim one per-address slot, or return False when that peer is full."""
+        peer = client_address[0] if client_address else ""
+        with self._peer_lock:
+            held = self._peer_counts.get(peer, 0)
+            if held >= self.max_connections_per_client:
+                return False
+            self._peer_counts[peer] = held + 1
+        return True
+
+    def _release_peer(self, client_address) -> None:
+        """Give the slot back and forget the address once it holds none.
+
+        Dropping the key at zero is what keeps the map bounded, and is also why
+        every exit path must reach here: a count left behind would lock that
+        client out permanently, which is worse than the exhaustion it prevents.
+        """
+        peer = client_address[0] if client_address else ""
+        with self._peer_lock:
+            remaining = self._peer_counts.get(peer, 0) - 1
+            if remaining > 0:
+                self._peer_counts[peer] = remaining
+            else:
+                self._peer_counts.pop(peer, None)
+
     def process_request(self, request, client_address) -> None:
-        """Serve only while a slot is free; reject cleanly once the cap is hit."""
+        """Serve only while a global and a per-address slot are free."""
         if not self._slots.acquire(blocking=False):
-            self._reject_over_capacity(request)
+            self._reject_over_capacity(request, f"global cap of {self.max_connections}")
+            return
+        if not self._acquire_peer(client_address):
+            self._slots.release()
+            self._reject_over_capacity(
+                request, f"per-client cap of {self.max_connections_per_client}"
+            )
             return
         try:
             super().process_request(request, client_address)
         except BaseException:
-            self._slots.release()  # the handler thread never started
+            # The handler thread never started, so its finally never runs.
+            self._release_peer(client_address)
+            self._slots.release()
             raise
 
     def process_request_thread(self, request, client_address) -> None:
         try:
             super().process_request_thread(request, client_address)
         finally:
+            # Covers every handler exit: normal, timeout, and exception.
+            self._release_peer(client_address)
             self._slots.release()
 
-    def _reject_over_capacity(self, request) -> None:
+    def _reject_over_capacity(self, request, reason: str) -> None:
         """Refuse a connection without ever blocking the accept loop.
 
         Once the cap is reached the refusal becomes the hot path (a flood hits
@@ -648,7 +697,7 @@ class StreamingServer(ThreadingHTTPServer):
         small, capped pool of short-lived closers instead; past that the socket
         is dropped outright, which is the right answer deep in a flood.
         """
-        log.warning("Streaming connection cap of %d reached; rejecting", self.max_connections)
+        log.warning("Streaming %s reached; rejecting connection", reason)
         if not self._reject_slots.acquire(blocking=False):
             self.shutdown_request(request)
             return
