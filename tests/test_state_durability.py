@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -46,6 +47,13 @@ def _download_state(destination, **overrides) -> TransferState:
         "total_size": 4096,
     }
     kwargs.update(overrides)
+    # A download that has committed chunks always has a destination file on
+    # disk - the state vouches for those bytes. Creating it keeps the double
+    # faithful to that, rather than relaxing the durability rule to suit it.
+    dest = Path(kwargs["destination"])
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if not dest.exists():
+        dest.write_bytes(b"\x00" * int(kwargs["total_size"]))
     return TransferState(**kwargs)
 
 

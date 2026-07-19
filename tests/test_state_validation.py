@@ -154,7 +154,11 @@ def test_unsupported_version_is_ignored_not_quarantined(tmp_path):
 
 
 def test_round_trip_survives_save_and_load(tmp_path):
+    # A download that has committed chunks always has a destination file:
+    # the state vouches for those bytes. Creating it keeps the fixture
+    # faithful rather than relaxing the durability rule to suit it.
     destination = tmp_path / "out.bin"
+    destination.write_bytes(bytes(2048))
     state = TransferState(
         transfer_type="download",
         source="https://mega.nz/file/ID#<key>",
@@ -225,7 +229,11 @@ def _hammer(args):
 
 
 def test_concurrent_processes_never_leave_unreadable_state(tmp_path):
+    # A download that has committed chunks always has a destination file:
+    # the state vouches for those bytes. Creating it keeps the fixture
+    # faithful rather than relaxing the durability rule to suit it.
     destination = str(tmp_path / "out.bin")
+    (tmp_path / "out.bin").write_bytes(bytes(4096))
     ctx = mp.get_context("spawn")  # Windows-compatible start method
     with ctx.Pool(4) as pool:
         results = pool.map(_hammer, [(destination, base, 12) for base in (0, 100, 200, 300)])

@@ -55,6 +55,12 @@ def _run_in_subprocess(body: str, timeout: int = 60) -> subprocess.CompletedProc
 
 
 def _state_for(destination: Path, chunks: list[int]) -> TransferState:
+    # A download that has committed chunks always has a destination file on
+    # disk - the state vouches for those bytes. Creating it keeps the double
+    # faithful to that, rather than relaxing the durability rule to suit it.
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if not destination.exists():
+        destination.write_bytes(b"\x00" * 4096)
     state = TransferState(
         transfer_type="download",
         source="https://mega.invalid/file/X",

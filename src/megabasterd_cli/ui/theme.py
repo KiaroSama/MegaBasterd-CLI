@@ -30,6 +30,9 @@ PALETTE = {
     "dim": "#64748B",
     "header": "#F97316",
     "highlight": "#E879F9",
+    # Menu rows read as body text, so they stay near-white rather than
+    # competing with the accent colours around them.
+    "menu_label": "#E2E8F0",
 }
 
 THEME = Theme(
@@ -54,6 +57,16 @@ THEME = Theme(
         "mb.dim": PALETTE["dim"],
         "mb.header": f"bold {PALETTE['header']}",
         "mb.highlight": f"bold {PALETTE['highlight']}",
+        # Menu chrome. Each part of a row is a different kind of thing - an
+        # index you type, a label you read, a default you can just accept - so
+        # each gets its own colour instead of one flat style for the row.
+        "mb.title": f"bold {PALETTE['info']}",
+        "mb.menu.key": f"bold {PALETTE['option']}",
+        "mb.menu.label": PALETTE["menu_label"],
+        "mb.menu.bracket": PALETTE["dim"],
+        "mb.menu.default": f"bold {PALETTE['info']}",
+        "mb.prompt.label": PALETTE["menu_label"],
+        "mb.prompt.token": f"bold {PALETTE['info']}",
         "mb.table.header": f"bold {PALETTE['info']}",
         "mb.table.border": PALETTE["secondary"],
         "mb.progress": PALETTE["primary"],

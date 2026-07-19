@@ -36,6 +36,13 @@ jobs:
       - name: Lint with Ruff
         run: ruff check src tests
 
+      - name: Show pinned type-check versions
+        # Printed before the gate runs so a future divergence is visible in the
+        # log instead of showing up as an unexplained red build.
+        run: |
+          python -m mypy --version
+          python -m pip show types-requests | head -2
+
       - name: Type check (required, whole production tree)
         # Every production module, not an allowlist. The allowlist form meant
         # the heaviest files - downloader, uploader, crypter, hashcash, proxy,

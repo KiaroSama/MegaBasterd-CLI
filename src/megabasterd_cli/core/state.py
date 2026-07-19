@@ -431,11 +431,30 @@ def _flush_transferred_data(state: TransferState) -> None:
         return
     try:
         fd = os.open(state.destination, os.O_RDWR)
-    except OSError as exc:
-        # No destination to flush (not yet created, or not ours to open). There
-        # is nothing to vouch for, so this is not a durability failure.
+    except FileNotFoundError as exc:
+        # The one tolerable open failure, and only while the snapshot vouches
+        # for nothing: no destination yet AND no completed chunks. With chunks
+        # recorded, a missing destination is the corruption case, not a benign
+        # one - the file whose bytes the state claims is gone.
+        if state.completed_chunks:
+            raise StateDurabilityError(
+                message=(
+                    f"Destination {state.destination} is missing ({exc}) but the "
+                    f"snapshot records {len(state.completed_chunks)} completed chunk(s); "
+                    "refusing to record them as durable."
+                )
+            ) from exc
         log.debug("Not flushing %s before saving state: %s", state.destination, exc)
         return
+    except OSError as exc:
+        # Permission denied, sharing violation, EIO, descriptor exhaustion: the
+        # barrier could not even be raised, so nothing may be vouched for.
+        raise StateDurabilityError(
+            message=(
+                f"Could not open transferred data to flush it ({exc}); "
+                "refusing to record those chunks as complete."
+            )
+        ) from exc
     try:
         os.fsync(fd)
     except OSError as exc:
