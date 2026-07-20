@@ -179,9 +179,22 @@ def _write_two_line_harness(tmp_path: Path) -> Path:
     the gap between two writes to the same path.
     """
     body = TWO_LINE_PRELUDE + "\n".join(_extract_function(n) for n in HARNESS_FUNCTIONS)
+    # The ACL dump is not decoration. When this failed on a CI runner and passed
+    # on the dev machine, the fixed warning text ("secure log operation failed")
+    # correctly told us nothing, and the difference had to be guessed at. Now a
+    # failure carries the owner and ACEs that actually caused it.
     body += """
 Write-SecureLogLine $Target $Line1
 "AFTER_FIRST=$($script:LauncherFileLoggingDisabled)"
+if (Test-Path -LiteralPath $Target) {
+    $probe = Get-Acl -LiteralPath $Target
+    $sidType = [System.Security.Principal.SecurityIdentifier]
+    "OWNER=$($probe.GetOwner($sidType).Value)"
+    "ME=$((Get-CurrentUserSid).Value)"
+    "PROTECTED=$($probe.AreAccessRulesProtected)"
+    "ACES=$(($probe.GetAccessRules($true,$true,$sidType) | ForEach-Object {
+        "$($_.AccessControlType):$($_.IdentityReference.Value):$($_.FileSystemRights)" }) -join ' | ')"
+}
 if ($Mutate) { & $Mutate $Target }
 Write-SecureLogLine $Target $Line2
 "AFTER_SECOND=$($script:LauncherFileLoggingDisabled)"
