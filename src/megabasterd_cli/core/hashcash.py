@@ -31,6 +31,10 @@ from pathlib import Path
 TOKEN_BYTES = 48
 PREFIX_BYTES = 4
 REPEAT = 262_144
+# Compatibility surface retained for the 1.x series: the size of the buffer a
+# solver fills. Nothing here allocates it any more - `solve` builds the buffer
+# from the same three constants - but it was importable API.
+BUF_SIZE = PREFIX_BYTES + REPEAT * TOKEN_BYTES
 # The whole challenge is attacker-supplied (any HTTP 402 response can carry one),
 # so every field is bounded before it reaches an allocation or a CPU burn.
 SUPPORTED_VERSIONS = (1,)

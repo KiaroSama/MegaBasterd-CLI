@@ -436,10 +436,13 @@ def _aes_cbc_pkcs7_decrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
 
 # Backwards-compatible re-exports.
 #
-# These six used to live here and were moved to `link_services.py`, which
+# These nine used to live here and were moved to `link_services.py`, which
 # imports from this module - so a top-level `from .link_services import ...`
 # would be a cycle. PEP 562 module __getattr__ resolves them on first access
 # instead, once both modules are fully loaded.
+#
+# The three DLC constants moved in the same split but were left out of this
+# set, so they were the one part of the move that did not stay importable.
 _MOVED_TO_LINK_SERVICES = frozenset(
     {
         "decode_elc_payload",
@@ -448,6 +451,9 @@ _MOVED_TO_LINK_SERVICES = frozenset(
         "get_megacrypter_info",
         "get_megacrypter_download_url",
         "resolve_megacrypter_link",
+        "DLC_SERVICE_URL",
+        "DLC_REV",
+        "DLC_MASTER_KEY",
     }
 )
 
