@@ -43,6 +43,17 @@ jobs:
         shell: pwsh
         run: ./Run.ps1 --help
 
+      # Windows PowerShell 5.1 is a different host, not an older pwsh: with
+      # $ErrorActionPreference = "Stop" it turns a child's redirected stderr
+      # into a TERMINATING error, which pwsh 7 does not. Two launcher bugs
+      # lived only on this host and stayed invisible behind a fully green
+      # matrix, because every job above runs pwsh. It is also the host a
+      # double-clicked .ps1 gets on a stock Windows box.
+      - name: Smoke-test script launcher (Windows PowerShell 5.1)
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: ./Run.ps1 --help
+
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         uses: codecov/codecov-action@v7

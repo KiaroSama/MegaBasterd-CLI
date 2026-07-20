@@ -121,14 +121,12 @@ def test_launcher_does_not_leak_stream_token(tmp_path, form, marker, token_args)
     assert "FAKE_NOURL" in dispatch
 
 
-def test_launcher_transcript_present_and_clean(tmp_path):
-    """The transcript (if the platform produced one) must not contain the token."""
-    _combined, logs = _run_launcher(tmp_path, ["--token", SPLIT_MARKER])
-    transcripts = [name for name in logs if "transcript" in name]
-    if not transcripts:
-        pytest.skip("PowerShell transcript was not produced on this host")
-    for name in transcripts:
-        assert SPLIT_MARKER not in logs[name], f"token leaked into transcript {name}"
+# `test_launcher_transcript_present_and_clean` used to sit here. Start-Transcript
+# was removed from Run.ps1, so no file with "transcript" in its name can exist on
+# any host - the test ran the launcher twice, ~12s per matrix cell, and then
+# skipped unconditionally. Its invariant is now asserted for free and more
+# strictly by test_launcher_no_raw_transcript.py, which greps the shipped source
+# for Start-Transcript instead of hoping to observe its output.
 
 
 def test_launcher_token_redacted_even_when_command_fails(tmp_path):

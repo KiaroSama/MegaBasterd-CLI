@@ -89,7 +89,10 @@ function Get-RedactedText {
     # secret readable for the whole run and left it forever on a hard kill.
     if ([string]::IsNullOrEmpty($Text)) { return $Text }
     $sensitive = "--token|--password|--share-password|--vault-passphrase|--mfa-code|--elc-api-key"
-    $Text = [regex]::Replace($Text, "(?<opt>$sensitive)(?<sep>=|\s+)(?<val>\S+)", '${opt}${sep}<redacted>')
+    # The value alternation must match the -p rule below it: a bare `\S+` stops
+    # at the first space, so `--password "hunter2 my dog"` redacted only up to
+    # the space and wrote the rest of the secret to the log.
+    $Text = [regex]::Replace($Text, "(?<opt>$sensitive)(?<sep>=|\s+)(?<val>`"[^`"]*`"|'[^']*'|\S+)", '${opt}${sep}<redacted>')
     $Text = [regex]::Replace($Text, '(?m)(?<lead>^|\s)-p(?<sep>\s+)(?:"[^"]*"|''[^'']*''|\S+)', '${lead}-p${sep}<redacted>')
     $Text = [regex]::Replace($Text, '("(?:api_key|password|passphrase|token|mfa_code|secret)"\s*:\s*)"[^"]*"', '$1"<redacted>"')
     $Text = [regex]::Replace($Text, "\S*(?:mega\.nz/|mega\.co\.nz/|mc://|mega://)\S*", "<redacted-link>")
@@ -432,6 +435,15 @@ function Invoke-Python {
         [pscustomobject] $Python,
         [string[]] $Arguments
     )
+    # Function-scoped, so it reverts on return without a finally block. Under
+    # Windows PowerShell 5.1 a redirected native stderr line becomes a
+    # TERMINATING NativeCommandError while the preference is "Stop" - which
+    # threw BEFORE $LASTEXITCODE could be read. That made a `pip install` that
+    # merely printed a WARNING look like a failed install, and made the
+    # ensurepip recovery in Install-Dependencies unreachable, since the pip
+    # probe threw instead of returning non-zero. pwsh 7 never did this, so the
+    # whole class was invisible. The exit code below carries the failure signal.
+    $ErrorActionPreference = "Continue"
     $output = & $Python.Command @($Python.Args + $Arguments) 2>&1
     $nativeExitCode = $LASTEXITCODE
     foreach ($line in @($output)) {
@@ -463,17 +475,38 @@ function Get-LocalVenvPython {
 
 function Test-PythonSpec {
     param([pscustomobject] $Python)
-    $output = & $Python.Command @($Python.Args + @("-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')")) 2>$null
-    if ($LASTEXITCODE -ne 0 -or -not $output) {
+    # This answers one question - "is this candidate a usable Python 3.10+?" -
+    # and a candidate that misbehaves is simply a "no". It used to be able to
+    # THROW that answer instead of returning it, and the throw escaped the
+    # foreach in Find-SystemPython, so one bad candidate ended the whole
+    # py -> python3 -> python chain rather than yielding to the next entry.
+    #
+    # Two real ways in. Under Windows PowerShell 5.1 the `2>$null` redirection
+    # turns any child stderr line into a terminating NativeCommandError while
+    # $ErrorActionPreference is "Stop" - which the Microsoft Store python3.exe
+    # alias triggers on a stock Windows box, since Get-Command finds it, it
+    # prints "Python was not found..." and exits 9009. And on BOTH hosts
+    # [int]$parts[0] throws when a candidate prints a conda/venv banner ahead of
+    # the version. Either way the launcher died on a machine that had a working
+    # interpreter one line further down the list.
+    #
+    # One guard here covers every caller, which is the whole point of it being
+    # in the shared probe.
+    try {
+        $output = & $Python.Command @($Python.Args + @("-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')")) 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $output) {
+            return $false
+        }
+        $parts = "$output".Trim().Split(".")
+        if ($parts.Count -lt 2) {
+            return $false
+        }
+        $major = [int]$parts[0]
+        $minor = [int]$parts[1]
+        return ($major -gt 3 -or ($major -eq 3 -and $minor -ge 10))
+    } catch {
         return $false
     }
-    $parts = "$output".Trim().Split(".")
-    if ($parts.Count -lt 2) {
-        return $false
-    }
-    $major = [int]$parts[0]
-    $minor = [int]$parts[1]
-    return ($major -gt 3 -or ($major -eq 3 -and $minor -ge 10))
 }
 
 function Find-SystemPython {
@@ -594,7 +627,10 @@ try {
     foreach ($userSubdir in @(
         (Join-Path $UserDir "Config"),
         (Join-Path $UserDir "Data"),
-        (Join-Path $UserDir "Data\sessions"),
+        # Nested Join-Path, not a literal "Data\sessions": the backslash is not
+        # a separator on POSIX, so the ubuntu runs created a directory actually
+        # named "Data\sessions" beside Data/ on every invocation.
+        (Join-Path (Join-Path $UserDir "Data") "sessions"),
         (Join-Path $UserDir "Logs")
     )) {
         if (-not (Test-Path -LiteralPath $userSubdir)) {
