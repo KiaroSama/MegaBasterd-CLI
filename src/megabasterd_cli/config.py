@@ -244,9 +244,12 @@ def display_value(key: str, value):
 
     `connect_proxy_password` shows `<redacted>` when set; `elc_accounts` has
     its nested credential fields recursively redacted while keeping structure
-    visible.
+    visible. Every OTHER string falls through the shared sanitizer rather than
+    being printed verbatim: naming the two known-secret keys left
+    `smart_proxy_url` printing its `scheme://user:pass@host` in full, the same
+    value `proxy list` redacts one command over.
     """
-    from .utils.redaction import REDACTED, sanitize
+    from .utils.redaction import REDACTED, redact_text, sanitize
 
     if value is None:
         return None
@@ -254,6 +257,8 @@ def display_value(key: str, value):
         return REDACTED
     if key == "elc_accounts":
         return sanitize(value, _field="elc_accounts")
+    if isinstance(value, str):
+        return redact_text(value)
     return value
 
 
