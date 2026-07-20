@@ -308,3 +308,64 @@ def test_dispatch_writes_a_redacted_line_to_the_launcher_log(monkeypatch, tmp_pa
     assert "TOKENVALUE" not in text
     assert "Dispatching CLI args:" in text
     assert "elc_accounts" in text
+
+
+# ---------------------------------------------------------------------------
+# menu chrome: matched to the sibling FFmWiz launcher
+# ---------------------------------------------------------------------------
+
+
+def _render(build) -> str:
+    """Render through a forced non-legacy console so the ANSI survives.
+
+    On Windows Rich defaults to `legacy_windows=True` and paints via the Win32
+    console API, which strips every escape on the way to a pipe - a capture
+    without this looks uncoloured no matter what the styles say.
+    """
+    from rich.console import Console
+
+    from megabasterd_cli.ui.theme import THEME
+
+    console = Console(
+        theme=THEME, force_terminal=True, color_system="truecolor", legacy_windows=False, width=88
+    )
+    original, lm.console = lm.console, console
+    try:
+        with console.capture() as captured:
+            build(console)
+        return captured.get()
+    finally:
+        lm.console = original
+
+
+def test_option_rows_use_the_ffmwiz_key_colour_and_are_not_padded():
+    out = _render(lambda c: [lm._option_line("1", "First"), lm._option_line("10", "Tenth")])
+    assert "  \x1b[38;5;117m1.\x1b[0m First" in out, out
+    # Left-aligned: ` 1.` would mean the fixed-width padding is back.
+    assert "  \x1b[38;5;117m10.\x1b[0m Tenth" in out, out
+    assert "\x1b[38;5;117m 1." not in out, "the key is being padded to a fixed width"
+
+
+def test_only_the_first_row_is_marked_as_the_default_and_it_is_green():
+    out = _render(lambda c: [lm._option_line("1", "First"), lm._option_line("2", "Second")])
+    assert out.count("\x1b[92m") == 1, out
+    assert "\x1b[92m [1]\x1b[0m" in out, out
+
+
+def test_menu_labels_carry_no_colour_of_their_own():
+    """A coloured label competes with the key; FFmWiz leaves it terminal-default."""
+    out = _render(lambda c: lm._option_line("3", "Upload file/folder"))
+    assert out.endswith("3.\x1b[0m Upload file/folder\n"), out
+
+
+def test_back_and_exit_hints_are_different_colours():
+    out = _render(lambda c: c.print(lm._styled_prompt("Selection [1] {back=0, quit=exit}: ")))
+    assert "\x1b[38;5;166mback=0\x1b[0m" in out, out
+    assert "\x1b[38;5;32mquit=exit\x1b[0m" in out, out
+    # Braces are punctuation, so they stay unstyled either side of the group.
+    assert "\x1b[0m{" in out and "}" in out, out
+
+
+def test_a_prompt_default_is_green_brackets_included():
+    out = _render(lambda c: c.print(lm._styled_prompt("Output directory [./Out] {quit=exit}: ")))
+    assert "\x1b[92m[./Out]\x1b[0m" in out, out

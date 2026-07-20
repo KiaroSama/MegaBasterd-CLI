@@ -33,6 +33,17 @@ PALETTE = {
     # Menu rows read as body text, so they stay near-white rather than
     # competing with the accent colours around them.
     "menu_label": "#E2E8F0",
+    # Launcher menu chrome, matched to the sibling FFmWiz launcher so the two
+    # read as one family. These are that tool's literal ANSI colours, not
+    # approximations: xterm 117 for the option keys and headings, ANSI bright
+    # green for a default you can accept by pressing Enter, and xterm 166 / 32
+    # for the back / exit hints - one hue per navigation meaning.
+    "menu_key": "color(117)",
+    "menu_default": "bright_green",
+    "hint_back": "color(166)",
+    "hint_exit": "color(32)",
+    "hint_folder": "#B48CFF",
+    "hint_other": "bright_white",
 }
 
 THEME = Theme(
@@ -60,13 +71,22 @@ THEME = Theme(
         # Menu chrome. Each part of a row is a different kind of thing - an
         # index you type, a label you read, a default you can just accept - so
         # each gets its own colour instead of one flat style for the row.
-        "mb.title": f"bold {PALETTE['info']}",
-        "mb.menu.key": f"bold {PALETTE['option']}",
-        "mb.menu.label": PALETTE["menu_label"],
-        "mb.menu.bracket": PALETTE["dim"],
-        "mb.menu.default": f"bold {PALETTE['info']}",
-        "mb.prompt.label": PALETTE["menu_label"],
-        "mb.prompt.token": f"bold {PALETTE['info']}",
+        #
+        # The label is deliberately UNSTYLED: colouring it too made every row a
+        # second accent competing with the key, which is what stopped the list
+        # reading as a list. Brackets are unstyled for the same reason - in
+        # FFmWiz the `[` `]` and `{` `}` are punctuation, and only what is
+        # inside them carries colour.
+        "mb.title": f"bold {PALETTE['menu_key']}",
+        "mb.menu.key": PALETTE["menu_key"],
+        "mb.menu.label": "none",
+        "mb.menu.default": PALETTE["menu_default"],
+        "mb.prompt.label": "bold",
+        "mb.prompt.punct": "none",
+        "mb.prompt.back": PALETTE["hint_back"],
+        "mb.prompt.exit": PALETTE["hint_exit"],
+        "mb.prompt.folder": PALETTE["hint_folder"],
+        "mb.prompt.other": PALETTE["hint_other"],
         "mb.table.header": f"bold {PALETTE['info']}",
         "mb.table.border": PALETTE["secondary"],
         "mb.progress": PALETTE["primary"],
