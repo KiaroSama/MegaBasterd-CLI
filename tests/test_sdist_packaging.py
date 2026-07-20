@@ -28,6 +28,12 @@ pwsh = shutil.which("pwsh") or shutil.which("powershell")
 requires_pwsh = pytest.mark.skipif(pwsh is None, reason="PowerShell is not available")
 windows_only = pytest.mark.skipif(os.name != "nt", reason="the launcher smoke is Windows-only")
 
+# `python -m build .` writes src/megabasterd_cli.egg-info INSIDE the repo, and a
+# session-scoped fixture runs once per xdist worker - so two workers built the
+# same source tree at once and trod on each other's egg-info. One worker, one
+# build.
+pytestmark = pytest.mark.xdist_group("sdist_build")
+
 
 def test_the_manifest_ships_the_helper_and_no_deleted_file():
     """Cheap guard that runs even where `python -m build` is unavailable."""
