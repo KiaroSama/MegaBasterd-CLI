@@ -85,6 +85,16 @@ def test_per_client_counters_return_to_zero_so_a_client_is_never_locked_out():
     server = _start(max_connections=4, max_connections_per_client=1, header_timeout=3.0)
     try:
         assert _status(server) == 200  # served
+        # Wait for the served request's counter to drain BEFORE opening the
+        # stalled one. Without this the first socket's teardown can still hold
+        # the single slot when _half_open connects, so the STALLED connection
+        # takes the 503 and the measured request then finds the slot free - the
+        # cap fires, just not on the connection being asserted about.
+        deadline = time.monotonic() + HARD_TIMEOUT
+        while time.monotonic() < deadline and server._peer_counts:
+            time.sleep(0.02)
+        assert server._peer_counts == {}, "the served request never released its slot"
+
         stalled = _half_open(server)  # will be reaped by the header timeout
         time.sleep(0.2)
         assert _status(server) == 503  # refused: must not leak a count either
