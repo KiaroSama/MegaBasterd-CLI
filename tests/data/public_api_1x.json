@@ -1,0 +1,249 @@
+{
+  "megabasterd_cli.accounts.manager": [
+    "AccountManager",
+    "AccountNotFound"
+  ],
+  "megabasterd_cli.accounts.storage": [
+    "Account",
+    "AccountStorage",
+    "AccountStore",
+    "CredentialVault"
+  ],
+  "megabasterd_cli.cli": [
+    "cli",
+    "main"
+  ],
+  "megabasterd_cli.config": [
+    "APP_AUTHOR",
+    "APP_NAME",
+    "Config",
+    "ConfigStore",
+    "accounts_file",
+    "config_dir",
+    "config_file",
+    "data_dir",
+    "default_download_dir",
+    "log_dir",
+    "project_root",
+    "session_dir",
+    "user_dir"
+  ],
+  "megabasterd_cli.core.api": [
+    "API_BASE_URL",
+    "DEFAULT_APP_KEY",
+    "DEFAULT_TIMEOUT",
+    "MegaAPIClient",
+    "USER_AGENT"
+  ],
+  "megabasterd_cli.core.chunks": [
+    "CHUNK_SIZES_KB",
+    "Chunk",
+    "MAX_CHUNK_SIZE",
+    "chunk_count",
+    "chunk_mac",
+    "chunks_for_range",
+    "combine_chunk_macs",
+    "condense_mac",
+    "iter_chunks"
+  ],
+  "megabasterd_cli.core.client": [
+    "MegaClient",
+    "MegaNode",
+    "MegaSession"
+  ],
+  "megabasterd_cli.core.crypter": [
+    "CrypterError",
+    "DEFAULT_CHUNK_SIZE",
+    "KEY_LEN",
+    "MAGIC",
+    "NONCE_LEN",
+    "SALT_LEN",
+    "SCRYPT_N",
+    "SCRYPT_P",
+    "SCRYPT_R",
+    "TAG_LEN",
+    "VERSION",
+    "decrypt_file",
+    "encrypt_file"
+  ],
+  "megabasterd_cli.core.crypto": [
+    "ATTR_PREFIX",
+    "a32_to_bytes",
+    "a32_to_str",
+    "aes_cbc_decrypt",
+    "aes_cbc_decrypt_a32",
+    "aes_cbc_encrypt",
+    "aes_cbc_encrypt_a32",
+    "aes_key_wrap_decrypt",
+    "aes_key_wrap_encrypt",
+    "b64_url_decode",
+    "b64_url_encode",
+    "bytes_to_a32",
+    "ctr_offset_to_counter",
+    "decrypt_attributes",
+    "decrypt_password_link",
+    "derive_key_legacy",
+    "derive_key_v2",
+    "derive_password_link_keys",
+    "encrypt_attributes",
+    "encrypt_password_link",
+    "make_ctr_cipher",
+    "pack_file_key",
+    "str_to_a32",
+    "stringhash",
+    "unpack_file_key"
+  ],
+  "megabasterd_cli.core.downloader": [
+    "CdnUrlExpired",
+    "DownloadProgress",
+    "DownloadResult",
+    "MegaDownloader",
+    "URL_EXPIRY_STATUS"
+  ],
+  "megabasterd_cli.core.errors": [
+    "AuthError",
+    "ERROR_CODES",
+    "IntegrityError",
+    "MegaError",
+    "QuotaError",
+    "RateLimitError",
+    "TransferError",
+    "raise_for_code"
+  ],
+  "megabasterd_cli.core.folder_downloader": [
+    "FolderNode",
+    "MegaFolderDownloader"
+  ],
+  "megabasterd_cli.core.hashcash": [
+    "BUF_SIZE",
+    "DEFAULT_TIMEOUT_S",
+    "HashcashChallenge",
+    "PREFIX_BYTES",
+    "REPEAT",
+    "TOKEN_BYTES",
+    "build_solution_header",
+    "parse_challenge",
+    "solve"
+  ],
+  "megabasterd_cli.core.links": [
+    "DLC_MASTER_KEY",
+    "DLC_REV",
+    "DLC_SERVICE_URL",
+    "ElcPayload",
+    "LinkType",
+    "MegaCrypterInfo",
+    "ParsedLink",
+    "decode_elc_payload",
+    "decrypt_dlc_container",
+    "get_megacrypter_download_url",
+    "get_megacrypter_info",
+    "is_mega_url",
+    "normalize_link",
+    "parse_link",
+    "resolve_elc_links",
+    "resolve_encrypted_container_link",
+    "resolve_megacrypter_link",
+    "resolve_password_link"
+  ],
+  "megabasterd_cli.core.splitter": [
+    "SplitResult",
+    "SplitterError",
+    "merge_parts",
+    "split_file"
+  ],
+  "megabasterd_cli.core.state": [
+    "TransferState",
+    "clear_state",
+    "load_state",
+    "save_state",
+    "state_path_for"
+  ],
+  "megabasterd_cli.core.thumbnail": [
+    "SUPPORTED_IMAGE_EXT",
+    "THUMB_SIZE",
+    "create_thumbnail"
+  ],
+  "megabasterd_cli.core.uploader": [
+    "MegaUploader",
+    "UploadProgress",
+    "UploadResult"
+  ],
+  "megabasterd_cli.proxy.connect_proxy": [
+    "ALLOWED_HOST_RE",
+    "AUTH_RE",
+    "CONNECT_RE",
+    "HTTP_FORWARD_RE",
+    "MAX_HEADER_LINE_LEN",
+    "MAX_PROXY_THREADS",
+    "MegaConnectProxy"
+  ],
+  "megabasterd_cli.proxy.runtime": [
+    "effective_pool",
+    "effective_pool_for_cmd"
+  ],
+  "megabasterd_cli.proxy.smart_proxy": [
+    "ProxyEntry",
+    "SmartProxyPool",
+    "detect_blocked"
+  ],
+  "megabasterd_cli.queue.manager": [
+    "JobStatus",
+    "JobType",
+    "QueueItem",
+    "QueueManager"
+  ],
+  "megabasterd_cli.streaming.server": [
+    "StreamingServer"
+  ],
+  "megabasterd_cli.ui.progress": [
+    "MultiFileProgressView",
+    "PROGRESS_SEPARATOR",
+    "ProgressFileState",
+    "ProgressReporter",
+    "build_progress",
+    "progress_for"
+  ],
+  "megabasterd_cli.ui.prompts": [
+    "ask",
+    "ask_password",
+    "confirm",
+    "print_error",
+    "print_info",
+    "print_panel",
+    "print_success",
+    "print_warn"
+  ],
+  "megabasterd_cli.ui.tables": [
+    "render_accounts",
+    "render_queue"
+  ],
+  "megabasterd_cli.ui.theme": [
+    "PALETTE",
+    "THEME",
+    "make_console"
+  ],
+  "megabasterd_cli.utils.helpers": [
+    "available_disk_space",
+    "ensure_unique_path",
+    "file_md5",
+    "format_bytes",
+    "format_eta",
+    "format_speed",
+    "sanitize_filename"
+  ],
+  "megabasterd_cli.utils.hooks": [
+    "append_upload_log",
+    "run_post_transfer_command"
+  ],
+  "megabasterd_cli.utils.logger": [
+    "RedactingFilter",
+    "RedactingFormatter",
+    "redact_log_text",
+    "setup_logging"
+  ],
+  "megabasterd_cli.utils.speed": [
+    "NoOpLimiter",
+    "TokenBucket",
+    "make_limiter"
+  ]
+}
