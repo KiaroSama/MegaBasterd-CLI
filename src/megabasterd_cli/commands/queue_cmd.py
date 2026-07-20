@@ -218,7 +218,7 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
     from ..core.downloader import MegaDownloader
     from ..core.errors import MegaError
     from ..core.uploader import MegaUploader
-    from ..ui.prompts import ask, ask_password
+    from ..ui.prompts import ask_mfa_code, ask_password
     from ..ui.transfer_progress import TransferProgress, redact_link
     from ..upload_support import finalize_upload_success
     from ..utils.redaction import redact_text
@@ -306,7 +306,7 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
                 acc.email,
                 password,
                 mfa_code=mfa_code,
-                mfa_prompt=lambda: ask("Enter 6-digit 2FA code").strip(),
+                mfa_prompt=ask_mfa_code,
             )
         except MegaError as exc:
             print_error(f"Login failed for {acc.email}: {redact_text(str(exc))}")

@@ -25,6 +25,15 @@ def ask(question: str, default: str | None = None) -> str:
     return Prompt.ask(question, default=default or "")
 
 
+def ask_mfa_code() -> str:
+    """The 2FA prompt every login path shares.
+
+    It was written out identically in four command modules and once more as
+    an inline lambda, so "change the wording" meant finding five places.
+    """
+    return ask("Enter 6-digit 2FA code").strip()
+
+
 def ask_password(question: str = "Password") -> str:
     # Rich Prompt doesn't fully hide input on all terminals; use getpass for safety.
     return getpass(f"{question}: ")
