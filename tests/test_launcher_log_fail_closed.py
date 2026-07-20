@@ -675,34 +675,45 @@ def _my_sid() -> str:
     return probe.stdout.strip()
 
 
-def _icacls(target: Path, *args: str, own: bool = True) -> None:
-    """Build the DACL explicitly. Inherited temp-directory ACLs prove nothing.
+def _set_dacl(target: Path, *aces: str) -> None:
+    """Replace the WHOLE DACL with exactly these ACEs, and own the file.
 
-    `own` also sets the owner to the current SID, because `icacls /grant` does
-    not. On an ordinary desktop account the owner already is the creator, so
-    this looked unnecessary; on an elevated account - every Windows CI runner -
-    a new file can be owned by the Administrators GROUP instead, and the
-    positive control then failed for a reason the fixture had introduced rather
-    than one the verifier was meant to catch.
+    Each ace is ``SID:Rights:Allow|Deny``.
+
+    Not `icacls /inheritance:r`: that removes only INHERITED entries. When a
+    file's parent has no inheritable ACEs, Windows fills the new DACL from the
+    process token's DEFAULT DACL instead, and those entries are explicit - so
+    they survive `/inheritance:r` untouched. On a CI runner that left the
+    "owner alone with FullControl" fixture holding three principals (LOCAL
+    SYSTEM, Administrators, us), and the verifier correctly refused it. Nothing
+    was wrong with the code under test; the fixture had simply never built the
+    state it claimed to.
+
+    A fresh FileSecurity is the same mechanism the launcher itself uses, and it
+    replaces the DACL outright, so the fixture is the same on every host.
     """
-    if own:
-        # BEFORE the grants, not after: several of these fixtures deliberately
-        # strip our own ACE (read-only, or another principal only), and once
-        # that is done icacls /setowner comes back with exit 5.
-        subprocess.run(
-            ["icacls", str(target), "/setowner", f"*{_my_sid()}"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=True,
-        )
-    subprocess.run(
-        ["icacls", str(target), "/inheritance:r", *args],
+    rules = "; ".join(
+        "$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("
+        f"[System.Security.Principal.SecurityIdentifier]::new('{sid}'),"
+        f"[System.Security.AccessControl.FileSystemRights]::{rights},"
+        f"[System.Security.AccessControl.AccessControlType]::{kind})))"
+        for sid, rights, kind in (a.split(":") for a in aces)
+    )
+    script = (
+        "$ErrorActionPreference='Stop'; "
+        "$acl = New-Object System.Security.AccessControl.FileSecurity; "
+        "$acl.SetAccessRuleProtection($true,$false); "
+        "$acl.SetOwner([System.Security.Principal.WindowsIdentity]::GetCurrent().User); "
+        f"{rules}; "
+        f"Set-Acl -LiteralPath '{target}' -AclObject $acl"
+    )
+    done = subprocess.run(
+        [pwsh, "-NoProfile", "-Command", script],
         capture_output=True,
         text=True,
         timeout=120,
-        check=True,
     )
+    assert done.returncode == 0, done.stdout + done.stderr
 
 
 LOCAL_SERVICE = "S-1-5-19"  # stable, well-known, and never the current user
@@ -717,7 +728,7 @@ def test_a_file_we_own_alone_with_full_control_is_accepted(tmp_path):
     """Positive control. Every rejection below is meaningless without it."""
     target = tmp_path / "ok.log"
     target.write_text("", encoding="utf-8")
-    _icacls(target, "/grant", f"*{_my_sid()}:(F)")
+    _set_dacl(target, f"{_my_sid()}:FullControl:Allow")
 
     assert _verdict(tmp_path, target) is True, LAST_VERDICT
 
@@ -733,7 +744,7 @@ def test_an_ace_for_any_other_principal_is_rejected(tmp_path):
     """The blacklist accepted this: LOCAL SERVICE is not one of the six broad SIDs."""
     target = tmp_path / "other.log"
     target.write_text("planted\n", encoding="utf-8")
-    _icacls(target, "/grant", f"*{_my_sid()}:(F)", "/grant", f"*{LOCAL_SERVICE}:(R)")
+    _set_dacl(target, f"{_my_sid()}:FullControl:Allow", f"{LOCAL_SERVICE}:Read:Allow")
 
     assert _verdict(tmp_path, target) is False
 
@@ -752,7 +763,7 @@ def test_read_only_access_for_us_is_not_enough(tmp_path):
     """Being able to read a file is not the same as owning it exclusively."""
     target = tmp_path / "readonly.log"
     target.write_text("planted\n", encoding="utf-8")
-    _icacls(target, "/grant", f"*{_my_sid()}:(R)")
+    _set_dacl(target, f"{_my_sid()}:Read:Allow")
 
     assert _verdict(tmp_path, target) is False
 
@@ -767,7 +778,7 @@ def test_a_deny_ace_on_ourselves_is_rejected(tmp_path):
     """Allow ACEs alone do not describe effective rights once a Deny exists."""
     target = tmp_path / "denied.log"
     target.write_text("planted\n", encoding="utf-8")
-    _icacls(target, "/grant", f"*{_my_sid()}:(F)", "/deny", f"*{_my_sid()}:(W)")
+    _set_dacl(target, f"{_my_sid()}:FullControl:Allow", f"{_my_sid()}:Write:Deny")
 
     assert _verdict(tmp_path, target) is False
 
@@ -784,7 +795,7 @@ def test_an_owner_that_is_not_the_current_user_is_rejected(tmp_path):
     """
     target = tmp_path / "owned.log"
     target.write_text("planted\n", encoding="utf-8")
-    _icacls(target, "/grant", f"*{LOCAL_SERVICE}:(F)")
+    _set_dacl(target, f"{LOCAL_SERVICE}:FullControl:Allow")
 
     assert _verdict(tmp_path, target, sid_override=LOCAL_SERVICE) is False
     # Not read_text: the DACL names only LOCAL SERVICE, so being the owner
@@ -873,7 +884,7 @@ def test_a_real_sharing_violation_does_not_disclose_the_path(tmp_path):
     """No injected message at all: .NET's own IOException text embeds the path."""
     target = _sentinel_dir(tmp_path) / "run.log"
     target.write_text("", encoding="utf-8")
-    _icacls(target, "/grant", f"*{_my_sid()}:(F)")
+    _set_dacl(target, f"{_my_sid()}:FullControl:Allow")
     stub = (
         "$blocker = [System.IO.FileStream]::new($Target, "
         "[System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, "
