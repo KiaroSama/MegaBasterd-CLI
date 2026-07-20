@@ -10,7 +10,7 @@ from __future__ import annotations
 import threading
 import time
 
-from megabasterd_cli.utils.speed import TokenBucket, make_limiter
+from megabasterd_cli.utils.speed import NoOpLimiter, TokenBucket, make_limiter
 
 
 class FakeClock:
@@ -99,8 +99,11 @@ def test_unlimited_mode_never_blocks() -> None:
     bucket = TokenBucket(rate=0, sleeper=calls.append)
     bucket.consume(10**9)
     assert calls == []
+    # Reverted to the pre-regression assertion: make_limiter(0) returning a
+    # NoOpLimiter is the 1.x contract, and this line was edited to match the
+    # behaviour change rather than the behaviour being kept.
     limiter = make_limiter(0)
-    assert isinstance(limiter, TokenBucket) and limiter.rate == 0
+    assert isinstance(limiter, NoOpLimiter)
     limiter.consume(10**9)
 
 

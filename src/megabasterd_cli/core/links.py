@@ -75,6 +75,7 @@ class ParsedLink:
     def is_folder(self) -> bool:
         return self.type in (LinkType.FOLDER, LinkType.FOLDER_IN_FOLDER)
 
+    @property
     def needs_password(self) -> bool:
         """Compatibility surface retained for the 1.x series."""
         return self.type == LinkType.PASSWORD_PROTECTED

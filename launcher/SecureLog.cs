@@ -124,8 +124,18 @@ namespace MegaBasterd
         //   G:sid  group is us
         //   D:P    DACL protected - inheritance blocked
         //   (A;;FA;;;sid)  exactly one ACE: us, file-all-access
+        // A seam, null in every real run: a test sets it to a descriptor that
+        // CreateFileW will happily accept but the read-back must refuse, which
+        // is the only deterministic way to exercise "the volume did not apply
+        // what we asked for".
+        public static string CreationSddlOverride = null;
+
         static string CreationSddl(string sid)
         {
+            if (CreationSddlOverride != null)
+            {
+                return CreationSddlOverride;
+            }
             return "O:" + sid + "G:" + sid + "D:P(A;;FA;;;" + sid + ")";
         }
 
@@ -200,12 +210,13 @@ namespace MegaBasterd
                 result.Handle = handle;
                 result.Created = created;
                 VerifyKind(handle);
-                if (!created)
-                {
-                    // A file this call just created carries the descriptor above
-                    // by construction. Anything else has to prove itself.
-                    VerifySecurity(handle, sid);
-                }
+                // BOTH paths, not just the pre-existing one. A successful
+                // CREATE_NEW says the call was accepted, not that the volume
+                // applied the descriptor: a filesystem without ACL support
+                // silently drops it, and the log would then be created wide
+                // open by a code path whose whole point is that it cannot be.
+                // Read it back from the same handle either way.
+                VerifySecurity(handle, sid);
                 Identify(handle, result);
                 return result;
             }
