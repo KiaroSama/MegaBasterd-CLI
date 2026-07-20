@@ -12,7 +12,6 @@ import click
 from rich.table import Table
 
 from ..proxy.runtime import _load_persisted_pool, _pool_path
-from ..proxy.smart_proxy import SmartProxyPool
 from ..queue.storage import atomic_write_text
 from ..ui.prompts import confirm, print_error, print_info, print_success, print_warn
 from ..ui.theme import make_console
@@ -29,18 +28,6 @@ _POOL_LOCK_TIMEOUT_SECONDS = 10.0
 MAX_FETCH_BYTES = 4 * 1024 * 1024
 
 
-def _pool_lock() -> FileLock:
-    """The one lock guarding the proxy store, for reads AND writes."""
-    path = _pool_path()
-    return FileLock(
-        path.parent / (path.name + ".lock"),
-        message=(
-            f"Could not lock the proxy pool within {_POOL_LOCK_TIMEOUT_SECONDS:.0f}s; "
-            "another proxy command is holding it. Retry after it finishes."
-        ),
-    )
-
-
 @contextmanager
 def pool_transaction():
     """Hold the lock across the WHOLE read-modify-write, then save.
@@ -52,28 +39,29 @@ def pool_transaction():
     the lock dutifully held the entire time.
 
     Yield the pool, mutate it, and the save happens here on a clean exit. The
-    lock is NOT re-entrant, so this deliberately uses the non-locking writer.
+    lock and the write are inline because this is their only caller - a named
+    `_write_pool_locked` whose docstring had to say "the caller MUST already
+    hold the lock" is a precondition nobody can now get wrong.
     """
     path = _pool_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    lock = _pool_lock()
+    lock = FileLock(
+        path.parent / (path.name + ".lock"),
+        message=(
+            f"Could not lock the proxy pool within {_POOL_LOCK_TIMEOUT_SECONDS:.0f}s; "
+            "another proxy command is holding it. Retry after it finishes."
+        ),
+    )
     lock.acquire(timeout=_POOL_LOCK_TIMEOUT_SECONDS)
     try:
         # Re-read INSIDE the lock: this is what makes the loser of a race
         # observe the winner's write instead of overwriting it.
         pool = _load_persisted_pool()
         yield pool
-        _write_pool_locked(pool)
+        payload = json.dumps({"proxies": [e.url for e in pool.list()]}, indent=2)
+        atomic_write_text(path, payload)
     finally:
         lock.release()
-
-
-def _write_pool_locked(pool: SmartProxyPool) -> None:
-    """Serialize + atomic replace. The caller MUST already hold the lock."""
-    path = _pool_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps({"proxies": [e.url for e in pool.list()]}, indent=2)
-    atomic_write_text(path, payload)
 
 
 @click.group("proxy", short_help="Manage the Smart Proxy pool.")
