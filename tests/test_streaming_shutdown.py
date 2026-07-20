@@ -24,6 +24,12 @@ import pytest
 
 from megabasterd_cli.streaming.server import StreamingServer
 
+# These drive the `stream` command, and `stream_cmd` resolves its port with
+# `port or cfg.streaming_port` - so `--port 0` is falsy and every one of them
+# binds the SAME configured port rather than an ephemeral one. Sequentially
+# that is fine; on two xdist workers at once it is EADDRINUSE. One worker.
+pytestmark = pytest.mark.xdist_group("streaming_cli_port")
+
 CLEANUP_BUDGET = 10.0  # seconds; a deadlock blows straight past this
 
 
