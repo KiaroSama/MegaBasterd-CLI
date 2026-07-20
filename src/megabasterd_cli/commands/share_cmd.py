@@ -9,11 +9,7 @@ from ..config import accounts_file
 from ..core.api import MegaAPIClient
 from ..core.client import MegaClient
 from ..core.errors import MegaError
-from ..ui.prompts import ask, ask_password, print_error, print_success
-
-
-def _mfa_prompt() -> str:
-    return ask("Enter 6-digit 2FA code").strip()
+from ..ui.prompts import ask_mfa_code, ask_password, print_error, print_success
 
 
 @click.command("share", short_help="Create a public MEGA link for one of your nodes.")
@@ -70,7 +66,7 @@ def share_cmd(
     )
     client = MegaClient(api=api)
     try:
-        client.login(acc.email, pwd, mfa_code=mfa_code, mfa_prompt=_mfa_prompt)
+        client.login(acc.email, pwd, mfa_code=mfa_code, mfa_prompt=ask_mfa_code)
     except MegaError as exc:
         print_error(f"Login failed: {exc}")
         # This return skips the finally below, so release the session here.

@@ -10,13 +10,16 @@ from ..core.api import MegaAPIClient
 from ..core.client import MegaClient
 from ..core.errors import MegaError
 from ..proxy.runtime import effective_pool
-from ..ui.prompts import ask, ask_password, confirm, print_error, print_info, print_success
+from ..ui.prompts import (
+    ask_mfa_code,
+    ask_password,
+    confirm,
+    print_error,
+    print_info,
+    print_success,
+)
 from ..ui.tables import render_accounts
 from ..utils.redaction import redact_text
-
-
-def _mfa_prompt() -> str:
-    return ask("Enter 6-digit 2FA code").strip()
 
 
 def _api_for(cfg: Config) -> MegaAPIClient:
@@ -75,7 +78,7 @@ def account_add(
         print_info("Verifying credentials...")
         client = MegaClient(api=_api_for(cfg))
         try:
-            client.login(email, password, mfa_code=mfa_code, mfa_prompt=_mfa_prompt)
+            client.login(email, password, mfa_code=mfa_code, mfa_prompt=ask_mfa_code)
         except MegaError as e:
             print_error(f"Login verification failed: {redact_text(str(e))}")
             if not confirm("Add account anyway?", default=False):
@@ -144,7 +147,7 @@ def account_info(
 
     client = MegaClient(api=_api_for(cfg))
     try:
-        client.login(acc.email, password, mfa_code=mfa_code, mfa_prompt=_mfa_prompt)
+        client.login(acc.email, password, mfa_code=mfa_code, mfa_prompt=ask_mfa_code)
         quota = client.get_quota()
     except MegaError as e:
         print_error(f"Could not fetch quota: {redact_text(str(e))}")
@@ -182,7 +185,7 @@ def account_refresh_all(
 
         client = MegaClient(api=_api_for(cfg))
         try:
-            client.login(acc.email, password, mfa_code=mfa_code, mfa_prompt=_mfa_prompt)
+            client.login(acc.email, password, mfa_code=mfa_code, mfa_prompt=ask_mfa_code)
             quota = client.get_quota()
             mgr.update_quota(acc.email, quota.get("cstrg", 0), quota.get("mstrg", 0))
             print_success(f"{acc.email}: refreshed")

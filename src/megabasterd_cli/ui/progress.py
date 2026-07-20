@@ -10,6 +10,7 @@ from rich.console import Group
 from rich.live import Live
 from rich.text import Text
 
+from ..utils.helpers import format_eta
 from ..utils.speed import RollingSpeedMeter
 from .theme import make_console
 
@@ -245,7 +246,7 @@ class MultiFileProgressView:
         elif stopped:
             eta = speed_label = status.capitalize()
         else:
-            eta = _format_eta(remaining / speed) if total and speed and speed > 1 else "--:--"
+            eta = format_eta(remaining / speed) if total and speed and speed > 1 else "--:--"
             speed_label = _format_speed(speed)
         speed_style = (
             "bold green"
@@ -272,7 +273,7 @@ class MultiFileProgressView:
             # view; frozen exactly at terminal state by close().
             elapsed_ref = self.finished_at if self.finished_at is not None else time.perf_counter()
             text.append(" | Elapsed ", style="white")
-            text.append(_format_eta(elapsed_ref - self.started_at), style="bold #d99145")
+            text.append(format_eta(elapsed_ref - self.started_at), style="bold #d99145")
             if width >= 124:
                 item_text = f" | {self.completed_items}/{self.total_items} {self.item_label}"
                 if self.failed_items:
@@ -304,15 +305,6 @@ def _format_speed(speed: float | None) -> str:
     if speed is None:
         return "--"
     return f"{_format_bytes(speed)}/s"
-
-
-def _format_eta(seconds: float) -> str:
-    total = max(0, int(seconds))
-    hours, rem = divmod(total, 3600)
-    minutes, secs = divmod(rem, 60)
-    if hours:
-        return f"{hours:d}:{minutes:02d}:{secs:02d}"
-    return f"{minutes:02d}:{secs:02d}"
 
 
 def _shorten_middle(text: str, limit: int) -> str:

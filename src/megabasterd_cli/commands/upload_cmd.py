@@ -17,17 +17,20 @@ from ..core.client import MegaClient
 from ..core.errors import MegaError, QuotaError
 from ..core.uploader import MegaUploader, walk_upload_entries
 from ..ui.machine_output import MachineOutput, error_code_for
-from ..ui.prompts import ask, ask_password, print_error, print_info, print_success, print_warn
+from ..ui.prompts import (
+    ask_mfa_code,
+    ask_password,
+    print_error,
+    print_info,
+    print_success,
+    print_warn,
+)
 from ..ui.transfer_progress import TransferProgress
 from ..upload_support import QuotaLedger, finalize_upload_success
 from ..utils.redaction import redact_text
 from ..utils.speed import make_limiter
 
 log = logging.getLogger(__name__)
-
-
-def _mfa_prompt() -> str:
-    return ask("Enter 6-digit 2FA code").strip()
 
 
 @click.command("upload", short_help="Upload local files to MEGA.")
@@ -205,7 +208,7 @@ def upload(
         api = _new_api()
         client = MegaClient(api=api)
         try:
-            client.login(email, password, mfa_code=mfa_code, mfa_prompt=_mfa_prompt)
+            client.login(email, password, mfa_code=mfa_code, mfa_prompt=ask_mfa_code)
             return client
         except MegaError as exc:
             print_error(f"Login failed for {email}: {redact_text(str(exc))}")
