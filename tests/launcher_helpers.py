@@ -24,6 +24,10 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 RUN_PS1 = REPO / "Run.ps1"
 RUN_TEXT = RUN_PS1.read_text(encoding="utf-8")
+# The native secure-open helper moved out of Run.ps1 so the launcher would
+# stop carrying 350 lines of C#. Tests compile the SHIPPED file, not a copy.
+SECURE_LOG_CS = REPO / "launcher" / "SecureLog.cs"
+SECURE_LOG_SOURCE = SECURE_LOG_CS.read_text(encoding="utf-8")
 
 pwsh = shutil.which("pwsh") or shutil.which("powershell")
 requires_pwsh = pytest.mark.skipif(pwsh is None, reason="PowerShell is not available")
