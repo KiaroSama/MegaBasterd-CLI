@@ -532,6 +532,11 @@
     "NodeOperations.search",
     "NodeOperations.session"
   ],
+  "megabasterd_cli.core.progress_ticker": [
+    "JOIN_TIMEOUT_SECONDS",
+    "TICK_SECONDS",
+    "progress_ticker"
+  ],
   "megabasterd_cli.core.range_validation": [
     "RangeNotHonoredError",
     "validate_range_response"

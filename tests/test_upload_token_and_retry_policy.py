@@ -117,7 +117,7 @@ def _run(monkeypatch, up, source, state, chunk, response):
     )
     upload_chunk.retry.wait = lambda *a, **kw: 0  # no backoff in tests
     return upload_chunk(
-        up, "https://up.invalid/slot", source, chunk, b"\x00" * 16, b"\x00" * 8, state, 3
+        up, "https://up.invalid/slot", source, chunk, b"\x00" * 16, b"\x00" * 8, state
     )
 
 
@@ -327,7 +327,7 @@ def test_a_deterministic_upload_error_makes_exactly_one_attempt(monkeypatch, sou
 
     with pytest.raises(NonRetryableTransferError):
         upload_chunk(
-            up, "https://up.invalid/s", source, _chunk(0), b"\x00" * 16, b"\x00" * 8, state, 3
+            up, "https://up.invalid/s", source, _chunk(0), b"\x00" * 16, b"\x00" * 8, state
         )
 
     assert len(attempts) == 1, f"a deterministic 400 was retried {len(attempts)} times"
@@ -347,7 +347,7 @@ def test_a_server_error_is_retried_to_the_attempt_limit(monkeypatch, source, tmp
 
     with pytest.raises(RetryableTransferError):
         upload_chunk(
-            up, "https://up.invalid/s", source, _chunk(0), b"\x00" * 16, b"\x00" * 8, state, 3
+            up, "https://up.invalid/s", source, _chunk(0), b"\x00" * 16, b"\x00" * 8, state
         )
 
     assert len(attempts) == 5, f"a 5xx made {len(attempts)} attempts, expected 5"

@@ -184,7 +184,6 @@ def _count_blames(monkeypatch, source, tmp_path, post, expected_exc):
             b"\x00" * 16,
             b"\x00" * 8,
             state,
-            3,
         )
     assert pool.successes == []
     return pool.failures, up

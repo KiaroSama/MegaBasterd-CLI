@@ -9,6 +9,7 @@ options, and link expansion stay in `download_cmd.py`.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 import click
@@ -21,6 +22,53 @@ from ..ui.transfer_progress import TransferProgress, redact_link
 from ..utils.helpers import format_bytes
 from ..utils.hooks import run_post_transfer_command
 from ..utils.selection import SelectionCancelled, parse_selection_tokens
+
+
+def _folder_progress_callbacks(
+    progress, items: dict[str, str], machine, name_fn: Callable[[Path], str]
+):
+    """The per-file progress / done / failed callbacks the two folder-download
+    entry points share verbatim. They differ only in how a path becomes a
+    display name - relative to the output dir for the flat view, the bare
+    filename for a node inside a folder - so that is the one thing passed in.
+    """
+
+    def _item_for(path: Path) -> str:
+        key = str(path)
+        if key not in items:
+            items[key] = progress.add_item(name_fn(path))
+        return items[key]
+
+    def on_file_progress(path: Path, p):
+        progress.update_item(_item_for(path), p.bytes_done, p.total_bytes)
+
+    def on_file_done(result):
+        progress.finish_item(_item_for(result.path), "complete")
+        machine.emit(
+            event="result",
+            type="download",
+            status="success",
+            name=result.path.name,
+            path=str(result.path),
+            size=result.size,
+            elapsed_seconds=round(result.elapsed_seconds, 2),
+            integrity_ok=result.integrity_ok,
+        )
+
+    def on_file_failed(path: Path, exc: Exception):
+        progress.finish_item(_item_for(path), "failed")
+        machine.emit(
+            event="result",
+            type="download",
+            status="failed",
+            name=path.name,
+            path=str(path),
+            error_code=error_code_for(exc),
+            error=str(exc),
+        )
+
+    return on_file_progress, on_file_done, on_file_failed
+
 
 log = logging.getLogger(__name__)
 
@@ -179,39 +227,9 @@ def _download_folder(
                 _relative_name(destination), int(node.size or 0)
             )
 
-    def _item_for(path: Path) -> str:
-        key = str(path)
-        if key not in items:
-            items[key] = progress.add_item(_relative_name(path))
-        return items[key]
-
-    def on_file_progress(path: Path, p):
-        progress.update_item(_item_for(path), p.bytes_done, p.total_bytes)
-
-    def on_file_done(result):
-        progress.finish_item(_item_for(result.path), "complete")
-        machine.emit(
-            event="result",
-            type="download",
-            status="success",
-            name=result.path.name,
-            path=str(result.path),
-            size=result.size,
-            elapsed_seconds=round(result.elapsed_seconds, 2),
-            integrity_ok=result.integrity_ok,
-        )
-
-    def on_file_failed(path: Path, exc: Exception):
-        progress.finish_item(_item_for(path), "failed")
-        machine.emit(
-            event="result",
-            type="download",
-            status="failed",
-            name=path.name,
-            path=str(path),
-            error_code=error_code_for(exc),
-            error=str(exc),
-        )
+    on_file_progress, on_file_done, on_file_failed = _folder_progress_callbacks(
+        progress, items, machine, _relative_name
+    )
 
     try:
         with progress:
@@ -285,39 +303,9 @@ def _download_folder_file(
     folder_dl = MegaFolderDownloader(downloader)
     items: dict[str, str] = {}
 
-    def _item_for(path: Path) -> str:
-        key = str(path)
-        if key not in items:
-            items[key] = progress.add_item(path.name)
-        return items[key]
-
-    def on_file_progress(path: Path, p):
-        progress.update_item(_item_for(path), p.bytes_done, p.total_bytes)
-
-    def on_file_done(result):
-        progress.finish_item(_item_for(result.path), "complete")
-        machine.emit(
-            event="result",
-            type="download",
-            status="success",
-            name=result.path.name,
-            path=str(result.path),
-            size=result.size,
-            elapsed_seconds=round(result.elapsed_seconds, 2),
-            integrity_ok=result.integrity_ok,
-        )
-
-    def on_file_failed(path: Path, exc: Exception):
-        progress.finish_item(_item_for(path), "failed")
-        machine.emit(
-            event="result",
-            type="download",
-            status="failed",
-            name=path.name,
-            path=str(path),
-            error_code=error_code_for(exc),
-            error=str(exc),
-        )
+    on_file_progress, on_file_done, on_file_failed = _folder_progress_callbacks(
+        progress, items, machine, lambda path: path.name
+    )
 
     try:
         results = folder_dl.download_node_in_folder(
