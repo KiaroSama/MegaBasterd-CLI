@@ -7,6 +7,7 @@ import os
 import re
 import sys
 import time
+import traceback
 import uuid
 from contextlib import suppress
 from logging.handlers import RotatingFileHandler
@@ -122,10 +123,27 @@ class ContextFilter(logging.Filter):
 
 
 class RedactingFilter(logging.Filter):
-    """Apply text redaction before handlers format a log record."""
+    """Apply text redaction before handlers format a log record.
+
+    The traceback is folded into the message and `exc_info` is cleared, rather
+    than left for each handler to render. `RichHandler(rich_tracebacks=True)`
+    renders straight from `exc_info` and never passes through
+    `RedactingFormatter`, so it printed the redacted message and then the same
+    secret again, raw, one line later. Emptying `exc_info` here means NO
+    handler - present or future - can reach the unredacted exception.
+    """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        record.msg = redact_log_text(record.getMessage())
+        text = redact_log_text(record.getMessage())
+        if record.exc_info:
+            rendered = "".join(traceback.format_exception(*record.exc_info))
+            text = f"{text}\n{redact_log_text(rendered).rstrip()}"
+            record.exc_info = None
+        elif record.exc_text:
+            # A handler formatted this record before us and cached the raw text.
+            text = f"{text}\n{redact_log_text(record.exc_text).rstrip()}"
+        record.exc_text = None
+        record.msg = text
         record.args = ()
         return True
 
@@ -255,9 +273,15 @@ def setup_logging(
 
     if not quiet:
         try:
+            from rich.console import Console
             from rich.logging import RichHandler
 
+            # stderr, explicitly: a bare Console binds to sys.stdout, which the
+            # --json contract reserves for structured records (and which
+            # `mb ls > out.txt` sends to the user's data file). The ImportError
+            # fallback below has always used stderr.
             handler: logging.Handler = RichHandler(
+                console=Console(stderr=True),
                 rich_tracebacks=True,
                 show_path=False,
                 show_time=True,
