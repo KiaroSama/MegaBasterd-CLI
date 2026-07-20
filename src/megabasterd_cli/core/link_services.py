@@ -178,6 +178,75 @@ def decode_elc_payload(parsed: ParsedLink) -> ElcPayload:
     return ElcPayload(encrypted_links, service_url, data_token)
 
 
+# Maximum number of HTTPS redirects any link-service POST will follow.
+MAX_SERVICE_REDIRECTS = 5
+
+
+def _post_validated(
+    url: str,
+    validate,  # Callable[[str], None] - raises on a destination we refuse
+    selector,  # ProxySelector
+    timeout: int,
+    what: str,
+    max_redirects: int = MAX_SERVICE_REDIRECTS,
+    **post_kwargs,
+):
+    """POST without automatic redirects, re-validating every hop.
+
+    The ONE hop loop shared by all three link services. `validate_safe_target`
+    (or, for DLC, the stricter same-origin check) used to run once on the
+    initial URL while `requests` was left to follow redirects itself, so an
+    attacker-named host could answer 307 and have the credential body re-POSTed
+    to loopback, link-local or RFC1918. Redirects are therefore followed by
+    hand: `allow_redirects=False`, validate, then connect.
+
+    Returns `(response, picked_proxy)`. The proxy is NOT credited here - only
+    the caller knows whether the body proved usable - but a transport failure
+    is blamed on it immediately, since that is unambiguous. The proxy is
+    selected per hop, so a redirect can never downgrade to a direct request,
+    and the reply is requested with `stream=True` so the caller can bound the
+    body while reading it.
+    """
+    import requests
+
+    current = url
+    for _ in range(max_redirects + 1):
+        # Validate before connecting: covers the initial URL and every redirect.
+        validate(current)
+        request_proxies, picked = selector.select()
+        try:
+            resp = requests.post(
+                current,
+                timeout=timeout,
+                proxies=request_proxies,
+                allow_redirects=False,
+                stream=True,
+                **post_kwargs,
+            )
+        except requests.RequestException:
+            selector.report_failure(picked)
+            raise
+        status = getattr(resp, "status_code", 200)
+        if status in (301, 302, 303, 307, 308):
+            location = resp.headers.get("Location") if hasattr(resp, "headers") else None
+            with contextlib.suppress(Exception):
+                resp.close()
+            if not location:
+                raise ValueError(f"{what} redirect is missing a Location header")
+            # Resolve relative redirects against the current URL; the next loop
+            # iteration validates the result before any request is sent.
+            current = urljoin(current, location.strip())
+            continue
+        return resp, picked
+    raise ValueError(f"{what} exceeded the maximum number of redirects")
+
+
+def _close_quietly(response) -> None:
+    """Return the connection to the pool even when the response was rejected."""
+    with contextlib.suppress(Exception):
+        response.close()
+
+
 def resolve_elc_links(
     parsed: ParsedLink,
     accounts: dict[str, dict[str, str]] | None = None,
@@ -191,9 +260,11 @@ def resolve_elc_links(
     `accounts` is keyed by ELC service host and each value may contain
     `user` plus either `api_key` or `apikey`. Explicit `user`/`api_key`
     arguments override configured accounts.
-    """
-    import requests
 
+    The POST goes through `_post_validated`, so every redirect hop is validated
+    before the credentials are sent again and the reply arrives with
+    `stream=True` for the bounded read below.
+    """
     selector = _require_selector(selector, "resolve_elc_links")
 
     payload = decode_elc_payload(parsed)
@@ -207,10 +278,12 @@ def resolve_elc_links(
     if not user or not api_key:
         raise ValueError(f"No ELC credentials configured for host {host!r}")
 
-    request_proxies, picked = selector.select()
-
-    response = requests.post(
+    response, picked = _post_validated(
         payload.service_url,
+        lambda target: validate_safe_target(target, what="ELC service"),
+        selector,
+        timeout,
+        "ELC server",
         data={
             "OPERATION_TYPE": "D",
             "DATA": payload.data_token,
@@ -218,13 +291,15 @@ def resolve_elc_links(
             "APIKEY": api_key,
         },
         headers={"User-Agent": "MegaBasterd-CLI/1.0"},
-        timeout=timeout,
-        proxies=request_proxies,
-        stream=True,
     )
+    try:
+        response.raise_for_status()
+        body = _read_bounded_json(response, MAX_SERVICE_RESPONSE_BYTES, "ELC server")
+    finally:
+        _close_quietly(response)
+    # Credited only now: an error status or an unreadable body is not a working
+    # proxy, and SmartProxyPool.pick weights by success ratio.
     selector.report_success(picked)
-    response.raise_for_status()
-    body = _read_bounded_json(response, MAX_SERVICE_RESPONSE_BYTES, "ELC server")
 
     dec_pass = body.get("d") if isinstance(body, dict) else None
     if not dec_pass:
@@ -365,16 +440,18 @@ def _dlc_post(
 ):
     """POST to the DLC service, following only same-origin HTTPS redirects.
 
-    Automatic redirect following is disabled. Before every request (including
-    each redirect hop) the target is validated to be the same HTTPS origin as
-    the approved service URL (same host and port, no credentials, globally
-    routable). An unsafe destination is rejected before any request is issued to
-    it, so the DLC payload is never sent to a cross-host or downgraded target.
-    TLS verification, timeout, proxies, and the response-size limit are
-    preserved on every hop.
-    """
-    import requests
+    Automatic redirect following is disabled (`allow_redirects=False`); the hop
+    loop lives in `_post_validated`, which is shared with ELC and MegaCrypter.
+    Before every request (including each redirect hop) the target is validated
+    to be the same HTTPS origin as the approved service URL (same host and port,
+    no credentials, globally routable). An unsafe destination is rejected before
+    any request is issued to it, so the DLC payload is never sent to a cross-host
+    or downgraded target. TLS verification, timeout, proxies, `stream=True` and
+    the response-size limit are preserved on every hop.
 
+    Returns `(response, picked_proxy)`; the caller credits the proxy once the
+    body has been read.
+    """
     approved_host, approved_port = _dlc_origin(service_url)
     # The initial endpoint must be an explicitly approved origin (anti-SSRF).
     # Run per-target checks first so scheme/credential/IP problems get a precise
@@ -383,34 +460,16 @@ def _dlc_post(
     _validate_dlc_target(service_url, approved_host, approved_port)
     if (approved_host, approved_port) not in _APPROVED_DLC_ORIGINS:
         raise ValueError("Refusing DLC request to an unapproved service endpoint")
-    current = service_url
-    for _ in range(max_redirects + 1):
-        # Validate before connecting: covers the initial URL and every redirect.
-        _validate_dlc_target(current, approved_host, approved_port)
-        # Select per hop, so a redirect can never downgrade to a direct request.
-        request_proxies, _picked = selector.select()
-        resp = requests.post(
-            current,
-            data=body,
-            headers=headers,
-            timeout=timeout,
-            proxies=request_proxies,
-            allow_redirects=False,
-            stream=True,
-        )
-        status = getattr(resp, "status_code", 200)
-        if status in (301, 302, 303, 307, 308):
-            location = resp.headers.get("Location") if hasattr(resp, "headers") else None
-            with contextlib.suppress(Exception):
-                resp.close()
-            if not location:
-                raise ValueError("DLC redirect is missing a Location header")
-            # Resolve relative redirects against the current HTTPS URL; the next
-            # loop iteration validates it before any request is sent.
-            current = urljoin(current, location.strip())
-            continue
-        return resp
-    raise ValueError("DLC service exceeded the maximum number of redirects")
+    return _post_validated(
+        service_url,
+        lambda target: _validate_dlc_target(target, approved_host, approved_port),
+        selector,
+        timeout,
+        "DLC service",
+        max_redirects=max_redirects,
+        data=body,
+        headers=headers,
+    )
 
 
 def decrypt_dlc_container(
@@ -431,7 +490,7 @@ def decrypt_dlc_container(
 
     dlc_id = text[-88:]
     enc_dlc_data = text[:-88].strip()
-    response = _dlc_post(
+    response, picked = _dlc_post(
         service_url,
         f"destType=jdtc6&b=JD&srcType=dlc&data={dlc_id}&v={DLC_REV}",
         {
@@ -446,11 +505,16 @@ def decrypt_dlc_container(
         timeout,
         selector,
     )
-    response.raise_for_status()
-    # Treat the third-party response as untrusted: bound it WHILE reading. The
-    # previous `len(response.text) > MAX` check was inert - `response.text` had
-    # already buffered and gzip-inflated the entire body before it ran.
-    text = read_bounded_text(response, MAX_DLC_RESPONSE_BYTES, "DLC service")
+    try:
+        response.raise_for_status()
+        # Treat the third-party response as untrusted: bound it WHILE reading.
+        # The previous `len(response.text) > MAX` check was inert -
+        # `response.text` had already buffered and gzip-inflated the entire body
+        # before it ran.
+        text = read_bounded_text(response, MAX_DLC_RESPONSE_BYTES, "DLC service")
+    finally:
+        _close_quietly(response)
+    selector.report_success(picked)
     m = re.search(r"<\s*rc\s*>(.+?)<\s*/\s*rc\s*>", text, re.IGNORECASE | re.DOTALL)
     if not m:
         raise ValueError("DLC service did not return a key")
@@ -489,26 +553,32 @@ def _post_megacrypter(
     timeout: int,
     selector=None,  # ProxySelector | None
 ) -> dict:
-    import requests
+    """POST to the MegaCrypter API and return the parsed body.
 
+    The request goes through `_post_validated`, so every redirect hop is
+    re-validated before the password-bearing body is sent again, and the reply
+    arrives with `stream=True` for the bounded read below.
+    """
     selector = _require_selector(selector, "_post_megacrypter")
     # The MegaCrypter host comes from the link itself, so a crafted mc:// link
     # must not aim a password-bearing POST at loopback or a metadata service.
     api_url = _megacrypter_api_url(parsed)
-    validate_safe_target(api_url, what="MegaCrypter server")
 
-    request_proxies, picked = selector.select()
-
-    response = requests.post(
+    response, picked = _post_validated(
         api_url,
+        lambda target: validate_safe_target(target, what="MegaCrypter server"),
+        selector,
+        timeout,
+        "MegaCrypter server",
         json=payload,
-        timeout=timeout,
-        proxies=request_proxies,
-        stream=True,
     )
+    try:
+        response.raise_for_status()
+        body = _read_bounded_json(response, MAX_SERVICE_RESPONSE_BYTES, "MegaCrypter server")
+    finally:
+        _close_quietly(response)
+    # Credited only now: the body had to prove readable first.
     selector.report_success(picked)
-    response.raise_for_status()
-    body = _read_bounded_json(response, MAX_SERVICE_RESPONSE_BYTES, "MegaCrypter server")
     if not isinstance(body, dict):
         raise ValueError(f"Unexpected MegaCrypter response: {body!r}")
     err = body.get("error") or body.get("err")
@@ -554,6 +624,11 @@ def _decrypt_megacrypter_password_info(body: dict, password: str | None) -> tupl
     iteration_power = int(parts[0])
     if iteration_power < 0:
         raise ValueError("Malformed MegaCrypter password descriptor")
+    # Bound the EXPONENT, not the result: `2**iteration_power` is allocated the
+    # moment it is written, and the exponent comes from the attacker-chosen
+    # host - `2**(10**15)` passed 9.2 GB without ever reaching the check below.
+    if iteration_power > MAX_MEGACRYPTER_PBKDF2_ITERATIONS.bit_length():
+        raise ValueError("MegaCrypter password descriptor requests too many iterations")
     iterations = 2**iteration_power
     if iterations > MAX_MEGACRYPTER_PBKDF2_ITERATIONS:
         raise ValueError("MegaCrypter password descriptor requests too many iterations")
@@ -675,6 +750,10 @@ def get_megacrypter_download_url(
             _std_b64_decode(str(pass_iv)),
         )
         dl_url = decrypted.decode("utf-8", errors="replace")
+    # The service picks this URL, and both the streaming server and the download
+    # source hand it straight to `requests.get`. Validating the /api endpoint
+    # says nothing about what that endpoint answered with.
+    validate_safe_target(dl_url, what="MegaCrypter download URL")
     return dl_url
 
 

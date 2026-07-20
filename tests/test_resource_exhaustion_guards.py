@@ -151,11 +151,22 @@ def test_dlc_response_is_bounded_while_reading(monkeypatch):
 
 def test_service_responses_are_requested_as_streams():
     """`stream=True` is what makes the cap possible; without it the body is
-    already buffered and inflated by the time any check could run."""
-    import inspect
+    already buffered and inflated by the time any check could run.
 
+    The three services used to each carry their own `requests.post`, so this
+    grepped all three. They now share `_post_validated`, which is where the
+    flag actually lives - so assert it THERE, and separately assert the three
+    still route through it.
+
+    The docstring is stripped first because these functions describe their own
+    flags in prose: grepping raw source stayed green after the real keyword was
+    flipped, which I only found by mutating it.
+    """
+    from tests.test_dlc_hardening import code_without_docstring
+
+    assert "stream=True" in code_without_docstring(ls._post_validated)
     for fn in (ls.resolve_elc_links, ls._post_megacrypter, ls._dlc_post):
-        assert "stream=True" in inspect.getsource(fn), fn.__name__
+        assert "_post_validated" in code_without_docstring(fn), fn.__name__
 
 
 # ---------------------------------------------------------------------------
