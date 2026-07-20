@@ -119,15 +119,28 @@ def test_appending_never_widens_the_mode_on_posix(tmp_path):
 
 
 @posix_only
-def test_an_unsafe_pre_existing_file_is_replaced_not_appended_to_on_posix(tmp_path):
+def test_an_unsafe_pre_existing_file_is_tightened_not_replaced_on_posix(tmp_path):
+    """Tightened in place, never unlinked and recreated.
+
+    This used to assert the opposite - that the pre-existing file was replaced.
+    Unlinking is the wrong answer for an *arbitrary* pre-existing path: the log
+    path is attacker-influenceable, so unlink-and-replace turns a permission
+    problem into a file-deletion primitive. `fchmod` on the open descriptor
+    closes the permission hole without destroying anything, and the descriptor
+    is re-verified before a byte is written. The assertion below is therefore
+    stronger than the one it replaces: the mode must be fixed AND the original
+    file must still be the same file.
+    """
     path = tmp_path / "planted.log"
     path.write_text("planted\n", encoding="utf-8")
     path.chmod(0o666)
+    inode = path.lstat().st_ino
 
     secure_log.append_line(path, "ours")
 
     assert _mode(path) == OWNER_ONLY, oct(_mode(path))
-    assert "planted" not in path.read_text(encoding="utf-8")
+    assert path.lstat().st_ino == inode, "the pre-existing file was replaced, not tightened"
+    assert "ours" in path.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

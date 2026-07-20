@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import subprocess
 import sys
 import time
 import uuid
@@ -13,6 +12,9 @@ from contextlib import suppress
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+from . import secure_log
+from .secure_log import InsecureLogFileError
 
 _URL_RE = re.compile(r"https?://[^\s'\"\]\)>,]+", re.IGNORECASE)
 _MEGA_API_PATH_RE = re.compile(r"/cs\?[^\s'\"\]\)>,]+", re.IGNORECASE)
@@ -47,6 +49,7 @@ _SENSITIVE_FIELD_RE = re.compile(
 _context = {"run_id": "-", "command": "-"}
 _process_started_at = time.perf_counter()
 _shutdown_log_registered = False
+_file_logging_warned = False
 
 
 def _redact_url_query(url: str) -> str:
@@ -134,54 +137,73 @@ class RedactingFormatter(logging.Formatter):
         return redact_log_text(super().format(record))
 
 
-def _owner_only(path: str) -> None:
-    """Make `path` exist and be readable only by its owner, before it is written.
+def _warn_once(message: str) -> None:
+    """Emit at most one sanitized file-logging warning, straight to stderr.
 
-    Redaction is the guard for what lands in the log; this is defence in depth
-    for what redaction misses, so a failure here must never stop logging.
+    Straight to stderr and not through `logging`: the thing that just failed is
+    the log file, and routing the failure through the logger is how a hardening
+    error would end up written into the very file it refused to secure.
     """
-    # sys.platform (not os.name) so type checkers narrow away the branch that
-    # cannot exist on the platform they are checking.
-    if sys.platform == "win32":
-        if os.path.exists(path):
-            return
-        Path(path).touch()
-        # ponytail: icacls subprocess instead of SetNamedSecurityInfo via ctypes -
-        # it runs once per file creation, so swap only if that cost shows up.
-        with suppress(OSError, subprocess.SubprocessError):
-            import getpass
-
-            subprocess.run(
-                # /inheritance:r drops the inherited (world/Users) ACEs; /grant:r
-                # then leaves the current account as the only entry.
-                ["icacls", path, "/inheritance:r", "/grant:r", f"{getpass.getuser()}:(F)"],
-                capture_output=True,
-                check=False,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
+    global _file_logging_warned
+    if _file_logging_warned:
         return
-    # O_NOFOLLOW: never chmod through a symlink someone planted in the log dir.
-    # No O_EXCL, so an already-permissive file from an older run is tightened too.
-    fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
-    try:
-        os.fchmod(fd, 0o600)
-    finally:
-        os.close(fd)
+    _file_logging_warned = True
+    print(f"warning: {redact_log_text(message)}", file=sys.stderr)
 
 
 class OwnerOnlyRotatingFileHandler(RotatingFileHandler):
-    """RotatingFileHandler that never leaves a world-readable window.
+    """RotatingFileHandler that opens only files proven to be owner-only.
 
     The base class opens through the ambient umask, so a typical 0o022 umask
-    published the log as 0o644. Rotation targets inherit the mode of the primary
-    file (rollover is a rename), so pre-creating each opened file owner-only
-    covers the backups too.
+    published the log as 0o644. Every open - the primary file and the fresh
+    primary after each rollover - goes through `secure_log.open_secure`, which
+    raises rather than returning a descriptor on a file it could not secure.
+    There is deliberately no `super()._open()` fallback: the previous version
+    had one, and it followed the very symlink `O_NOFOLLOW` had just rejected.
+
+    Rotated backups are renames of an already-0600 primary, so they inherit the
+    mode; the rename *destinations* are still checked, because a symlink
+    planted at `cli.log.1` would otherwise capture the next rollover.
     """
 
+    def __init__(self, *args, **kwargs):
+        self._file_logging_failed = False
+        super().__init__(*args, **kwargs)
+
     def _open(self):
-        with suppress(OSError):
-            _owner_only(self.baseFilename)
-        return super()._open()
+        fd = secure_log.open_secure(self.baseFilename)
+        return os.fdopen(fd, self.mode, encoding=self.encoding, errors=self.errors)
+
+    def doRollover(self):  # noqa: N802 - the base class spells it this way
+        # rotation_filename, not string concatenation, so a configured namer's
+        # real destinations are the ones that get checked.
+        for index in range(1, self.backupCount + 1):
+            secure_log.reject_if_unsafe_target(
+                self.rotation_filename(f"{self.baseFilename}.{index}")
+            )
+        super().doRollover()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        # RotatingFileHandler.emit funnels every exception into handleError, so
+        # the fail-closed decision has to be made here rather than around it.
+        if self._file_logging_failed:
+            return
+        try:
+            if self.shouldRollover(record):
+                self.doRollover()
+            logging.FileHandler.emit(self, record)
+        except InsecureLogFileError as exc:
+            self._disable(exc)
+        except Exception:
+            # Every other failure keeps the base class's behaviour.
+            self.handleError(record)
+
+    def _disable(self, exc: InsecureLogFileError) -> None:
+        """Stop writing this file for good. The console handler keeps working."""
+        self._file_logging_failed = True
+        with suppress(Exception):
+            self.close()
+        _warn_once(f"file logging disabled: {exc}")
 
 
 def _register_shutdown_log() -> None:
@@ -260,13 +282,21 @@ def setup_logging(
             root.addHandler(handler)
 
     if log_file:
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        fh = OwnerOnlyRotatingFileHandler(
-            log_file,
-            maxBytes=max_bytes,
-            backupCount=backup_count,
-            encoding="utf-8",
-        )
+        # A log file that cannot be made owner-only is not written at all. The
+        # CLI keeps running on the console handler rather than dying over a log
+        # file, but it never degrades to an ordinary unprotected open.
+        try:
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            fh = OwnerOnlyRotatingFileHandler(
+                log_file,
+                maxBytes=max_bytes,
+                backupCount=backup_count,
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            _warn_once(f"file logging disabled: {exc}")
+            _quiet_noisy_libraries()
+            return
         fh.setLevel(logging.DEBUG)
         fh.addFilter(context_filter)
         fh.addFilter(redacting_filter)
@@ -281,6 +311,9 @@ def setup_logging(
         root.addHandler(fh)
         root.debug("File logging initialized at %s", log_file)
 
-    # Quiet noisy libraries by default
+    _quiet_noisy_libraries()
+
+
+def _quiet_noisy_libraries() -> None:
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("requests").setLevel(logging.WARNING)

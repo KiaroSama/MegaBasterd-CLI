@@ -57,6 +57,12 @@ $script:UnixOwnerOnly = if ($script:IsWindowsHost) { $null } else {
 # Paths whose owner-only creation has already been verified this run, so the
 # per-line check stays a Test-Path rather than a Get-Acl.
 $script:SecuredLogs = @{}
+# Set once, never cleared: if a log file cannot be proven owner-only, launcher
+# file logging is off for the rest of the run. There is no permissive fallback.
+$script:LauncherFileLoggingDisabled = $false
+# Well-known SIDs that must never hold a read ACE on a launcher log: Everyone,
+# BUILTIN\Users, Authenticated Users, INTERACTIVE, BUILTIN\Guests, ANONYMOUS.
+$script:BroadSids = @("S-1-1-0", "S-1-5-32-545", "S-1-5-11", "S-1-5-4", "S-1-5-32-546", "S-1-5-7")
 $script:Palette = [ordered]@{
     success = "#22FF44"
     warning = "#F59E0B"
@@ -83,13 +89,54 @@ function Get-RedactedText {
     return $Text
 }
 
+function Disable-LauncherFileLogging {
+    param([string] $Reason)
+    # One sanitized console warning per run, then silence. Deliberately NOT
+    # routed through Write-Launcher/Write-RunLog: those end in the very file we
+    # just refused to write, so logging the failure would recurse into it.
+    if ($script:LauncherFileLoggingDisabled) {
+        return
+    }
+    $script:LauncherFileLoggingDisabled = $true
+    try {
+        [Console]::Error.WriteLine("launcher: file logging disabled - $(Get-RedactedText $Reason)")
+    } catch {
+        # A host without a usable stderr still gets the fail-closed behaviour.
+    }
+}
+
 function Test-OwnerOnlyLogFile {
     param([string] $Path)
+    # Answers "is this provably a safe owner-only regular file", not "does it
+    # look plausible". It used to return AreAccessRulesProtected alone, which
+    # says nothing about a reparse point, a directory, or a protected DACL that
+    # still carries a broad read ACE.
     try {
-        if ($script:IsWindowsHost) {
-            return (Get-Acl -LiteralPath $Path).AreAccessRulesProtected
+        $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+        if ($item -isnot [System.IO.FileInfo]) {
+            return $false
         }
-        return ([System.IO.File]::GetUnixFileMode($Path) -eq $script:UnixOwnerOnly)
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            return $false
+        }
+        if (-not $script:IsWindowsHost) {
+            return ($item.UnixFileMode -eq $script:UnixOwnerOnly)
+        }
+        $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+        if (-not $acl.AreAccessRulesProtected) {
+            return $false
+        }
+        $readMask = [System.Security.AccessControl.FileSystemRights]::Read
+        foreach ($rule in $acl.Access) {
+            if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) {
+                continue
+            }
+            $sid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier])
+            if (($script:BroadSids -contains $sid.Value) -and (($rule.FileSystemRights -band $readMask) -ne 0)) {
+                return $false
+            }
+        }
+        return $true
     } catch {
         return $false
     }
@@ -108,13 +155,16 @@ function New-SecureLogFile {
         return
     }
     if (Test-Path -LiteralPath $Path) {
-        # A file already sitting at this run's log path is not trusted: it can
-        # be world-readable or a planted link. Replaced, never appended to.
+        # Whatever already occupies this run's log path belongs to somebody
+        # else. It is verified, never unlinked: the old code deleted it, and
+        # unlink-and-replace of an arbitrary path destroys a planted symlink or
+        # junction, then hands back a "secured" file an attacker made us create.
+        # Not provably a safe owner-only regular file means fail closed.
         if (Test-OwnerOnlyLogFile $Path) {
             $script:SecuredLogs[$Path] = $true
             return
         }
-        Remove-Item -LiteralPath $Path -Force
+        throw "Refusing to use the existing entry at $Path - it is not a verifiable owner-only file."
     }
     $options = [System.IO.FileStreamOptions]::new()
     $options.Mode = [System.IO.FileMode]::CreateNew
@@ -131,6 +181,11 @@ function New-SecureLogFile {
             $me, "FullControl", "Allow")))
         Set-Acl -LiteralPath $Path -AclObject $acl
     }
+    # The ACL/mode is read back rather than assumed: Set-Acl can be a no-op on
+    # some filesystems, and an unverified permission is not a permission.
+    if (-not (Test-OwnerOnlyLogFile $Path)) {
+        throw "Created $Path but could not verify it as owner-only."
+    }
     $script:SecuredLogs[$Path] = $true
 }
 
@@ -140,12 +195,21 @@ function Write-SecureLogLine {
         [string] $Line
     )
     # $Line is already redacted by the caller; Add-Content on an existing file
-    # appends without touching its mode or its DACL.
-    if (-not (Test-Path -LiteralPath $LogDir)) {
-        New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+    # appends without touching its mode or its DACL. The append is reachable
+    # only through a successful New-SecureLogFile - securing is the gate, not a
+    # best effort that Add-Content used to run past regardless.
+    if ($script:LauncherFileLoggingDisabled) {
+        return
     }
-    New-SecureLogFile $Path
-    Add-Content -LiteralPath $Path -Value $Line -Encoding UTF8
+    try {
+        if (-not (Test-Path -LiteralPath $LogDir)) {
+            New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+        }
+        New-SecureLogFile $Path
+        Add-Content -LiteralPath $Path -Value $Line -Encoding UTF8
+    } catch {
+        Disable-LauncherFileLogging $_.Exception.Message
+    }
 }
 
 function Write-RunLog {
