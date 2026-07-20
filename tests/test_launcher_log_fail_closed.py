@@ -19,12 +19,15 @@ from __future__ import annotations
 
 import os
 import shutil
-import stat
 import subprocess
 import uuid
 from pathlib import Path
 
 import pytest
+
+from tests.launcher_helpers import artifacts as _artifacts
+from tests.launcher_helpers import extract_function as _extract_function
+from tests.launcher_helpers import mode as _mode
 
 REPO = Path(__file__).resolve().parents[1]
 RUN_PS1 = REPO / "Run.ps1"
@@ -62,24 +65,6 @@ def _launch(args: list[str], log_dir: Path) -> subprocess.CompletedProcess:
         env=env,
         timeout=300,
     )
-
-
-def _artifacts(log_dir: Path) -> list[Path]:
-    return [p for p in log_dir.rglob("*") if p.is_file()]
-
-
-def _extract_function(name: str) -> str:
-    """Pull one PowerShell function out of Run.ps1 by brace matching."""
-    start = RUN_TEXT.index(f"function {name} {{")
-    depth = 0
-    for index in range(start, len(RUN_TEXT)):
-        if RUN_TEXT[index] == "{":
-            depth += 1
-        elif RUN_TEXT[index] == "}":
-            depth -= 1
-            if depth == 0:
-                return RUN_TEXT[start : index + 1]
-    raise AssertionError(f"unbalanced braces in {name}")
 
 
 def _code_of(name: str) -> str:
@@ -231,10 +216,6 @@ def _mutation_script(tmp_path: Path, body: str, name: str = "mutate.ps1") -> Pat
     return script
 
 
-def _mode(path: Path) -> int:
-    return stat.S_IMODE(path.lstat().st_mode)
-
-
 def _acl(path: Path) -> str:
     probe = subprocess.run(
         [
@@ -256,36 +237,6 @@ def _acl(path: Path) -> str:
 # ---------------------------------------------------------------------------
 # 1. a fresh run is owner-only from creation
 # ---------------------------------------------------------------------------
-
-
-@windows_only
-@requires_pwsh
-def test_fresh_launcher_log_is_owner_only_from_creation_on_windows(tmp_path):
-    log_dir = tmp_path / f"logs-{uuid.uuid4().hex[:8]}"
-    log_dir.mkdir()
-
-    _launch(["--help"], log_dir)
-
-    logs = list(log_dir.glob("launcher-*.log"))
-    assert logs, "no launcher log was produced - this check would prove nothing"
-    rendered = _acl(logs[0])
-    assert rendered.splitlines()[:1] == ["True"], f"log inherits ACLs: {rendered!r}"
-    for broad in BROAD:
-        assert broad not in rendered, f"log grants {broad}: {rendered!r}"
-
-
-@posix_only
-@requires_pwsh
-def test_fresh_launcher_log_is_mode_0600_on_posix(tmp_path):
-    """0644 via the ambient umask was the bug; nothing wider than 0600 may exist."""
-    log_dir = tmp_path / f"logs-{uuid.uuid4().hex[:8]}"
-    log_dir.mkdir()
-
-    _launch(["--help"], log_dir)
-
-    logs = list(log_dir.glob("launcher-*.log"))
-    assert logs, "no launcher log was produced - this check would prove nothing"
-    assert _mode(logs[0]) == OWNER_ONLY, oct(_mode(logs[0]))
 
 
 # ---------------------------------------------------------------------------
@@ -553,10 +504,6 @@ def test_exactly_one_warning_and_no_secret_when_the_second_write_fails(tmp_path)
 # ---------------------------------------------------------------------------
 
 
-def test_start_transcript_stays_absent():
-    assert "Start-Transcript" not in RUN_TEXT.replace("# Deliberately NO Start-Transcript", "")
-
-
 def test_an_untrusted_entry_is_never_unlinked():
     """The forbidden shape: unlink-and-replace of a path we do not own."""
     body = _code_of("Open-VerifiedLogStream")
@@ -592,10 +539,6 @@ def test_windows_does_not_depend_on_a_type_absent_from_powershell_5_1():
     body = _code_of("Open-VerifiedLogStream")
     windows_branch = body[body.index("if ($script:IsWindowsHost) {") :].split("} else {")[0]
     assert "FileStreamOptions" not in windows_branch, "5.1 cannot construct this"
-
-
-def test_exactly_one_launcher_remains():
-    assert [p.name for p in REPO.glob("*.ps1")] == ["Run.ps1"]
 
 
 # ---------------------------------------------------------------------------

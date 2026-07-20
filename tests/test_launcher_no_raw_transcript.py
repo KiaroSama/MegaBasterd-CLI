@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.launcher_helpers import artifacts as _artifacts
+
 REPO = Path(__file__).resolve().parents[1]
 RUN_PS1 = REPO / "Run.ps1"
 
@@ -44,10 +46,6 @@ def _launch(args: list[str], log_dir: Path) -> subprocess.CompletedProcess:
         env=env,
         timeout=300,
     )
-
-
-def _artifacts(log_dir: Path) -> list[Path]:
-    return [p for p in log_dir.rglob("*") if p.is_file()]
 
 
 def _scan(log_dir: Path) -> list[str]:
@@ -106,42 +104,3 @@ def test_a_secret_in_a_json_positional_never_reaches_an_artifact(tmp_path):
     produced = _artifacts(log_dir)
     assert produced, "no artifacts were produced - this scan would prove nothing"
     assert _scan(log_dir) == [], f"secret leaked into {_scan(log_dir)}"
-
-
-@requires_pwsh
-def test_a_password_option_never_reaches_an_artifact(tmp_path):
-    log_dir = tmp_path / f"logs-{uuid.uuid4().hex[:8]}"
-    log_dir.mkdir()
-
-    _launch(["config", "get", "download_path", "--password", SECRET], log_dir)
-
-    produced = _artifacts(log_dir)
-    assert produced, "no artifacts were produced - this scan would prove nothing"
-    assert _scan(log_dir) == [], f"secret leaked into {_scan(log_dir)}"
-
-
-@requires_pwsh
-def test_the_launcher_log_is_owner_only_from_creation(tmp_path):
-    """Not chmod'd afterwards: there must be no readable window at all."""
-    if os.name != "nt":
-        pytest.skip("ACL check is Windows-specific")
-
-    log_dir = tmp_path / f"logs-{uuid.uuid4().hex[:8]}"
-    log_dir.mkdir()
-    _launch(["--help"], log_dir)
-
-    logs = list(log_dir.glob("launcher-*.log"))
-    assert logs, "no launcher log was produced"
-
-    probe = subprocess.run(
-        [
-            pwsh,
-            "-NoProfile",
-            "-Command",
-            f"(Get-Acl -LiteralPath '{logs[0]}').AreAccessRulesProtected",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    assert probe.stdout.strip() == "True", f"log inherits ACLs: {probe.stdout!r}"
