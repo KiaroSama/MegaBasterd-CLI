@@ -18,6 +18,7 @@ output the user actually reads keeps going.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import uuid
@@ -88,6 +89,18 @@ def _script_var(name: str) -> str:
     raise AssertionError(f"$script:{name} is no longer defined in Run.ps1")
 
 
+def _secure_log_source() -> str:
+    """Lift the embedded C# helper out of Run.ps1 verbatim.
+
+    The harness compiles the SHIPPED source, not a copy: the whole point of
+    these tests is that the native create/verify path is the one the launcher
+    actually runs.
+    """
+    start = RUN_TEXT.index("$script:SecureLogSource = @'")
+    end = RUN_TEXT.index("'@", start)
+    return RUN_TEXT[start : end + 2]
+
+
 HARNESS_PRELUDE = """param([string] $Target, [string] $Line = 'harness line')
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
@@ -99,12 +112,16 @@ $script:LauncherFileLoggingDisabled = $false
 $LogDir = Split-Path -Parent $Target
 """
 HARNESS_PRELUDE += _script_var("LogFailureReason") + "\n"
+HARNESS_PRELUDE += _script_var("SecureLogTypeReady") + "\n"
+HARNESS_PRELUDE += _script_var("LastLogIdentity") + "\n"
+HARNESS_PRELUDE += _secure_log_source() + "\n"
 
 HARNESS_FUNCTIONS = (
     "Get-RedactedText",
     "Disable-LauncherFileLogging",
     "Get-CurrentUserSid",
     "Test-OwnerOnlyLogFile",
+    "Initialize-SecureLogType",
     "Open-VerifiedLogStream",
     "Write-SecureLogLine",
 )
@@ -154,6 +171,9 @@ $script:LauncherFileLoggingDisabled = $false
 $LogDir = Split-Path -Parent $Target
 """
 TWO_LINE_PRELUDE += _script_var("LogFailureReason") + "\n"
+TWO_LINE_PRELUDE += _script_var("SecureLogTypeReady") + "\n"
+TWO_LINE_PRELUDE += _script_var("LastLogIdentity") + "\n"
+TWO_LINE_PRELUDE += _secure_log_source() + "\n"
 
 
 def _write_two_line_harness(tmp_path: Path) -> Path:
@@ -545,63 +565,6 @@ def test_windows_does_not_depend_on_a_type_absent_from_powershell_5_1():
 # 8. the verifier is a positive allowlist of one principal, not a blacklist
 # ---------------------------------------------------------------------------
 
-VERIFIER_FUNCTIONS = ("Get-CurrentUserSid", "Test-OwnerOnlyLogFile")
-
-
-def _verifier_harness(tmp_path: Path, sid_override: str = "") -> Path:
-    """Call the shipped verifier directly and print its verdict.
-
-    `Get-CurrentUserSid` exists so this can drive the owner-mismatch branch:
-    changing a file's owner needs SeRestorePrivilege, but pretending to *be*
-    another principal needs nothing.
-    """
-    body = (
-        "param([string] $Target)\n"
-        "Set-StrictMode -Version 2.0\n"
-        "$ErrorActionPreference = 'Stop'\n"
-        '$script:IsWindowsHost = ([System.Environment]::OSVersion.Platform -eq "Win32NT")\n'
-        "$script:UnixOwnerOnly = $null\n"
-    )
-    body += "\n".join(_extract_function(n) for n in VERIFIER_FUNCTIONS)
-    if sid_override:
-        body += (
-            "\nfunction Get-CurrentUserSid { return "
-            f"[System.Security.Principal.SecurityIdentifier]::new('{sid_override}') }}\n"
-        )
-    body += '\n"VERDICT=$(Test-OwnerOnlyLogFile $Target)"\n'
-    # Same reasoning as the two-line harness: a bare True/False cannot explain a
-    # rejection, and a rejection that only happens on a CI runner is exactly the
-    # one you cannot step through.
-    body += """
-if (Test-Path -LiteralPath $Target) {
-    $probe = Get-Acl -LiteralPath $Target
-    $sidType = [System.Security.Principal.SecurityIdentifier]
-    "OWNER=$($probe.GetOwner($sidType).Value)"
-    "ME=$((Get-CurrentUserSid).Value)"
-    "PROTECTED=$($probe.AreAccessRulesProtected)"
-    "ACES=$(($probe.GetAccessRules($true,$true,$sidType) | ForEach-Object {
-        "$($_.AccessControlType):$($_.IdentityReference.Value):$($_.FileSystemRights)" }) -join ' | ')"
-}
-"""
-    script = tmp_path / f"verify-{uuid.uuid4().hex[:6]}.ps1"
-    script.write_text(body, encoding="utf-8")
-    return script
-
-
-def _verdict(tmp_path: Path, target: Path, sid_override: str = "") -> bool:
-    proc = subprocess.run(
-        [pwsh, "-NoProfile", "-File", str(_verifier_harness(tmp_path, sid_override)), str(target)],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=120,
-    )
-    assert "VERDICT=" in proc.stdout, proc.stdout + proc.stderr
-    global LAST_VERDICT
-    LAST_VERDICT = proc.stdout + proc.stderr
-    return "VERDICT=True" in proc.stdout
-
 
 def _my_sid() -> str:
     probe = subprocess.run(
@@ -660,103 +623,6 @@ def _set_dacl(target: Path, *aces: str) -> None:
 
 
 LOCAL_SERVICE = "S-1-5-19"  # stable, well-known, and never the current user
-
-# Whatever the last _verdict() call saw, so a rejection can say why.
-LAST_VERDICT = ""
-
-
-@windows_only
-@requires_pwsh
-def test_a_file_we_own_alone_with_full_control_is_accepted(tmp_path):
-    """Positive control. Every rejection below is meaningless without it."""
-    target = tmp_path / "ok.log"
-    target.write_text("", encoding="utf-8")
-    _set_dacl(target, f"{_my_sid()}:FullControl:Allow")
-
-    assert _verdict(tmp_path, target) is True, LAST_VERDICT
-
-    proc = _run_two_line(tmp_path, target)
-    assert "AFTER_SECOND=False" in proc.stdout, proc.stdout + proc.stderr
-    text = target.read_text(encoding="utf-8")
-    assert "FIRST-LINE" in text and "SECOND-LINE" in text, text
-
-
-@windows_only
-@requires_pwsh
-def test_an_ace_for_any_other_principal_is_rejected(tmp_path):
-    """The blacklist accepted this: LOCAL SERVICE is not one of the six broad SIDs."""
-    target = tmp_path / "other.log"
-    target.write_text("planted\n", encoding="utf-8")
-    _set_dacl(target, f"{_my_sid()}:FullControl:Allow", f"{LOCAL_SERVICE}:Read:Allow")
-
-    assert _verdict(tmp_path, target) is False
-
-    proc = _run_two_line(tmp_path, target)
-    assert "AFTER_FIRST=True" in proc.stdout, proc.stdout + proc.stderr
-    assert target.read_text(encoding="utf-8") == "planted\n", "an unsafe file was written to"
-    rendered = _acl(target)
-    assert (
-        LOCAL_SERVICE in rendered or "LOCAL SERVICE" in rendered
-    ), f"the other principal's ACE was stripped instead of the file refused: {rendered!r}"
-
-
-@windows_only
-@requires_pwsh
-def test_read_only_access_for_us_is_not_enough(tmp_path):
-    """Being able to read a file is not the same as owning it exclusively."""
-    target = tmp_path / "readonly.log"
-    target.write_text("planted\n", encoding="utf-8")
-    _set_dacl(target, f"{_my_sid()}:Read:Allow")
-
-    assert _verdict(tmp_path, target) is False
-
-    proc = _run_two_line(tmp_path, target)
-    assert "AFTER_FIRST=True" in proc.stdout, proc.stdout + proc.stderr
-    assert target.read_text(encoding="utf-8") == "planted\n"
-
-
-@windows_only
-@requires_pwsh
-def test_a_deny_ace_on_ourselves_is_rejected(tmp_path):
-    """Allow ACEs alone do not describe effective rights once a Deny exists."""
-    target = tmp_path / "denied.log"
-    target.write_text("planted\n", encoding="utf-8")
-    _set_dacl(target, f"{_my_sid()}:FullControl:Allow", f"{_my_sid()}:Write:Deny")
-
-    assert _verdict(tmp_path, target) is False
-
-
-@windows_only
-@requires_pwsh
-def test_an_owner_that_is_not_the_current_user_is_rejected(tmp_path):
-    """Deterministic, and needs no privilege.
-
-    Changing a file's owner requires SeRestorePrivilege, which an ordinary
-    account does not hold - so instead the harness reports a different current
-    SID. The DACL names only that SID, so every ACE check passes and the owner
-    comparison is the only thing left that can reject the file.
-    """
-    target = tmp_path / "owned.log"
-    target.write_text("planted\n", encoding="utf-8")
-    _set_dacl(target, f"{LOCAL_SERVICE}:FullControl:Allow")
-
-    assert _verdict(tmp_path, target, sid_override=LOCAL_SERVICE) is False
-    # Not read_text: the DACL names only LOCAL SERVICE, so being the owner
-    # grants READ_CONTROL but not READ_DATA. What matters is that the rejected
-    # file still exists and still carries the ACL it was refused for.
-    assert target.exists(), "the rejected file was removed"
-    rendered = _acl(target)
-    assert LOCAL_SERVICE in rendered or "LOCAL SERVICE" in rendered, rendered
-    assert _my_sid() not in rendered, f"the DACL was repaired in our favour: {rendered!r}"
-
-
-def test_the_verifier_allowlists_the_current_sid_rather_than_blacklisting():
-    body = _code_of("Test-OwnerOnlyLogFile")
-    assert "Get-CurrentUserSid" in body, "the verifier must resolve the current principal"
-    assert "GetOwner" in body, "the file owner must be compared to the current SID"
-    assert "FullControl" in body, "the current user's rights must be proven complete"
-    assert "BroadSids" not in RUN_TEXT, "the SID blacklist is back"
-
 
 # ---------------------------------------------------------------------------
 # 9. no raw exception text or path ever reaches stderr
@@ -842,14 +708,38 @@ def test_a_real_sharing_violation_does_not_disclose_the_path(tmp_path):
 
 @windows_only
 @requires_pwsh
-def test_an_acl_failure_does_not_disclose_the_path(tmp_path):
-    target = _sentinel_dir(tmp_path) / "run.log"
-    stub = 'function Get-Acl { throw "Get-Acl blew up on $Target" }\n'
+def test_a_native_security_refusal_does_not_disclose_the_path(tmp_path):
+    """The refusal now comes from the C# verifier, not from a stubbed Get-Acl.
 
-    proc = _run_leak(tmp_path, target, stub)
+    This used to stub `Get-Acl` to throw with the path in its message. Windows
+    no longer calls `Get-Acl` at all - owner and DACL are read from the open
+    handle - so that stub proved nothing once the native path landed. A real
+    native refusal is forced instead: a file whose DACL names a second
+    principal, which `SecureLogNative` rejects with a fixed reason string.
+    """
+    holder = _sentinel_dir(tmp_path)
+    target = holder / "run.log"
+    target.write_text("planted\n", encoding="utf-8")
+    _set_dacl(target, f"{_my_sid()}:FullControl:Allow", f"{LOCAL_SERVICE}:Read:Allow")
+
+    proc = _run_leak(tmp_path, target)
 
     assert "AFTER_FIRST=True" in proc.stdout, proc.stdout + proc.stderr
+    assert target.read_text(encoding="utf-8") == "planted\n", "an unsafe file was written to"
     _assert_nothing_leaked(proc, target, tmp_path)
+
+
+def test_no_native_refusal_carries_a_path():
+    """Every SecureLogRefusal reason is a fixed token, never a formatted path."""
+    source = _secure_log_source()
+    refusals = re.findall(r"new SecureLogRefusal\(([^)]*)\)", source)
+    assert refusals, "the native helper raises no refusals - this check is vacuous"
+    for reason in refusals:
+        reason = reason.strip()
+        if reason == "string reason":  # the constructor's own parameter
+            continue
+        assert reason.startswith('"') and reason.endswith('"'), f"not a literal: {reason}"
+        assert "+" not in reason, f"a value is concatenated into a refusal: {reason}"
 
 
 @windows_only
