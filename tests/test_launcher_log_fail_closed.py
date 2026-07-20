@@ -186,7 +186,11 @@ def _write_two_line_harness(tmp_path: Path) -> Path:
     body += """
 Write-SecureLogLine $Target $Line1
 "AFTER_FIRST=$($script:LauncherFileLoggingDisabled)"
-if (Test-Path -LiteralPath $Target) {
+if ($script:IsWindowsHost -and (Test-Path -LiteralPath $Target)) {
+    # Windows-guarded: Get-Acl and WindowsIdentity do not exist in pwsh on
+    # Linux, and with $ErrorActionPreference='Stop' an unguarded call kills the
+    # harness before the mutation step - which reads as "the planted link was
+    # unlinked" rather than as the diagnostic itself being broken.
     $probe = Get-Acl -LiteralPath $Target
     $sidType = [System.Security.Principal.SecurityIdentifier]
     "OWNER=$($probe.GetOwner($sidType).Value)"
@@ -655,8 +659,27 @@ def _my_sid() -> str:
     return probe.stdout.strip()
 
 
-def _icacls(target: Path, *args: str) -> None:
-    """Build the DACL explicitly. Inherited temp-directory ACLs prove nothing."""
+def _icacls(target: Path, *args: str, own: bool = True) -> None:
+    """Build the DACL explicitly. Inherited temp-directory ACLs prove nothing.
+
+    `own` also sets the owner to the current SID, because `icacls /grant` does
+    not. On an ordinary desktop account the owner already is the creator, so
+    this looked unnecessary; on an elevated account - every Windows CI runner -
+    a new file can be owned by the Administrators GROUP instead, and the
+    positive control then failed for a reason the fixture had introduced rather
+    than one the verifier was meant to catch.
+    """
+    if own:
+        # BEFORE the grants, not after: several of these fixtures deliberately
+        # strip our own ACE (read-only, or another principal only), and once
+        # that is done icacls /setowner comes back with exit 5.
+        subprocess.run(
+            ["icacls", str(target), "/setowner", f"*{_my_sid()}"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=True,
+        )
     subprocess.run(
         ["icacls", str(target), "/inheritance:r", *args],
         capture_output=True,
