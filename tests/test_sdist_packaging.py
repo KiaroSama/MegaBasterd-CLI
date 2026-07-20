@@ -36,6 +36,9 @@ def test_the_manifest_ships_the_helper_and_no_deleted_file():
     manifest = MANIFEST.read_text(encoding="utf-8")
     assert "recursive-include launcher *.cs" in manifest, "the launcher helper is not packaged"
     assert "GITHUB_RELEASE_NOTES.md" not in manifest, "the manifest references a deleted file"
+    # Same failure shape as the launcher helper: `recursive-include tests *.py`
+    # ships test_public_api_surface.py without the snapshot it reads.
+    assert "recursive-include tests/data *.json" in manifest, "the API snapshot is not packaged"
 
 
 @pytest.fixture(scope="session")

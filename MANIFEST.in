@@ -15,6 +15,8 @@ recursive-include src *.py
 recursive-include src *.typed
 recursive-include src/megabasterd_cli/native *.c
 recursive-include tests *.py
+# test_public_api_surface.py is nothing without its baseline snapshot.
+recursive-include tests/data *.json
 recursive-include tools *.ps1
 global-exclude __pycache__
 global-exclude *.pyc
