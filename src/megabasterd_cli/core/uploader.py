@@ -300,6 +300,12 @@ class MegaUploader:
                 state = None
 
         if state is None:
+            # The branch above clears the state it rejected, but this one is
+            # also reached when `load_state` returned None with the file still
+            # on disk (an unsupported format version, or bytes that could not
+            # be preserved for quarantine). Its `revision` would then outrank
+            # every snapshot of the fresh state below and silently block them.
+            clear_state(state_path)
             # Request a fresh upload slot
             upload_url = self._request_upload_url(file_size)
             self._completion_token = None
