@@ -113,11 +113,12 @@ $script:UnixOwnerOnly = if ($script:IsWindowsHost) { $null } else {
 $script:LauncherFileLoggingDisabled = $false
 $LogDir = Split-Path -Parent $Target
 """
-HARNESS_PRELUDE += _script_var("BroadSids") + "\n"
+HARNESS_PRELUDE += _script_var("LogFailureReason") + "\n"
 
 HARNESS_FUNCTIONS = (
     "Get-RedactedText",
     "Disable-LauncherFileLogging",
+    "Get-CurrentUserSid",
     "Test-OwnerOnlyLogFile",
     "Open-VerifiedLogStream",
     "Write-SecureLogLine",
@@ -167,7 +168,7 @@ $script:UnixOwnerOnly = if ($script:IsWindowsHost) { $null } else {
 $script:LauncherFileLoggingDisabled = $false
 $LogDir = Split-Path -Parent $Target
 """
-TWO_LINE_PRELUDE += _script_var("BroadSids") + "\n"
+TWO_LINE_PRELUDE += _script_var("LogFailureReason") + "\n"
 
 
 def _write_two_line_harness(tmp_path: Path) -> Path:
@@ -578,3 +579,296 @@ def test_windows_does_not_depend_on_a_type_absent_from_powershell_5_1():
 
 def test_exactly_one_launcher_remains():
     assert [p.name for p in REPO.glob("*.ps1")] == ["Run.ps1"]
+
+
+# ---------------------------------------------------------------------------
+# 8. the verifier is a positive allowlist of one principal, not a blacklist
+# ---------------------------------------------------------------------------
+
+VERIFIER_FUNCTIONS = ("Get-CurrentUserSid", "Test-OwnerOnlyLogFile")
+
+
+def _verifier_harness(tmp_path: Path, sid_override: str = "") -> Path:
+    """Call the shipped verifier directly and print its verdict.
+
+    `Get-CurrentUserSid` exists so this can drive the owner-mismatch branch:
+    changing a file's owner needs SeRestorePrivilege, but pretending to *be*
+    another principal needs nothing.
+    """
+    body = (
+        "param([string] $Target)\n"
+        "Set-StrictMode -Version 2.0\n"
+        "$ErrorActionPreference = 'Stop'\n"
+        '$script:IsWindowsHost = ([System.Environment]::OSVersion.Platform -eq "Win32NT")\n'
+        "$script:UnixOwnerOnly = $null\n"
+    )
+    body += "\n".join(_extract_function(n) for n in VERIFIER_FUNCTIONS)
+    if sid_override:
+        body += (
+            "\nfunction Get-CurrentUserSid { return "
+            f"[System.Security.Principal.SecurityIdentifier]::new('{sid_override}') }}\n"
+        )
+    body += '\n"VERDICT=$(Test-OwnerOnlyLogFile $Target)"\n'
+    script = tmp_path / f"verify-{uuid.uuid4().hex[:6]}.ps1"
+    script.write_text(body, encoding="utf-8")
+    return script
+
+
+def _verdict(tmp_path: Path, target: Path, sid_override: str = "") -> bool:
+    proc = subprocess.run(
+        [pwsh, "-NoProfile", "-File", str(_verifier_harness(tmp_path, sid_override)), str(target)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=120,
+    )
+    assert "VERDICT=" in proc.stdout, proc.stdout + proc.stderr
+    return "VERDICT=True" in proc.stdout
+
+
+def _my_sid() -> str:
+    probe = subprocess.run(
+        [
+            pwsh,
+            "-NoProfile",
+            "-Command",
+            "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    return probe.stdout.strip()
+
+
+def _icacls(target: Path, *args: str) -> None:
+    """Build the DACL explicitly. Inherited temp-directory ACLs prove nothing."""
+    subprocess.run(
+        ["icacls", str(target), "/inheritance:r", *args],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+    )
+
+
+LOCAL_SERVICE = "S-1-5-19"  # stable, well-known, and never the current user
+
+
+@windows_only
+@requires_pwsh
+def test_a_file_we_own_alone_with_full_control_is_accepted(tmp_path):
+    """Positive control. Every rejection below is meaningless without it."""
+    target = tmp_path / "ok.log"
+    target.write_text("", encoding="utf-8")
+    _icacls(target, "/grant", f"*{_my_sid()}:(F)")
+
+    assert _verdict(tmp_path, target) is True
+
+    proc = _run_two_line(tmp_path, target)
+    assert "AFTER_SECOND=False" in proc.stdout, proc.stdout + proc.stderr
+    text = target.read_text(encoding="utf-8")
+    assert "FIRST-LINE" in text and "SECOND-LINE" in text, text
+
+
+@windows_only
+@requires_pwsh
+def test_an_ace_for_any_other_principal_is_rejected(tmp_path):
+    """The blacklist accepted this: LOCAL SERVICE is not one of the six broad SIDs."""
+    target = tmp_path / "other.log"
+    target.write_text("planted\n", encoding="utf-8")
+    _icacls(target, "/grant", f"*{_my_sid()}:(F)", "/grant", f"*{LOCAL_SERVICE}:(R)")
+
+    assert _verdict(tmp_path, target) is False
+
+    proc = _run_two_line(tmp_path, target)
+    assert "AFTER_FIRST=True" in proc.stdout, proc.stdout + proc.stderr
+    assert target.read_text(encoding="utf-8") == "planted\n", "an unsafe file was written to"
+    rendered = _acl(target)
+    assert (
+        LOCAL_SERVICE in rendered or "LOCAL SERVICE" in rendered
+    ), f"the other principal's ACE was stripped instead of the file refused: {rendered!r}"
+
+
+@windows_only
+@requires_pwsh
+def test_read_only_access_for_us_is_not_enough(tmp_path):
+    """Being able to read a file is not the same as owning it exclusively."""
+    target = tmp_path / "readonly.log"
+    target.write_text("planted\n", encoding="utf-8")
+    _icacls(target, "/grant", f"*{_my_sid()}:(R)")
+
+    assert _verdict(tmp_path, target) is False
+
+    proc = _run_two_line(tmp_path, target)
+    assert "AFTER_FIRST=True" in proc.stdout, proc.stdout + proc.stderr
+    assert target.read_text(encoding="utf-8") == "planted\n"
+
+
+@windows_only
+@requires_pwsh
+def test_a_deny_ace_on_ourselves_is_rejected(tmp_path):
+    """Allow ACEs alone do not describe effective rights once a Deny exists."""
+    target = tmp_path / "denied.log"
+    target.write_text("planted\n", encoding="utf-8")
+    _icacls(target, "/grant", f"*{_my_sid()}:(F)", "/deny", f"*{_my_sid()}:(W)")
+
+    assert _verdict(tmp_path, target) is False
+
+
+@windows_only
+@requires_pwsh
+def test_an_owner_that_is_not_the_current_user_is_rejected(tmp_path):
+    """Deterministic, and needs no privilege.
+
+    Changing a file's owner requires SeRestorePrivilege, which an ordinary
+    account does not hold - so instead the harness reports a different current
+    SID. The DACL names only that SID, so every ACE check passes and the owner
+    comparison is the only thing left that can reject the file.
+    """
+    target = tmp_path / "owned.log"
+    target.write_text("planted\n", encoding="utf-8")
+    _icacls(target, "/grant", f"*{LOCAL_SERVICE}:(F)")
+
+    assert _verdict(tmp_path, target, sid_override=LOCAL_SERVICE) is False
+    # Not read_text: the DACL names only LOCAL SERVICE, so being the owner
+    # grants READ_CONTROL but not READ_DATA. What matters is that the rejected
+    # file still exists and still carries the ACL it was refused for.
+    assert target.exists(), "the rejected file was removed"
+    rendered = _acl(target)
+    assert LOCAL_SERVICE in rendered or "LOCAL SERVICE" in rendered, rendered
+    assert _my_sid() not in rendered, f"the DACL was repaired in our favour: {rendered!r}"
+
+
+def test_the_verifier_allowlists_the_current_sid_rather_than_blacklisting():
+    body = _code_of("Test-OwnerOnlyLogFile")
+    assert "Get-CurrentUserSid" in body, "the verifier must resolve the current principal"
+    assert "GetOwner" in body, "the file owner must be compared to the current SID"
+    assert "FullControl" in body, "the current user's rights must be proven complete"
+    assert "BroadSids" not in RUN_TEXT, "the SID blacklist is back"
+
+
+# ---------------------------------------------------------------------------
+# 9. no raw exception text or path ever reaches stderr
+# ---------------------------------------------------------------------------
+
+PATH_SENTINEL = "SENTINEL-PW-9921"
+MAIL_SENTINEL = "user@example.com"
+
+
+def _leak_harness(tmp_path: Path, stub: str = "") -> Path:
+    body = TWO_LINE_PRELUDE + "\n".join(_extract_function(n) for n in HARNESS_FUNCTIONS)
+    if stub:
+        body += "\n" + stub + "\n"
+    body += (
+        "\nWrite-SecureLogLine $Target $Line1\n"
+        '"AFTER_FIRST=$($script:LauncherFileLoggingDisabled)"\n'
+        "Write-SecureLogLine $Target $Line2\n"
+        '"AFTER_SECOND=$($script:LauncherFileLoggingDisabled)"\n'
+        '"STILL_ALIVE=yes"\n'
+    )
+    script = tmp_path / f"leak-{uuid.uuid4().hex[:6]}.ps1"
+    script.write_text(body, encoding="utf-8")
+    return script
+
+
+def _run_leak(tmp_path: Path, target: Path, stub: str = ""):
+    return subprocess.run(
+        [
+            pwsh,
+            "-NoProfile",
+            "-File",
+            str(_leak_harness(tmp_path, stub)),
+            str(target),
+            "A",
+            "B",
+            "",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=180,
+    )
+
+
+def _assert_nothing_leaked(proc, target: Path, tmp_path: Path) -> None:
+    warnings = [ln for ln in proc.stderr.splitlines() if "file logging disabled" in ln.lower()]
+    assert len(warnings) == 1, f"expected exactly one warning, got {warnings!r}"
+    assert "secure log operation failed" in warnings[0], warnings[0]
+    for leak in (PATH_SENTINEL, MAIL_SENTINEL, target.name, str(target), str(tmp_path)):
+        assert leak not in proc.stderr, f"{leak!r} leaked into stderr: {proc.stderr!r}"
+    assert "STILL_ALIVE=yes" in proc.stdout, "the launcher died instead of dropping logging"
+    for produced in tmp_path.rglob("*"):
+        if produced.is_file() and produced.suffix != ".ps1":
+            body = produced.read_text(encoding="utf-8", errors="ignore")
+            assert PATH_SENTINEL not in body and MAIL_SENTINEL not in body, produced.name
+
+
+def _sentinel_dir(tmp_path: Path) -> Path:
+    holder = tmp_path / f"{PATH_SENTINEL}-{MAIL_SENTINEL}"
+    holder.mkdir()
+    return holder
+
+
+@windows_only
+@requires_pwsh
+def test_a_real_sharing_violation_does_not_disclose_the_path(tmp_path):
+    """No injected message at all: .NET's own IOException text embeds the path."""
+    target = _sentinel_dir(tmp_path) / "run.log"
+    target.write_text("", encoding="utf-8")
+    _icacls(target, "/grant", f"*{_my_sid()}:(F)")
+    stub = (
+        "$blocker = [System.IO.FileStream]::new($Target, "
+        "[System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, "
+        "[System.IO.FileShare]::None)\n"
+    )
+
+    proc = _run_leak(tmp_path, target, stub)
+
+    assert "AFTER_FIRST=True" in proc.stdout, f"the open unexpectedly succeeded: {proc.stdout}"
+    _assert_nothing_leaked(proc, target, tmp_path)
+
+
+@windows_only
+@requires_pwsh
+def test_an_acl_failure_does_not_disclose_the_path(tmp_path):
+    target = _sentinel_dir(tmp_path) / "run.log"
+    stub = 'function Get-Acl { throw "Get-Acl blew up on $Target" }\n'
+
+    proc = _run_leak(tmp_path, target, stub)
+
+    assert "AFTER_FIRST=True" in proc.stdout, proc.stdout + proc.stderr
+    _assert_nothing_leaked(proc, target, tmp_path)
+
+
+@windows_only
+@requires_pwsh
+def test_a_write_failure_does_not_disclose_the_path(tmp_path):
+    """A path-bearing IOException raised at the write step, as a full disk gives."""
+    target = _sentinel_dir(tmp_path) / "run.log"
+    stub = (
+        "function Open-VerifiedLogStream { param([string] $Path)\n"
+        "    throw [System.IO.IOException]::new("
+        '"There is not enough space on the disk. : $Path") }\n'
+    )
+
+    proc = _run_leak(tmp_path, target, stub)
+
+    assert "AFTER_FIRST=True" in proc.stdout, proc.stdout + proc.stderr
+    _assert_nothing_leaked(proc, target, tmp_path)
+
+
+def test_the_writer_never_forwards_the_raw_exception():
+    body = _code_of("Write-SecureLogLine")
+    assert "Exception.Message" not in body, "raw .NET exception text is being forwarded"
+    assert "$script:LogFailureReason" in body, "the warning must use the fixed category"
+
+
+def test_controlled_throw_messages_carry_no_path():
+    """Our own refusals must not interpolate $Path either."""
+    for name in ("Open-VerifiedLogStream", "Test-OwnerOnlyLogFile"):
+        for line in _code_of(name).splitlines():
+            if "throw" in line:
+                assert "$Path" not in line, f"{name} interpolates the path: {line.strip()!r}"

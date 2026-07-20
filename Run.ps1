@@ -57,9 +57,10 @@ $script:UnixOwnerOnly = if ($script:IsWindowsHost) { $null } else {
 # Set once, never cleared: if a log file cannot be proven owner-only, launcher
 # file logging is off for the rest of the run. There is no permissive fallback.
 $script:LauncherFileLoggingDisabled = $false
-# Well-known SIDs that must never hold a read ACE on a launcher log: Everyone,
-# BUILTIN\Users, Authenticated Users, INTERACTIVE, BUILTIN\Guests, ANONYMOUS.
-$script:BroadSids = @("S-1-1-0", "S-1-5-32-545", "S-1-5-11", "S-1-5-4", "S-1-5-32-546", "S-1-5-7")
+# The single sanitized reason ever shown for a logging failure. A raw .NET
+# exception message embeds the full path it failed on, and that path carries
+# whatever the user put in it - an account, an email, a secret in a filename.
+$script:LogFailureReason = "secure log operation failed"
 $script:Palette = [ordered]@{
     success = "#22FF44"
     warning = "#F59E0B"
@@ -102,12 +103,28 @@ function Disable-LauncherFileLogging {
     }
 }
 
+function Get-CurrentUserSid {
+    # A seam, not indirection for its own sake: it is what lets a test drive the
+    # owner-mismatch branch without the privilege that changing a file's owner
+    # requires.
+    return [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+}
+
 function Test-OwnerOnlyLogFile {
     param([string] $Path)
-    # Answers "is this provably a safe owner-only regular file", not "does it
-    # look plausible". It used to return AreAccessRulesProtected alone, which
-    # says nothing about a reparse point, a directory, or a protected DACL that
-    # still carries a broad read ACE.
+    # Answers "is this provably OUR OWN owner-only regular file", not "does it
+    # look plausible".
+    #
+    # This was a blacklist: it rejected a read ACE held by one of six well-known
+    # broad SIDs and accepted everything else. A protected DACL that granted the
+    # current user FullControl and, say, LOCAL SERVICE read passed - as did a
+    # file the current user could merely read rather than own. Neither is a
+    # file whose contents only we can see.
+    #
+    # It is now a positive allowlist of exactly one principal, matching the ACL
+    # this launcher writes when it creates a log: we own it, we hold
+    # FullControl, and nobody else holds anything. Anything the check cannot
+    # resolve is a rejection, never a pass.
     try {
         $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
         if ($item -isnot [System.IO.FileInfo]) {
@@ -119,21 +136,52 @@ function Test-OwnerOnlyLogFile {
         if (-not $script:IsWindowsHost) {
             return ($item.UnixFileMode -eq $script:UnixOwnerOnly)
         }
+        $me = Get-CurrentUserSid
+        if ($null -eq $me) {
+            return $false
+        }
         $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
         if (-not $acl.AreAccessRulesProtected) {
             return $false
         }
-        $readMask = [System.Security.AccessControl.FileSystemRights]::Read
-        foreach ($rule in $acl.Access) {
-            if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) {
-                continue
-            }
-            $sid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier])
-            if (($script:BroadSids -contains $sid.Value) -and (($rule.FileSystemRights -band $readMask) -ne 0)) {
+        # SIDs throughout, never display names: "Administrators" is localized and
+        # two different principals can render as the same string.
+        $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier])
+        if ($null -eq $owner -or $owner.Value -ne $me.Value) {
+            return $false
+        }
+        $sidType = [System.Security.Principal.SecurityIdentifier]
+        $granted = 0
+        $mine = $false
+        foreach ($rule in $acl.GetAccessRules($true, $true, $sidType)) {
+            $sid = $rule.IdentityReference
+            if ($null -eq $sid) {
                 return $false
             }
+            $allow = ($rule.AccessControlType -eq
+                [System.Security.AccessControl.AccessControlType]::Allow)
+            if ($sid.Value -ne $me.Value) {
+                # Somebody else's Allow ACE is disqualifying. Their Deny ACE only
+                # takes access away, so it is left alone rather than treated as
+                # tampering.
+                if ($allow) {
+                    return $false
+                }
+                continue
+            }
+            if (-not $allow) {
+                # A Deny on ourselves means the effective rights are not what the
+                # Allow ACEs say. Unresolvable, so refused.
+                return $false
+            }
+            $mine = $true
+            $granted = $granted -bor [int]$rule.FileSystemRights
         }
-        return $true
+        if (-not $mine) {
+            return $false
+        }
+        $full = [int][System.Security.AccessControl.FileSystemRights]::FullControl
+        return (($granted -band $full) -eq $full)
     } catch {
         return $false
     }
@@ -242,7 +290,12 @@ function Write-SecureLogLine {
         $writer.WriteLine($Line)
         $writer.Flush()
     } catch {
-        Disable-LauncherFileLogging $_.Exception.Message
+        # A fixed category, never $_.Exception.Message. FileStream, Get-Acl and
+        # Set-Acl all put the full path in their message text, and that path is
+        # this run's log path - which the user may have pointed at a directory
+        # named after an account, or a filename holding a secret. There is no
+        # regex for "arbitrary path"; the only safe amount of raw detail is none.
+        Disable-LauncherFileLogging $script:LogFailureReason
     } finally {
         # StreamWriter.Dispose disposes the stream it wraps, so exactly one of
         # these runs.
