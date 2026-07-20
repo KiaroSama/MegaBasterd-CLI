@@ -272,38 +272,24 @@ def setup_logging(
     _register_shutdown_log()
 
     if not quiet:
-        try:
-            from rich.console import Console
-            from rich.logging import RichHandler
+        # rich is a hard install dependency, so there is no ImportError arm.
+        from rich.console import Console
+        from rich.logging import RichHandler
 
-            # stderr, explicitly: a bare Console binds to sys.stdout, which the
-            # --json contract reserves for structured records (and which
-            # `mb ls > out.txt` sends to the user's data file). The ImportError
-            # fallback below has always used stderr.
-            handler: logging.Handler = RichHandler(
-                console=Console(stderr=True),
-                rich_tracebacks=True,
-                show_path=False,
-                show_time=True,
-                markup=False,
-                level=level if isinstance(level, str) else logging.getLevelName(level),
-            )
-            handler.setLevel(level)
-            handler.addFilter(context_filter)
-            handler.addFilter(redacting_filter)
-            root.addHandler(handler)
-        except ImportError:
-            handler = logging.StreamHandler(sys.stderr)
-            handler.setFormatter(
-                RedactingFormatter(
-                    "%(asctime)s [%(levelname)s] run=%(run_id)s cmd=%(command)s "
-                    "%(name)s: %(message)s"
-                )
-            )
-            handler.setLevel(level)
-            handler.addFilter(context_filter)
-            handler.addFilter(redacting_filter)
-            root.addHandler(handler)
+        # stderr, explicitly: a bare Console binds to sys.stdout, which the
+        # --json contract reserves for structured records (and which
+        # `mb ls > out.txt` sends to the user's data file).
+        handler: logging.Handler = RichHandler(
+            console=Console(stderr=True),
+            rich_tracebacks=True,
+            show_path=False,
+            show_time=True,
+            markup=False,
+        )
+        handler.setLevel(level)
+        handler.addFilter(context_filter)
+        handler.addFilter(redacting_filter)
+        root.addHandler(handler)
 
     if log_file:
         # A log file that cannot be made owner-only is not written at all. The

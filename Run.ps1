@@ -554,9 +554,6 @@ function Get-MissingModules {
         "tenacity",
         "cryptography"
     )
-    if ([System.Environment]::OSVersion.Platform -eq "Win32NT") {
-        $required += "colorama"
-    }
     $moduleCsv = $required -join ","
     $code = "import importlib.util, json; required='$moduleCsv'.split(','); print(json.dumps([m for m in required if importlib.util.find_spec(m) is None]))"
     $json = & $Python.Command @($Python.Args + @("-c", $code))
