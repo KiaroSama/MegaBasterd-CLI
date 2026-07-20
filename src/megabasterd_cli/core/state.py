@@ -378,19 +378,40 @@ def load_state(destination: str | Path) -> TransferState | None:
 
 
 def _quarantine_state(state_path: Path, data: bytes, reason: str) -> None:
-    """Preserve a corrupt `.mbstate` before the transfer restarts over it."""
+    """Preserve a corrupt `.mbstate`, then REMOVE it, before the restart.
+
+    Preserving a copy and leaving the original was the worst of both: the
+    rejected file keeps its (arbitrarily high) `revision`, and `_disk_guard`
+    reads it back on every save of the transfer that replaced it - so the
+    replacement, starting at revision 0, could never out-rank the file nobody
+    would ever load again, and silently persisted no resume state at all.
+
+    Preservation failing is the one case that keeps the file: losing the
+    evidence is worse than the stale guard, which `_disk_guard` handles anyway.
+    """
     from ..utils.corruption import preserve_corrupt_file
 
     log.warning("Ignoring corrupt transfer state %s: %s", state_path.name, reason)
-    preserve_corrupt_file(state_path, data)
+    if preserve_corrupt_file(state_path, data) is None:
+        log.warning("Keeping %s: its bytes could not be preserved.", state_path.name)
+        return
+    with contextlib.suppress(OSError):
+        state_path.unlink()
 
 
 def _disk_guard(state_path: Path) -> tuple[int, int]:
     """`(format_version, revision)` already committed at `state_path`.
 
     Returns the permissive `(STATE_FORMAT_VERSION, -1)` when there is nothing
-    readable there: a missing or corrupt file constrains nothing, and
-    `load_state` quarantines a corrupt one anyway.
+    USABLE there: a missing, unparseable, or invalid file constrains nothing.
+    Only a document `load_state` would actually hand to a transfer may outrank
+    a live snapshot - it used to be enough to parse as JSON, so a file rejected
+    by `validate_state_dict` still blocked every save of its replacement, and a
+    fresh state (revision 0) could never out-rank it.
+
+    The VERSION claim is read before validating, and a newer-format file is
+    returned unvalidated: a v2 document is not required to satisfy this
+    version's schema, and callers protect it by version, never by revision.
     """
     try:
         data = json.loads(state_path.read_bytes().decode("utf-8"))
@@ -403,6 +424,12 @@ def _disk_guard(state_path: Path) -> tuple[int, int]:
         version = STATE_FORMAT_VERSION
     if not isinstance(revision, int) or isinstance(revision, bool):
         revision = 0
+    if version > STATE_FORMAT_VERSION:
+        return version, revision
+    try:
+        validate_state_dict(data)
+    except StateCorruptionError:
+        return STATE_FORMAT_VERSION, -1
     return version, revision
 
 

@@ -391,6 +391,11 @@ class MegaDownloader:
         ):
             state = loaded
         else:
+            # Whatever is on disk lost: it is unloadable, unusable, or resume is
+            # off. Leaving it there let its `revision` outrank every snapshot of
+            # the fresh state below (which starts at 0), so `save_state` dropped
+            # them all at debug level and the download persisted no resume state.
+            clear_state(destination)
             state = TransferState(
                 transfer_type="download",
                 source=source,
