@@ -190,10 +190,38 @@ def test_the_snapshot_has_not_gone_stale(snapshot):
     )
 
 
-def test_the_allowlist_does_not_name_something_that_still_exists():
+def _split(dotted: str, snapshot: dict[str, list[str]]) -> tuple[str, str] | None:
+    """`module.Class.member` -> (module, "Class.member"), using the snapshot's keys.
+
+    `rpartition(".")` cannot do this: for a class member it hands back
+    `...launcher_menu.Menu` as the module, `import_module` raises, and a test
+    that skips on that error passes without checking anything. The module
+    boundary is not recoverable from the string alone, so take it from the
+    snapshot, which records it.
+    """
+    for module, names in snapshot.items():
+        for name in names:
+            if f"{module}.{name}" == dotted:
+                return module, name
+    return None
+
+
+def test_the_allowlist_only_names_things_the_snapshot_knows(snapshot):
+    """A typo'd or obsolete entry exempts nothing and would sit there unnoticed."""
+    unknown = [d for d in INTENTIONALLY_REMOVED if _split(d, snapshot) is None]
+    assert not unknown, (
+        "INTENTIONALLY_REMOVED names entries that are not in the snapshot, so they "
+        "exempt nothing:\n  " + "\n  ".join(unknown)
+    )
+
+
+def test_the_allowlist_does_not_name_something_that_still_exists(snapshot):
     """A stale entry silently un-guards a name that came back."""
     for dotted in INTENTIONALLY_REMOVED:
-        module, _, name = dotted.rpartition(".")
+        split = _split(dotted, snapshot)
+        if split is None:
+            continue  # reported by the test above; not this one's job
+        module, name = split
         try:
             loaded = importlib.import_module(module)
         except ModuleNotFoundError:
