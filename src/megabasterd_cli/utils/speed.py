@@ -112,18 +112,11 @@ class TokenBucket:
             self._sleep(min(wait, 1.0))
 
 
-class NoOpLimiter:
-    """No-op limiter when rate limiting is disabled."""
+def make_limiter(kbps: float) -> TokenBucket:
+    """Construct a rate limiter. A rate of 0 means unlimited.
 
-    def consume(self, amount: int) -> None:
-        pass
-
-    def set_rate(self, rate: float) -> None:
-        pass
-
-
-def make_limiter(kbps: float) -> TokenBucket | NoOpLimiter:
-    """Construct a rate limiter; returns NoOpLimiter when kbps <= 0."""
-    if kbps <= 0:
-        return NoOpLimiter()
-    return TokenBucket(rate=kbps * 1024)
+    There is no separate no-op class: `consume` already returns immediately
+    while `rate <= 0`, so a second type existed only to express the same thing
+    a second way - and it forced every annotation to spell the union.
+    """
+    return TokenBucket(rate=max(0.0, kbps) * 1024)

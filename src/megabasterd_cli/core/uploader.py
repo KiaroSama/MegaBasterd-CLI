@@ -103,7 +103,7 @@ class MegaUploader:
         proxies: dict[str, str] | None = None,
         proxy_pool=None,  # SmartProxyPool | None
         force_proxy: bool = False,
-        limiter=None,  # Shared TokenBucket/NoOpLimiter for aggregate command caps
+        limiter=None,  # Shared TokenBucket for aggregate command caps
         auto_resume: bool = True,
         user_agent: str | None = None,
     ):

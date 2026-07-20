@@ -3,7 +3,6 @@
 from megabasterd_cli.core.chunks import (
     chunk_count,
     chunk_mac,
-    chunks_for_range,
     combine_chunk_macs,
     iter_chunks,
 )
@@ -27,14 +26,6 @@ def test_chunk_count_consistent():
     """chunk_count agrees with len(list(iter_chunks))."""
     for size in [100, 1024, 1024 * 1024, 50 * 1024 * 1024]:
         assert chunk_count(size) == len(list(iter_chunks(size)))
-
-
-def test_chunks_for_range():
-    """Only chunks overlapping a byte range are returned."""
-    size = 10 * 1024 * 1024  # 10 MiB
-    overlapping = chunks_for_range(size, 200_000, 500_000)
-    for c in overlapping:
-        assert c.end > 200_000 and c.offset < 500_000
 
 
 def test_chunk_mac_deterministic():

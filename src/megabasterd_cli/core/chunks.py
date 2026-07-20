@@ -93,18 +93,6 @@ def chunk_count(file_size: int) -> int:
     return count + (remaining + MAX_CHUNK_SIZE - 1) // MAX_CHUNK_SIZE
 
 
-def chunks_for_range(file_size: int, start: int, end: int) -> list[Chunk]:
-    """Return all chunks that overlap the byte range [start, end)."""
-    out = []
-    for ch in iter_chunks(file_size):
-        if ch.end <= start:
-            continue
-        if ch.offset >= end:
-            break
-        out.append(ch)
-    return out
-
-
 # ---------------------------------------------------------------------------
 # CBC-MAC for chunk integrity
 # ---------------------------------------------------------------------------

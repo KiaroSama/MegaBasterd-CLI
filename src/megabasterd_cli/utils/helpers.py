@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -92,21 +93,6 @@ def format_eta(seconds: float) -> str:
     if h:
         return f"{h:d}:{m:02d}:{s:02d}"
     return f"{m:02d}:{s:02d}"
-
-
-def ensure_unique_path(path: Path) -> Path:
-    """If `path` exists, append (1), (2), etc. until a free name is found.
-
-    NOTE: this check is not atomic; concurrent transfers must go through
-    `claim_destination` instead, which combines the uniqueness walk with a
-    process-wide reservation.
-    """
-    if not path.exists():
-        return path
-    for candidate in _numbered_candidates(path):
-        if not candidate.exists():
-            return candidate
-    raise AssertionError("unreachable")  # pragma: no cover - generator is infinite
 
 
 def _numbered_candidates(path: Path) -> Iterator[Path]:
@@ -209,17 +195,6 @@ def release_destination(path: Path) -> None:
         lock.release()  # type: ignore[attr-defined]
 
 
-def file_md5(path: Path, chunk: int = 65536) -> str:
-    """Compute MD5 of a local file (hex)."""
-    import hashlib
-
-    h = hashlib.md5()
-    with open(path, "rb") as f:
-        for block in iter(lambda: f.read(chunk), b""):
-            h.update(block)
-    return h.hexdigest()
-
-
 def is_within_directory(base: Path, target: Path) -> bool:
     """Return True only when `target` resolves to a location inside `base`.
 
@@ -255,14 +230,10 @@ def ensure_within_directory(base: Path, target: Path) -> Path:
 
 
 def available_disk_space(path: Path) -> int:
-    """Return free bytes available at the given path's filesystem."""
-    try:
-        stat = os.statvfs(path) if hasattr(os, "statvfs") else None
-        if stat:
-            return int(stat.f_bavail * stat.f_frsize)
-    except OSError:
-        pass
-    # Windows fallback
-    import shutil
+    """Return free bytes available at the given path's filesystem.
 
+    `shutil.disk_usage` is the whole implementation on both platforms: its POSIX
+    branch computes `free` as `f_bavail * f_frsize`, which is byte-for-byte what
+    the hand-rolled `os.statvfs` path here used to do.
+    """
     return shutil.disk_usage(str(path)).free

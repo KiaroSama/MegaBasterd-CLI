@@ -10,8 +10,6 @@ from __future__ import annotations
 import re
 
 REDACTED = "<redacted>"
-REDACTED_KEY = "#<key>"
-
 # Config/field names whose VALUE is always a secret, wherever they appear
 # (top level or nested inside elc_accounts / structured records).
 SECRET_FIELD_NAMES = frozenset(

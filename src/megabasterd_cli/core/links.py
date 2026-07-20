@@ -75,10 +75,6 @@ class ParsedLink:
     def is_folder(self) -> bool:
         return self.type in (LinkType.FOLDER, LinkType.FOLDER_IN_FOLDER)
 
-    @property
-    def needs_password(self) -> bool:
-        return self.type == LinkType.PASSWORD_PROTECTED
-
 
 @dataclass
 class ElcPayload:
@@ -322,22 +318,6 @@ def is_mega_url(url: str) -> bool:
     )
 
 
-def normalize_link(url: str) -> str:
-    """Return the link in modern format if possible."""
-    p = parse_link(url)
-    if p.type == LinkType.FILE:
-        base = f"https://mega.nz/file/{p.public_id}"
-        return f"{base}#{p.key}" if p.key else base
-    if p.type == LinkType.FOLDER:
-        base = f"https://mega.nz/folder/{p.public_id}"
-        return f"{base}#{p.key}" if p.key else base
-    if p.type == LinkType.FILE_IN_FOLDER:
-        return f"https://mega.nz/folder/{p.public_id}#{p.key}/file/{p.subpath}"
-    if p.type == LinkType.FOLDER_IN_FOLDER:
-        return f"https://mega.nz/folder/{p.public_id}#{p.key}/folder/{p.subpath}"
-    return url
-
-
 def resolve_password_link(parsed: ParsedLink, password: str) -> ParsedLink:
     """Convert a password-protected ParsedLink into a normal file/folder link."""
     from .crypto import b64_url_encode, decrypt_password_link
@@ -473,7 +453,6 @@ __all__ = [
     "MegaCrypterInfo",
     "ParsedLink",
     "is_mega_url",
-    "normalize_link",
     "parse_link",
     "resolve_encrypted_container_link",
     "resolve_password_link",

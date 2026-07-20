@@ -1,9 +1,6 @@
 """Tests for utility helpers."""
 
-from pathlib import Path
-
 from megabasterd_cli.utils.helpers import (
-    ensure_unique_path,
     format_bytes,
     format_eta,
     sanitize_filename,
@@ -45,10 +42,3 @@ def test_format_eta():
     assert format_eta(65) == "01:05"
     assert format_eta(3725) == "1:02:05"
     assert format_eta(-1) == "--:--"
-
-
-def test_ensure_unique_path(tmp_path: Path):
-    target = tmp_path / "file.txt"
-    assert ensure_unique_path(target) == target
-    target.touch()
-    assert ensure_unique_path(target) == tmp_path / "file (1).txt"

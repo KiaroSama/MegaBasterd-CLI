@@ -10,7 +10,7 @@ from __future__ import annotations
 import threading
 import time
 
-from megabasterd_cli.utils.speed import NoOpLimiter, TokenBucket, make_limiter
+from megabasterd_cli.utils.speed import TokenBucket, make_limiter
 
 
 class FakeClock:
@@ -100,7 +100,7 @@ def test_unlimited_mode_never_blocks() -> None:
     bucket.consume(10**9)
     assert calls == []
     limiter = make_limiter(0)
-    assert isinstance(limiter, NoOpLimiter)
+    assert isinstance(limiter, TokenBucket) and limiter.rate == 0
     limiter.consume(10**9)
 
 
