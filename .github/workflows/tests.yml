@@ -35,8 +35,8 @@ jobs:
 
 
       - name: Run tests
-        # Coverage baseline is ~61%; fail the build if local coverage regresses
-        # below 55% (Codecov upload stays non-fatal for network failures).
+        # -n auto comes from addopts in pyproject.toml, so a local run and this
+        # job fan out the same way. Coverage is currently ~78%; the gate is 76.
         run: pytest --cov=megabasterd_cli --cov-report=xml --cov-fail-under=76
 
       - name: Smoke-test script launcher
