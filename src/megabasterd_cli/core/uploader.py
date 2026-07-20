@@ -56,8 +56,6 @@ UPLOAD_URL_EXPIRY_STATUS = _transport.UPLOAD_URL_EXPIRY_STATUS
 MAX_UPLOAD_RESPONSE_BYTES = _transport.MAX_UPLOAD_RESPONSE_BYTES
 UploadUrlExpiredError = _transport.UploadUrlExpiredError
 _read_bounded_body = _transport.read_bounded_body
-_is_retryable_upload_error = _transport.is_retryable_upload_error
-
 SOURCE_IDENTITY_VERSION = _identity.SOURCE_IDENTITY_VERSION
 _HASH_BLOCK = _identity._HASH_BLOCK
 _HASH_LOG_THRESHOLD = _identity._HASH_LOG_THRESHOLD

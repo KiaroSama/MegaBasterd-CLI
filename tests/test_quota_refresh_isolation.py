@@ -18,6 +18,7 @@ from megabasterd_cli.core.client import MegaClient, MegaSession
 from megabasterd_cli.core.errors import MegaError, QuotaError
 from megabasterd_cli.core.uploader import MegaUploader, UploadResult
 from megabasterd_cli.upload_support import QuotaLedger
+from tests.upload_helpers import files as _files
 
 GB = 1024**3
 
@@ -49,15 +50,6 @@ def cli_env(tmp_path, monkeypatch):
     monkeypatch.setattr(MegaClient, "login", fake_login)
     monkeypatch.setattr(MegaClient, "logout", lambda self: None)
     return tmp_path, logins
-
-
-def _files(tmp_path, n):
-    paths = []
-    for i in range(n):
-        p = tmp_path / f"f{i}.bin"
-        p.write_bytes(b"x" * 64)
-        paths.append(str(p))
-    return paths
 
 
 def _quota_error_on_a():

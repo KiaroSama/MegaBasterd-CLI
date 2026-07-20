@@ -29,13 +29,10 @@ import pytest
 from megabasterd_cli.utils import secure_log
 from megabasterd_cli.utils.logger import OwnerOnlyRotatingFileHandler, setup_logging
 from megabasterd_cli.utils.secure_log import InsecureLogFileError
+from tests.launcher_helpers import OWNER_ONLY, posix_only, windows_only
 from tests.launcher_helpers import mode as _mode
 
-OWNER_ONLY = 0o600
 SENTINEL = "SENTINEL-PW-4471"
-
-posix_only = pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits and symlink semantics")
-windows_only = pytest.mark.skipif(os.name != "nt", reason="Windows DACLs")
 
 
 @pytest.fixture

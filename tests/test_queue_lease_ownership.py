@@ -17,11 +17,10 @@ import pytest
 
 from megabasterd_cli.queue.manager import (
     JobStatus,
-    JobType,
-    QueueItem,
     QueueManager,
     QueueOwnershipError,
 )
+from tests.queue_helpers import add as _add
 
 # Every concurrent wait in this module is bounded by this; no sleep-based races.
 TIMEOUT = 30.0
@@ -29,18 +28,6 @@ TIMEOUT = 30.0
 
 def _mgr(tmp_path) -> QueueManager:
     return QueueManager(tmp_path / "queue.json")
-
-
-def _add(q: QueueManager, **kwargs) -> QueueItem:
-    item = QueueItem(
-        id=QueueItem.new_id(),
-        type=kwargs.pop("type", JobType.DOWNLOAD.value),
-        source=kwargs.pop("source", "https://mega.nz/file/x#y"),
-        destination=kwargs.pop("destination", ""),
-        **kwargs,
-    )
-    q.add(item)
-    return item
 
 
 def _expire_lease(q: QueueManager, item_id: str) -> None:

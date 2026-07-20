@@ -37,17 +37,7 @@ def crypter_encrypt(
     password = password or ask_password("Crypter passphrase")
     try:
         size_before = source.stat().st_size
-
-        def _on_progress(done: int, total: int) -> None:
-            pass
-
-        encrypt_file(
-            source,
-            destination,
-            password,
-            chunk_size=chunk_size_kb * 1024,
-            on_progress=_on_progress,
-        )
+        encrypt_file(source, destination, password, chunk_size=chunk_size_kb * 1024)
         size_after = destination.stat().st_size
         print_success(
             f"Encrypted {source.name} ({format_bytes(size_before)}) "

@@ -31,7 +31,6 @@ from pathlib import Path
 TOKEN_BYTES = 48
 PREFIX_BYTES = 4
 REPEAT = 262_144
-BUF_SIZE = PREFIX_BYTES + REPEAT * TOKEN_BYTES
 # The whole challenge is attacker-supplied (any HTTP 402 response can carry one),
 # so every field is bounded before it reaches an allocation or a CPU burn.
 SUPPORTED_VERSIONS = (1,)

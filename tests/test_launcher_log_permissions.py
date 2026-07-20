@@ -19,7 +19,6 @@ has established that a usable Python interpreter even exists.
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import uuid
 from pathlib import Path
@@ -27,10 +26,16 @@ from pathlib import Path
 import pytest
 
 from megabasterd_cli.utils import secure_log
+from tests.launcher_helpers import (
+    OWNER_ONLY,
+    RUN_PS1,
+    posix_only,
+    pwsh,
+    requires_pwsh,
+    windows_only,
+)
+from tests.launcher_helpers import artifacts as _logs
 from tests.launcher_helpers import mode as _mode
-
-REPO = Path(__file__).resolve().parents[1]
-RUN_PS1 = REPO / "Run.ps1"
 
 SECRET = "SENTINEL-PW-4471"
 
@@ -38,15 +43,6 @@ SECRET = "SENTINEL-PW-4471"
 # the project .venv. That is one shared resource, so they all run on a single
 # xdist worker (--dist loadgroup) rather than racing each other over it.
 pytestmark = pytest.mark.xdist_group("launcher_subprocess")
-
-pwsh = shutil.which("pwsh") or shutil.which("powershell")
-requires_pwsh = pytest.mark.skipif(pwsh is None, reason="PowerShell is not available")
-posix_only = pytest.mark.skipif(
-    os.name == "nt", reason="POSIX file modes are not a Windows concept"
-)
-windows_only = pytest.mark.skipif(os.name != "nt", reason="ACL check is Windows-specific")
-
-OWNER_ONLY = 0o600
 
 
 def _launch(args: list[str], log_dir: Path) -> subprocess.CompletedProcess:
@@ -60,10 +56,6 @@ def _launch(args: list[str], log_dir: Path) -> subprocess.CompletedProcess:
         env=env,
         timeout=300,
     )
-
-
-def _logs(log_dir: Path) -> list[Path]:
-    return [p for p in log_dir.rglob("*") if p.is_file()]
 
 
 def _acl(path: Path) -> str:

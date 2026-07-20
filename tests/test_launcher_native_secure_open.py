@@ -20,18 +20,20 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 import subprocess
 import uuid
 from pathlib import Path
 
 import pytest
 
-from tests.launcher_helpers import RUN_TEXT, SECURE_LOG_SOURCE
-
-pwsh = shutil.which("pwsh") or shutil.which("powershell")
-requires_pwsh = pytest.mark.skipif(pwsh is None, reason="PowerShell is not available")
-windows_only = pytest.mark.skipif(os.name != "nt", reason="the native helper is Windows-only")
+from tests.launcher_helpers import (
+    RUN_TEXT,
+    SECURE_LOG_SOURCE,
+    pwsh,
+    requires_pwsh,
+    windows_only,
+)
+from tests.launcher_helpers import my_sid as _my_sid
 
 LOCAL_SERVICE = "S-1-5-19"
 
@@ -72,21 +74,6 @@ try {
     "REASON=$($_.Exception.Message)"
 }
 """
-
-
-def _my_sid() -> str:
-    probe = subprocess.run(
-        [
-            pwsh,
-            "-NoProfile",
-            "-Command",
-            "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    return probe.stdout.strip()
 
 
 def _acl_of(path: Path) -> str:

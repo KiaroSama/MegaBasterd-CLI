@@ -15,19 +15,13 @@ artifact to order anything against.
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
-from pathlib import Path
 
 import pytest
 
+from tests.launcher_helpers import RUN_TEXT, pwsh
 from tests.launcher_helpers import extract_function as _extract_function
 
-ROOT = Path(__file__).resolve().parents[1]
-RUN_PS1 = ROOT / "Run.ps1"
-RUN_TEXT = RUN_PS1.read_text(encoding="utf-8")
-
-pwsh = shutil.which("pwsh") or shutil.which("powershell")
 pytestmark = pytest.mark.skipif(pwsh is None, reason="PowerShell is not available on this host")
 
 

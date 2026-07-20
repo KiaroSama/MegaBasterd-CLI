@@ -16,28 +16,22 @@ exists on disk, and the crash paths need no special handling.
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import uuid
 from pathlib import Path
 
 import pytest
 
+from tests.launcher_helpers import REPO, RUN_PS1, pwsh, requires_pwsh
 from tests.launcher_helpers import artifacts as _artifacts
-
-REPO = Path(__file__).resolve().parents[1]
 
 # Every test here spawns the real Run.ps1, which may create and install into
 # the project .venv. That is one shared resource, so they all run on a single
 # xdist worker (--dist loadgroup) rather than racing each other over it.
 pytestmark = pytest.mark.xdist_group("launcher_subprocess")
-RUN_PS1 = REPO / "Run.ps1"
 
 SECRET = "SENTINEL-PW-8842"
 MEGA_KEY = "SENTINELKEY9911"
-
-pwsh = shutil.which("pwsh") or shutil.which("powershell")
-requires_pwsh = pytest.mark.skipif(pwsh is None, reason="PowerShell is not available")
 
 
 def _launch(args: list[str], log_dir: Path) -> subprocess.CompletedProcess:

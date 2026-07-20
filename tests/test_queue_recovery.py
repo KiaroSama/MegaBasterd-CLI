@@ -10,23 +10,12 @@ from __future__ import annotations
 import datetime as dt
 import json
 
-from megabasterd_cli.queue.manager import JobStatus, JobType, QueueItem, QueueManager
+from megabasterd_cli.queue.manager import JobStatus, QueueManager
+from tests.queue_helpers import add as _add
 
 
 def _mgr(tmp_path) -> QueueManager:
     return QueueManager(tmp_path / "queue.json")
-
-
-def _add(q: QueueManager, **kwargs) -> QueueItem:
-    item = QueueItem(
-        id=QueueItem.new_id(),
-        type=kwargs.pop("type", JobType.DOWNLOAD.value),
-        source=kwargs.pop("source", "https://mega.nz/file/x#y"),
-        destination=kwargs.pop("destination", ""),
-        **kwargs,
-    )
-    q.add(item)
-    return item
 
 
 def test_simulated_crash_is_recovered_by_next_run(tmp_path):

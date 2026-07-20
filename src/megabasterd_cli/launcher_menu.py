@@ -29,7 +29,7 @@ from pathlib import Path
 
 from rich.text import Text
 
-from .cli import _redacted_argv
+from .cli import LINK_MARKERS, _redacted_argv
 from .ui.prompts import ask_password
 from .ui.theme import literal, make_console
 from .utils.redaction import REDACTED, SECRET_FIELD_NAMES, redact_text, sanitize
@@ -414,9 +414,6 @@ def build_args(
     return args
 
 
-LINK_MARKERS = ("mega.nz/", "mega.co.nz/", "mc://", "mega://")
-
-
 def download_wizard() -> None:
     steps = [
         Step("source", "MEGA link(s), or a text/DLC file path", required=True),
@@ -613,7 +610,6 @@ def generic(command: str, prompt: str) -> Action:
 class Menu:
     title: str
     entries: list[tuple[str, Action]] = field(default_factory=list)
-    subtitle: str | None = None
 
 
 ACCOUNT_MENU = Menu(

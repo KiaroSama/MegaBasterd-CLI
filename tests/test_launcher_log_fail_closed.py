@@ -19,33 +19,29 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 import subprocess
 import uuid
 from pathlib import Path
 
 import pytest
 
-from tests.launcher_helpers import SECURE_LOG_CS, SECURE_LOG_SOURCE
+from tests.launcher_helpers import (
+    OWNER_ONLY,
+    RUN_PS1,
+    RUN_TEXT,
+    SECURE_LOG_CS,
+    SECURE_LOG_SOURCE,
+    pwsh,
+    requires_pwsh,
+    windows_only,
+)
 from tests.launcher_helpers import artifacts as _artifacts
 from tests.launcher_helpers import extract_function as _extract_function
 from tests.launcher_helpers import mode as _mode
-
-REPO = Path(__file__).resolve().parents[1]
-RUN_PS1 = REPO / "Run.ps1"
-RUN_TEXT = RUN_PS1.read_text(encoding="utf-8")
+from tests.launcher_helpers import my_sid as _my_sid
 
 SECRET = "SENTINEL-PW-8842"
 MEGA_KEY = "SENTINELKEY9911"
-
-pwsh = shutil.which("pwsh") or shutil.which("powershell")
-requires_pwsh = pytest.mark.skipif(pwsh is None, reason="PowerShell is not available")
-posix_only = pytest.mark.skipif(
-    os.name == "nt", reason="POSIX file modes are not a Windows concept"
-)
-windows_only = pytest.mark.skipif(os.name != "nt", reason="ACL check is Windows-specific")
-
-OWNER_ONLY = 0o600
 
 # Every test here spawns the real Run.ps1, which may create and install into
 # the project .venv. That is one shared resource, so they all run on a single
@@ -124,7 +120,6 @@ HARNESS_PRELUDE += _secure_log_source() + "\n"
 HARNESS_FUNCTIONS = (
     "Get-RedactedText",
     "Disable-LauncherFileLogging",
-    "Get-CurrentUserSid",
     "Test-OwnerOnlyLogFile",
     "Initialize-SecureLogType",
     "Open-VerifiedLogStream",
@@ -204,7 +199,7 @@ if ($script:IsWindowsHost -and (Test-Path -LiteralPath $Target)) {
     $probe = Get-Acl -LiteralPath $Target
     $sidType = [System.Security.Principal.SecurityIdentifier]
     "OWNER=$($probe.GetOwner($sidType).Value)"
-    "ME=$((Get-CurrentUserSid).Value)"
+    "ME=$([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value)"
     "PROTECTED=$($probe.AreAccessRulesProtected)"
     "ACES=$(($probe.GetAccessRules($true,$true,$sidType) | ForEach-Object {
         "$($_.AccessControlType):$($_.IdentityReference.Value):$($_.FileSystemRights)" }) -join ' | ')"
@@ -569,21 +564,6 @@ def test_windows_does_not_depend_on_a_type_absent_from_powershell_5_1():
 # ---------------------------------------------------------------------------
 # 8. the verifier is a positive allowlist of one principal, not a blacklist
 # ---------------------------------------------------------------------------
-
-
-def _my_sid() -> str:
-    probe = subprocess.run(
-        [
-            pwsh,
-            "-NoProfile",
-            "-Command",
-            "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    return probe.stdout.strip()
 
 
 def _set_dacl(target: Path, *aces: str) -> None:

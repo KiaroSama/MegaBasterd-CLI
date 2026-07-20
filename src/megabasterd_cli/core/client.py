@@ -19,18 +19,13 @@ from .api import MegaAPIClient
 from .auth import AuthOperations, MegaSession
 from .cloud import CloudOperations
 from .nodes import MegaNode
-from .responses import _expect_field, _expect_mapping, _first_node_handle
-from .session_store import SessionPersistence, _atomic_write_private
+from .session_store import SessionPersistence
 from .shares import ShareOperations
 
 __all__ = [
     "MegaClient",
     "MegaNode",
     "MegaSession",
-    "_atomic_write_private",
-    "_expect_field",
-    "_expect_mapping",
-    "_first_node_handle",
 ]
 
 log = logging.getLogger(__name__)

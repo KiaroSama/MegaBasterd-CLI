@@ -16,28 +16,15 @@ import pytest
 
 from megabasterd_cli.queue.manager import (
     JobStatus,
-    JobType,
-    QueueItem,
     QueueLockError,
     QueueManager,
 )
 from megabasterd_cli.utils.filelock import FileLock
+from tests.queue_helpers import add as _add
 
 
 def _mgr(tmp_path, **kwargs) -> QueueManager:
     return QueueManager(tmp_path / "queue.json", **kwargs)
-
-
-def _add(q: QueueManager, **kwargs) -> QueueItem:
-    item = QueueItem(
-        id=QueueItem.new_id(),
-        type=kwargs.pop("type", JobType.DOWNLOAD.value),
-        source=kwargs.pop("source", "https://mega.nz/file/x#y"),
-        destination=kwargs.pop("destination", ""),
-        **kwargs,
-    )
-    q.add(item)
-    return item
 
 
 def test_threads_racing_touch_and_update_status_do_not_corrupt(tmp_path):
