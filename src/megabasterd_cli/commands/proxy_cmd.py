@@ -9,12 +9,11 @@ from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
 import click
-from rich.table import Table
 
 from ..proxy.runtime import _load_persisted_pool, _pool_path
 from ..queue.storage import atomic_write_text
 from ..ui.prompts import confirm, print_error, print_info, print_success, print_warn
-from ..ui.theme import make_console
+from ..ui.theme import SafeTable, make_console
 from ..utils.filelock import FileLock
 from ..utils.redaction import REDACTED, redact_text
 
@@ -89,7 +88,10 @@ def proxy_list(ctx: click.Context, config_urls: bool) -> None:
     if not entries:
         _console.print("[mb.dim]No proxies stored.[/mb.dim]")
         return
-    table = Table(
+    # SafeTable, not Table: these URLs come from `proxy fetch` (a remote public
+    # list) and `proxy import` (an arbitrary file), so a cell is untrusted. One
+    # poisoned line with an unbalanced tag used to brick `proxy list` for good.
+    table = SafeTable(
         title="Smart Proxy Pool",
         show_header=True,
         header_style="mb.table.header",
@@ -105,7 +107,10 @@ def proxy_list(ctx: click.Context, config_urls: bool) -> None:
         source = "persisted" if e.url in persisted else "config"
         # A proxy URL routinely carries `user:pass@`; the table is printed to a
         # terminal that gets screenshotted and pasted into bug reports.
-        table.add_row(redact_text(e.url), str(e.successes), str(e.failures), status, source)
+        # `_safe_source`, not bare `redact_text`: `proxy add`/`import` store the
+        # string exactly as typed, and `redact_text` only matches credentials
+        # AFTER a `scheme://`, so `alice:hunter2@1.2.3.4:8080` printed in full.
+        table.add_row(_safe_source(e.url), str(e.successes), str(e.failures), status, source)
     _console.print(table)
 
 
@@ -124,7 +129,7 @@ def proxy_remove(url: str) -> None:
     # Matching uses the RAW url; only what reaches the terminal is redacted.
     # A proxy URL routinely carries `user:pass@`, and both branches used to
     # print it verbatim.
-    shown = redact_text(url)
+    shown = _safe_source(url)
     removed = False
     with pool_transaction() as pool:
         removed = pool.remove(url)
@@ -206,7 +211,7 @@ def proxy_serve(ctx: click.Context, port: int | None, password: str | None, any_
             "No proxy password set. Use --password or "
             "`mb config set connect_proxy_password <secret>`."
         )
-        return
+        ctx.exit(1)
 
     proxy = MegaConnectProxy(
         password=password,
@@ -251,8 +256,20 @@ def _url_secrets(url: str) -> list[str]:
 
     Short values are skipped: substituting a 4-character string everywhere
     would mangle ordinary words in the message for no real protection.
+
+    The scheme is synthesised when absent: `mb proxy add` and `mb proxy import`
+    store the string exactly as typed, and `urlsplit` reads a schemeless
+    `alice:hunter2@host:8080` as `scheme='alice'` - so the password ended up in
+    neither `parsed.password` nor `redact_text`'s `scheme://` pattern, and was
+    printed verbatim.
     """
-    parsed = urlsplit(url)
+    try:
+        parsed = urlsplit(url if "://" in url else f"//{url}")
+    except ValueError:
+        # Malformed input (a stray `[` parses as an unterminated IPv6 literal)
+        # has no extractable credentials, and a display helper must not raise;
+        # the shape-based pass in `_scrub` still applies.
+        return []
     values = [parsed.password or "", parsed.username or ""]
     values += [v for k, v in parse_qsl(parsed.query) if _SECRETISH_PARAM.search(k)]
     return sorted({v for v in values if len(v) >= 5}, key=len, reverse=True)
@@ -333,7 +350,7 @@ def proxy_fetch(
     sources = [source] if source else _DEFAULT_FETCH_SOURCES.get(protocol, [])
     if not sources:
         print_error(f"No fetch source configured for protocol {protocol}")
-        return
+        ctx.exit(1)
 
     # No pool read here: the egress proxy for the fetch comes from the
     # selector below, and the pool that gets WRITTEN is re-read inside the
@@ -391,7 +408,9 @@ def proxy_fetch(
         print_error(f"No proxies fetched ({len(errors)} source error(s)).")
         for e in errors:
             print_error(e)
-        return
+        # A reported failure must not exit 0; the ProxyRequiredError branch
+        # above already used ctx.exit(1) inside this same function.
+        ctx.exit(1)
 
     # The lock is taken only for the merge, never across the network fetch -
     # holding it for a multi-second HTTP round trip would stall every other

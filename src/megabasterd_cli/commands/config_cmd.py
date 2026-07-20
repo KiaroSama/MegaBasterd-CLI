@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import asdict
 
 import click
-from rich.table import Table
 
 from ..config import (
     ConfigCorruptionError,
@@ -15,7 +14,7 @@ from ..config import (
     display_value,
 )
 from ..ui.prompts import confirm, print_success
-from ..ui.theme import make_console
+from ..ui.theme import SafeTable, make_console
 
 _console = make_console()
 
@@ -37,7 +36,10 @@ def config_show(ctx: click.Context) -> None:
     store: ConfigStore = ctx.obj["config_store"]
     cfg = store.config
     _warn_if_corrupt(store)
-    table = Table(
+    # SafeTable, not Table: a stored value is untrusted input. `[bold red]x`
+    # picked its own styling and an unbalanced tag raised MarkupError, making
+    # `config show` fail on EVERY run until the file was hand-edited.
+    table = SafeTable(
         title=f"Configuration ({config_file()})",
         show_header=True,
         header_style="mb.table.header",
