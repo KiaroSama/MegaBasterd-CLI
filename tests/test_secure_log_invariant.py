@@ -293,6 +293,21 @@ def test_rotation_leaves_every_file_owner_only(tmp_path, umask_zero, logging_tea
         assert _mode(path) == OWNER_ONLY, f"{path.name} is {oct(_mode(path))}"
 
 
+def _plant_symlink(link: Path, target: Path) -> None:
+    """Put a symlink at `link`, whatever is already sitting there.
+
+    `setup_logging` with a tiny `max_bytes` can roll over during startup and
+    create the rotation target as a REGULAR file before the test gets to plant
+    its symlink - which made `symlink_to` raise FileExistsError instead of
+    testing anything. Whether that happens depends on how many bytes the
+    startup banner emits, so it passed on one runner and failed on the others.
+    Establish the precondition rather than hope for it.
+    """
+    if link.is_symlink() or link.exists():
+        link.unlink()
+    link.symlink_to(target)
+
+
 @posix_only
 def test_a_symlink_at_a_rotation_destination_makes_rollover_fail_closed(
     tmp_path, umask_zero, logging_teardown, monkeypatch
@@ -304,7 +319,7 @@ def test_a_symlink_at_a_rotation_destination_makes_rollover_fail_closed(
 
     setup_logging(level="DEBUG", log_file=log_file, quiet=True, max_bytes=200, backup_count=2)
     handler = next(h for h in logging.getLogger().handlers if hasattr(h, "doRollover"))
-    (tmp_path / "cli.log.1").symlink_to(victim)
+    _plant_symlink(tmp_path / "cli.log.1", victim)
     spy = _OpenSpy(monkeypatch)
 
     with pytest.raises(InsecureLogFileError):
@@ -326,7 +341,7 @@ def test_a_rollover_failure_disables_the_file_handler_instead_of_writing(
     log_file = tmp_path / "cli.log"
 
     setup_logging(level="DEBUG", log_file=log_file, quiet=True, max_bytes=200, backup_count=2)
-    (tmp_path / "cli.log.1").symlink_to(victim)
+    _plant_symlink(tmp_path / "cli.log.1", victim)
 
     for index in range(60):
         logging.getLogger("t").warning("line %d padded to force a rollover", index)
@@ -348,7 +363,21 @@ def test_a_pre_existing_windows_file_is_not_blindly_trusted(tmp_path, monkeypatc
     """`if os.path.exists(path): return` trusted whatever was already there."""
     path = tmp_path / "planted.log"
     path.write_text("planted\n", encoding="utf-8")
-    assert "(I)" in _icacls(path), "the fixture already lacks inherited ACEs - it proves nothing"
+    # Grant a broad principal explicitly rather than relying on the parent
+    # directory to hand one down. A GitHub runner's temp directory grants no
+    # inheritable ACEs, so the old "assert (I) is present" precondition failed
+    # there and the test could not run at all. The unsafe state has to be
+    # built, not inherited.
+    subprocess.run(
+        ["icacls", str(path), "/grant", "*S-1-1-0:(R)"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+    assert "S-1-1-0" in _icacls(path) or "Everyone" in _icacls(
+        path
+    ), "could not plant a broad ACE - the test would prove nothing"
 
     hardened: list[str] = []
     real = secure_log._windows_harden
@@ -358,10 +387,25 @@ def test_a_pre_existing_windows_file_is_not_blindly_trusted(tmp_path, monkeypatc
         lambda p: (hardened.append(p), real(p))[1],
     )
 
-    secure_log.append_line(path, "ours")
+    # Either outcome is safe and the brief allows both: repair it, or refuse
+    # it. What is NOT allowed is appending to it while it is still broad.
+    # `icacls /inheritance:r` strips INHERITED aces only, so an explicit
+    # Everyone ace like the one planted above cannot be repaired away - the
+    # implementation therefore rejects, which is the fail-closed answer.
+    rejected = False
+    try:
+        secure_log.append_line(path, "ours")
+    except InsecureLogFileError:
+        rejected = True
 
-    assert hardened, "the pre-existing file was accepted without hardening"
-    assert "(I)" not in _icacls(path), f"inherited ACEs survived:\n{_icacls(path)}"
+    assert hardened, "the pre-existing file was accepted without any hardening attempt"
+    acl = _icacls(path)
+    broad = "S-1-1-0" in acl or "Everyone" in acl
+    if rejected:
+        assert "ours" not in path.read_text(encoding="utf-8"), "rejected but written anyway"
+    else:
+        assert not broad, f"appended to a file that still grants a broad principal:\n{acl}"
+        assert "(I)" not in acl, f"inherited ACEs survived:\n{acl}"
 
 
 @windows_only
