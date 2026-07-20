@@ -41,6 +41,7 @@
     "CredentialVault.SCRYPT_R",
     "CredentialVault.decrypt",
     "CredentialVault.encrypt",
+    "VaultUnlockError",
     "validate_account_document"
   ],
   "megabasterd_cli.cli": [
@@ -55,7 +56,8 @@
     "account_info",
     "account_list",
     "account_refresh_all",
-    "account_remove"
+    "account_remove",
+    "require_vault_passphrase"
   ],
   "megabasterd_cli.commands.api_support": [
     "api_for"

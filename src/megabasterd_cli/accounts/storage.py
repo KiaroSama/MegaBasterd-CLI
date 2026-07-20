@@ -23,10 +23,23 @@ import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
 log = logging.getLogger(__name__)
+
+
+class VaultUnlockError(InvalidTag):
+    """The stored credential did not decrypt with the supplied passphrase.
+
+    AES-GCM signals this as `InvalidTag`, whose `str()` is the EMPTY STRING, so
+    letting it escape gave the user a ~20-frame traceback ending in a bare
+    `Error: ` line. The passphrase is deliberately never part of the message.
+
+    It subclasses `InvalidTag` so callers (and tests) that already catch the
+    cryptography exception keep working; new code catches this instead.
+    """
 
 
 @dataclass
@@ -86,7 +99,12 @@ class CredentialVault:
             raise ValueError("Encrypted blob too short")
         salt, nonce, ct = raw[:16], raw[16:28], raw[28:]
         key = self._derive(salt)
-        return AESGCM(key).decrypt(nonce, ct, None).decode("utf-8")
+        try:
+            return AESGCM(key).decrypt(nonce, ct, None).decode("utf-8")
+        except (InvalidTag, UnicodeDecodeError) as exc:
+            raise VaultUnlockError(
+                "Wrong vault passphrase (or the credential is corrupt)."
+            ) from exc
 
 
 class AccountCorruptionError(Exception):

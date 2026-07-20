@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import sys
+
 import click
 
 from ..accounts.manager import AccountManager, AccountNotFound
+from ..accounts.storage import VaultUnlockError
 from ..config import accounts_file
 from ..core.client import MegaClient
 from ..core.errors import MegaError
@@ -26,10 +29,55 @@ def account() -> None:
     """Add, remove, list, switch MEGA accounts."""
 
 
-def _open_manager(vault_passphrase: str | None) -> AccountManager:
+def _stdin_is_interactive() -> bool:
+    """Whether a `getpass` prompt could actually be answered.
+
+    `isatty()` alone is not enough on Windows: `NUL` is a CHARACTER DEVICE, so
+    `mb account info < NUL` reports a tty, the prompt runs, and `msvcrt` waits
+    on the console for a human who is not there. Only a real console has a
+    console mode, so that is what is asked.
+    """
+    stream = getattr(sys, "stdin", None)
+    if stream is None or not stream.isatty():
+        return False
+    if sys.platform != "win32":
+        return True
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    mode = ctypes.c_ulong()
+    handle = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+    return bool(kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
+
+
+def require_vault_passphrase(vault_passphrase: str | None, *, machine: bool = False) -> str:
+    """The passphrase, or a clear failure - never an unanswerable prompt.
+
+    `getpass` on Windows reads the console through `msvcrt`, so a closed or
+    redirected stdin does NOT raise EOF: the process blocked forever with no
+    output at all. Machine output (`--json`) is the same trap even on a TTY,
+    because stdout is already redirected by the time the prompt appears.
+    """
+    if vault_passphrase:
+        return vault_passphrase
+    if machine or not _stdin_is_interactive():
+        print_error("Vault passphrase required: pass --vault-passphrase.")
+        click.get_current_context().exit(1)
+    return ask_password("Vault passphrase")
+
+
+def _open_manager(vault_passphrase: str | None, *, require_accounts: bool = True) -> AccountManager:
+    """Unlock the vault, refusing before the prompt when it cannot succeed.
+
+    Mirrors the guard `queue_cmd._manager` already had: an empty vault makes
+    every caller but `account add` fail anyway, so asking for a passphrase
+    first only adds a hang.
+    """
     mgr = AccountManager(accounts_file())
-    passphrase = vault_passphrase or ask_password("Vault passphrase")
-    mgr.unlock(passphrase)
+    if require_accounts and not mgr.list_accounts():
+        print_error("No accounts found. Use `mb account add` first.")
+        click.get_current_context().exit(1)
+    mgr.unlock(require_vault_passphrase(vault_passphrase))
     return mgr
 
 
@@ -79,7 +127,8 @@ def account_add(
             # never released the session it had just opened.
             client.logout()
 
-    mgr = _open_manager(vault_passphrase)
+    # `add` is the one command that must work on an EMPTY vault.
+    mgr = _open_manager(vault_passphrase, require_accounts=False)
     try:
         mgr.add_account(email, password, label=label, make_default=make_default)
         print_success(f"Account added: {email}")
@@ -134,6 +183,9 @@ def account_info(
     except AccountNotFound:
         print_error(f"Account not found: {email}")
         return
+    except VaultUnlockError as e:
+        print_error(str(e))
+        ctx.exit(1)
 
     client = MegaClient(api=api_for(cfg))
     try:
