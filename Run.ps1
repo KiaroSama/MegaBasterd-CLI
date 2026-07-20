@@ -54,9 +54,6 @@ $script:IsWindowsHost = ([System.Environment]::OSVersion.Platform -eq "Win32NT")
 $script:UnixOwnerOnly = if ($script:IsWindowsHost) { $null } else {
     [System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite
 }
-# Paths whose owner-only creation has already been verified this run, so the
-# per-line check stays a Test-Path rather than a Get-Acl.
-$script:SecuredLogs = @{}
 # Set once, never cleared: if a log file cannot be proven owner-only, launcher
 # file logging is off for the rest of the run. There is no permissive fallback.
 $script:LauncherFileLoggingDisabled = $false
@@ -142,51 +139,84 @@ function Test-OwnerOnlyLogFile {
     }
 }
 
-function New-SecureLogFile {
+function Open-VerifiedLogStream {
     param([string] $Path)
-    # Owner-only from the FIRST byte on BOTH platforms. This used to be Windows
-    # only: Get-Acl/Set-Acl/SetAccessRuleProtection are Windows APIs, so on
-    # POSIX the hardening threw, the catch swallowed it, and Add-Content then
-    # created the log with the ambient umask - normally 0644, world-readable.
-    # The POSIX branch below creates the file atomically with mode 0600; it is
-    # never created permissively and chmod'd afterwards, because that leaves a
-    # window in which anyone can read it.
-    if ($script:SecuredLogs.ContainsKey($Path) -and (Test-Path -LiteralPath $Path)) {
-        return
-    }
-    if (Test-Path -LiteralPath $Path) {
-        # Whatever already occupies this run's log path belongs to somebody
-        # else. It is verified, never unlinked: the old code deleted it, and
-        # unlink-and-replace of an arbitrary path destroys a planted symlink or
-        # junction, then hands back a "secured" file an attacker made us create.
-        # Not provably a safe owner-only regular file means fail closed.
-        if (Test-OwnerOnlyLogFile $Path) {
-            $script:SecuredLogs[$Path] = $true
-            return
+    # Returns a stream on a file proven owner-only, or throws having written
+    # nothing. The caller writes through THIS handle; nothing resolves the name
+    # again afterwards.
+    #
+    # That is the entire point. The previous shape verified a pathname, cached
+    # the verdict in a $script:SecuredLogs hashtable, and then appended with
+    # Add-Content - which resolves the name a second time. A decision about one
+    # object authorized a write to whatever happened to own that name later, so
+    # removing the file after the first line and dropping a symlink in its place
+    # redirected every subsequent line.
+    #
+    # On Windows the handle is opened WITHOUT FileShare.Delete. For as long as
+    # it is held the name cannot be renamed, deleted or replaced, so the DACL
+    # read below genuinely describes the object this stream is bound to. The
+    # order matters: pin first, verify second.
+    $existing = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($null -ne $existing) {
+        # Refused before opening. Opening a reparse point hands back a handle to
+        # its target, and the target's own ACL says nothing about the
+        # redirection - so it has to be caught by name, on the link itself.
+        if ($existing -isnot [System.IO.FileInfo]) {
+            throw "Refusing the log path - it is not a regular file."
         }
-        throw "Refusing to use the existing entry at $Path - it is not a verifiable owner-only file."
+        if (($existing.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Refusing the log path - it is a reparse point."
+        }
     }
-    $options = [System.IO.FileStreamOptions]::new()
-    $options.Mode = [System.IO.FileMode]::CreateNew
-    $options.Access = [System.IO.FileAccess]::Write
-    if (-not $script:IsWindowsHost) {
-        $options.UnixCreateMode = $script:UnixOwnerOnly
-    }
-    ([System.IO.FileStream]::new($Path, $options)).Dispose()
+    $creating = ($null -eq $existing)
+    $mode = if ($creating) { [System.IO.FileMode]::CreateNew } else { [System.IO.FileMode]::Open }
+    # ReadWrite deliberately omits Delete: the CLI appends to these same logs
+    # from another process and must keep working, but nobody may swap the name.
+    $share = [System.IO.FileShare]::ReadWrite
     if ($script:IsWindowsHost) {
-        $acl = Get-Acl -LiteralPath $Path
-        $acl.SetAccessRuleProtection($true, $false)
-        $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-        $acl.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
-            $me, "FullControl", "Allow")))
-        Set-Acl -LiteralPath $Path -AclObject $acl
+        # The 4-argument constructor, not FileStreamOptions: that type does not
+        # exist in Windows PowerShell 5.1, where the old code threw TypeNotFound
+        # and silently disabled launcher logging for the whole run.
+        $stream = [System.IO.FileStream]::new($Path, $mode, [System.IO.FileAccess]::Write, $share)
+    } else {
+        $options = [System.IO.FileStreamOptions]::new()
+        $options.Mode = $mode
+        $options.Access = [System.IO.FileAccess]::Write
+        $options.Share = $share
+        if ($creating) {
+            # Mode 0600 at creation, never 0644-then-chmod: that leaves a window
+            # in which the log is world-readable. Rejected outright when set on
+            # a non-creating FileMode, hence the guard.
+            $options.UnixCreateMode = $script:UnixOwnerOnly
+        }
+        $stream = [System.IO.FileStream]::new($Path, $options)
     }
-    # The ACL/mode is read back rather than assumed: Set-Acl can be a no-op on
-    # some filesystems, and an unverified permission is not a permission.
-    if (-not (Test-OwnerOnlyLogFile $Path)) {
-        throw "Created $Path but could not verify it as owner-only."
+    try {
+        if ($script:IsWindowsHost -and $creating) {
+            # Only a file this run just created is hardened. A pre-existing one
+            # is verified and otherwise refused - repairing somebody else's DACL
+            # would mean writing into a file we cannot prove was ever ours.
+            $acl = Get-Acl -LiteralPath $Path
+            $acl.SetAccessRuleProtection($true, $false)
+            foreach ($rule in @($acl.Access)) {
+                if ($null -ne $rule) { [void]$acl.RemoveAccessRule($rule) }
+            }
+            $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+            $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+                $me, "FullControl", "Allow")))
+            Set-Acl -LiteralPath $Path -AclObject $acl
+        }
+        # Read back rather than assume: Set-Acl can be a no-op on some
+        # filesystems, and an unverified permission is not a permission.
+        if (-not (Test-OwnerOnlyLogFile $Path)) {
+            throw "Refusing to write the log - it is not a verifiable owner-only file."
+        }
+        [void]$stream.Seek(0, [System.IO.SeekOrigin]::End)
+    } catch {
+        $stream.Dispose()
+        throw
     }
-    $script:SecuredLogs[$Path] = $true
+    return $stream
 }
 
 function Write-SecureLogLine {
@@ -194,21 +224,30 @@ function Write-SecureLogLine {
         [string] $Path,
         [string] $Line
     )
-    # $Line is already redacted by the caller; Add-Content on an existing file
-    # appends without touching its mode or its DACL. The append is reachable
-    # only through a successful New-SecureLogFile - securing is the gate, not a
-    # best effort that Add-Content used to run past regardless.
+    # $Line is already redacted by the caller. No Add-Content and no path-keyed
+    # "already secured" cache: each line goes through the one handle that was
+    # opened and verified for that write, and that handle is closed after it.
     if ($script:LauncherFileLoggingDisabled) {
         return
     }
+    $stream = $null
+    $writer = $null
     try {
         if (-not (Test-Path -LiteralPath $LogDir)) {
             New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
         }
-        New-SecureLogFile $Path
-        Add-Content -LiteralPath $Path -Value $Line -Encoding UTF8
+        $stream = Open-VerifiedLogStream $Path
+        $writer = New-Object System.IO.StreamWriter(
+            $stream, (New-Object System.Text.UTF8Encoding($false)))
+        $writer.WriteLine($Line)
+        $writer.Flush()
     } catch {
         Disable-LauncherFileLogging $_.Exception.Message
+    } finally {
+        # StreamWriter.Dispose disposes the stream it wraps, so exactly one of
+        # these runs.
+        if ($null -ne $writer) { $writer.Dispose() }
+        elseif ($null -ne $stream) { $stream.Dispose() }
     }
 }
 

@@ -89,6 +89,20 @@ def _code_of(name: str) -> str:
     )
 
 
+def _script_var(name: str) -> str:
+    """Lift a `$script:` assignment out of Run.ps1 verbatim.
+
+    Copying the value into the harness instead let `$script:BroadSids` go
+    undefined here: `Test-OwnerOnlyLogFile` threw, its `catch` turned that into
+    `return $false`, and every fail-closed test passed without ever exercising a
+    verification that could succeed.
+    """
+    for line in RUN_TEXT.splitlines():
+        if line.startswith(f"$script:{name} ="):
+            return line
+    raise AssertionError(f"$script:{name} is no longer defined in Run.ps1")
+
+
 HARNESS_PRELUDE = """param([string] $Target, [string] $Line = 'harness line')
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
@@ -96,16 +110,16 @@ $script:IsWindowsHost = ([System.Environment]::OSVersion.Platform -eq "Win32NT")
 $script:UnixOwnerOnly = if ($script:IsWindowsHost) { $null } else {
     [System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite
 }
-$script:SecuredLogs = @{}
 $script:LauncherFileLoggingDisabled = $false
 $LogDir = Split-Path -Parent $Target
 """
+HARNESS_PRELUDE += _script_var("BroadSids") + "\n"
 
 HARNESS_FUNCTIONS = (
     "Get-RedactedText",
     "Disable-LauncherFileLogging",
     "Test-OwnerOnlyLogFile",
-    "New-SecureLogFile",
+    "Open-VerifiedLogStream",
     "Write-SecureLogLine",
 )
 
@@ -136,6 +150,67 @@ def _run_harness(tmp_path: Path, target: Path, line: str = "harness line"):
         timeout=120,
     )
     return proc
+
+
+TWO_LINE_PRELUDE = """param(
+    [string] $Target,
+    [string] $Line1 = 'first line',
+    [string] $Line2 = 'second line',
+    [string] $Mutate = ''
+)
+Set-StrictMode -Version 2.0
+$ErrorActionPreference = 'Stop'
+$script:IsWindowsHost = ([System.Environment]::OSVersion.Platform -eq "Win32NT")
+$script:UnixOwnerOnly = if ($script:IsWindowsHost) { $null } else {
+    [System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite
+}
+$script:LauncherFileLoggingDisabled = $false
+$LogDir = Split-Path -Parent $Target
+"""
+TWO_LINE_PRELUDE += _script_var("BroadSids") + "\n"
+
+
+def _write_two_line_harness(tmp_path: Path) -> Path:
+    """Write, let the caller swap the file, write again.
+
+    A single-write harness cannot see this bug at all: the path cache was only
+    consulted from the *second* call onwards, so the defect lived entirely in
+    the gap between two writes to the same path.
+    """
+    body = TWO_LINE_PRELUDE + "\n".join(_extract_function(n) for n in HARNESS_FUNCTIONS)
+    body += """
+Write-SecureLogLine $Target $Line1
+"AFTER_FIRST=$($script:LauncherFileLoggingDisabled)"
+if ($Mutate) { & $Mutate $Target }
+Write-SecureLogLine $Target $Line2
+"AFTER_SECOND=$($script:LauncherFileLoggingDisabled)"
+"STILL_ALIVE=yes"
+"""
+    script = tmp_path / "two-line-harness.ps1"
+    script.write_text(body, encoding="utf-8")
+    return script
+
+
+def _run_two_line(tmp_path: Path, target: Path, mutate: Path | None = None, **kw):
+    args = [
+        pwsh,
+        "-NoProfile",
+        "-File",
+        str(_write_two_line_harness(tmp_path)),
+        str(target),
+        kw.get("line1", "FIRST-LINE"),
+        kw.get("line2", "SECOND-LINE"),
+        str(mutate) if mutate else "",
+    ]
+    return subprocess.run(
+        args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180
+    )
+
+
+def _mutation_script(tmp_path: Path, body: str, name: str = "mutate.ps1") -> Path:
+    script = tmp_path / name
+    script.write_text("param([string] $Target)\n$ErrorActionPreference='Stop'\n" + body, "utf-8")
+    return script
 
 
 def _mode(path: Path) -> int:
@@ -317,7 +392,146 @@ def test_no_sentinel_survives_a_normal_run(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 6. structural
+# 6. a decision about a pathname must not authorize a later object
+# ---------------------------------------------------------------------------
+
+
+@windows_only
+@requires_pwsh
+def test_a_normal_second_write_appends_to_the_same_owner_only_file(tmp_path):
+    """The control. Without this, every assertion below passes by writing nothing."""
+    target = tmp_path / "run.log"
+
+    proc = _run_two_line(tmp_path, target)
+
+    assert "AFTER_SECOND=False" in proc.stdout, proc.stdout + proc.stderr
+    text = target.read_text(encoding="utf-8")
+    assert "FIRST-LINE" in text and "SECOND-LINE" in text, text
+    rendered = _acl(target)
+    assert rendered.splitlines()[:1] == ["True"], f"log inherits ACLs: {rendered!r}"
+    for broad in BROAD:
+        assert broad not in rendered, f"log grants {broad}: {rendered!r}"
+    me = os.environ.get("USERNAME", "")
+    assert me and me.lower() in rendered.lower(), f"the owner lost access: {rendered!r}"
+
+
+@windows_only
+@requires_pwsh
+def test_a_replacement_carrying_a_broad_ace_is_not_written_to(tmp_path):
+    """The defect, exactly: same pathname, different object, after a good write.
+
+    The old code cached `$script:SecuredLogs[$Path] = $true` and then re-entered
+    through `Test-Path` alone, so the second `Add-Content` resolved the name
+    again and appended into whatever now answered to it.
+    """
+    target = tmp_path / "run.log"
+    mutate = _mutation_script(
+        tmp_path,
+        # Delete our file and drop a *regular* file with an explicit Everyone
+        # read ACE at the same name. SIDs, not names: a localized Windows has no
+        # group literally called "Everyone".
+        "Remove-Item -LiteralPath $Target -Force\n"
+        "Set-Content -LiteralPath $Target -Value 'PLANTED' -NoNewline\n"
+        "icacls $Target /inheritance:r /grant '*S-1-1-0:(R)' "
+        "/grant ('{0}:(F)' -f [System.Security.Principal.WindowsIdentity]::GetCurrent().Name)"
+        " | Out-Null\n",
+    )
+
+    proc = _run_two_line(tmp_path, target, mutate)
+
+    assert "AFTER_FIRST=False" in proc.stdout, f"the first write failed: {proc.stdout}{proc.stderr}"
+    text = target.read_text(encoding="utf-8")
+    assert "SECOND-LINE" not in text, f"wrote into a replacement carrying a broad ACE: {text!r}"
+    assert text == "PLANTED", f"the planted replacement was mutated: {text!r}"
+    assert "AFTER_SECOND=True" in proc.stdout, proc.stdout + proc.stderr
+    assert "STILL_ALIVE=yes" in proc.stdout, "the launcher died instead of dropping logging"
+    still_broad = _acl(target)
+    assert "S-1-1-0" in still_broad or "Everyone" in still_broad, (
+        "the planted file's ACL was repaired instead of the file being refused: " f"{still_broad!r}"
+    )
+
+
+@requires_pwsh
+def test_a_reparse_point_planted_after_the_first_write_is_not_followed(tmp_path):
+    """Replace the name with a link once it is already 'known good'."""
+    victim = tmp_path / "victim.txt"
+    victim.write_text("victim content\n", encoding="utf-8")
+    target = tmp_path / "run.log"
+    probe = tmp_path / "linkprobe"
+    try:
+        os.symlink(victim, probe)
+        probe.unlink()
+    except OSError as exc:  # Windows: needs SeCreateSymbolicLinkPrivilege
+        pytest.skip(f"cannot create a symlink on this host: {exc}")
+    mutate = _mutation_script(
+        tmp_path,
+        "Remove-Item -LiteralPath $Target -Force\n"
+        f"New-Item -ItemType SymbolicLink -Path $Target -Target '{victim}' | Out-Null\n",
+    )
+
+    proc = _run_two_line(tmp_path, target, mutate)
+
+    assert "AFTER_FIRST=False" in proc.stdout, f"the first write failed: {proc.stdout}{proc.stderr}"
+    assert victim.read_text(encoding="utf-8") == "victim content\n", "the link was followed"
+    assert Path(target).is_symlink(), "the planted link was unlinked instead of rejected"
+    assert "AFTER_SECOND=True" in proc.stdout, proc.stdout + proc.stderr
+    assert "STILL_ALIVE=yes" in proc.stdout
+
+
+@requires_pwsh
+def test_a_directory_swapped_in_after_the_first_write_is_rejected(tmp_path):
+    """Deterministic and privilege-free: no cache may skip the non-regular check.
+
+    The symlink test above needs a privilege CI hosts often lack. A directory
+    reproduces the same bypass with nothing but `mkdir`, so this one always runs.
+    """
+    target = tmp_path / "run.log"
+    mutate = _mutation_script(
+        tmp_path,
+        "Remove-Item -LiteralPath $Target -Force\n"
+        "New-Item -ItemType Directory -Path $Target | Out-Null\n"
+        "Set-Content -LiteralPath (Join-Path $Target 'keep.txt') -Value 'keep' -NoNewline\n",
+    )
+
+    proc = _run_two_line(tmp_path, target, mutate)
+
+    assert "AFTER_FIRST=False" in proc.stdout, f"the first write failed: {proc.stdout}{proc.stderr}"
+    assert Path(target).is_dir(), "the swapped-in directory was removed"
+    assert (Path(target) / "keep.txt").read_text(encoding="utf-8") == "keep"
+    assert "AFTER_SECOND=True" in proc.stdout, proc.stdout + proc.stderr
+    assert "STILL_ALIVE=yes" in proc.stdout
+
+
+@windows_only
+@requires_pwsh
+def test_exactly_one_warning_and_no_secret_when_the_second_write_fails(tmp_path):
+    """One sanitized line on stderr, and the sentinel is nowhere on disk either."""
+    target = tmp_path / f"run-{SECRET}.log"
+    mutate = _mutation_script(
+        tmp_path,
+        "Remove-Item -LiteralPath $Target -Force\n"
+        "New-Item -ItemType Directory -Path $Target | Out-Null\n",
+    )
+
+    proc = _run_two_line(
+        tmp_path,
+        target,
+        mutate,
+        line1=f"first --password {SECRET}",
+        line2=f"second --password {SECRET}",
+    )
+
+    warnings = [ln for ln in proc.stderr.splitlines() if "file logging disabled" in ln.lower()]
+    assert len(warnings) == 1, f"expected exactly one warning, got {warnings!r}"
+    assert SECRET not in proc.stderr, proc.stderr
+    for produced in tmp_path.rglob("*"):
+        if produced.is_file() and produced.suffix != ".ps1":
+            body = produced.read_text(encoding="utf-8", errors="ignore")
+            assert SECRET not in body, f"{produced.name}: {body!r}"
+
+
+# ---------------------------------------------------------------------------
+# 7. structural
 # ---------------------------------------------------------------------------
 
 
@@ -327,17 +541,39 @@ def test_start_transcript_stays_absent():
 
 def test_an_untrusted_entry_is_never_unlinked():
     """The forbidden shape: unlink-and-replace of a path we do not own."""
-    body = _code_of("New-SecureLogFile")
+    body = _code_of("Open-VerifiedLogStream")
     assert "Remove-Item" not in body, "an untrusted pre-existing entry is being deleted"
 
 
-def test_the_writer_cannot_append_without_securing_first():
+def test_the_writer_never_appends_by_pathname():
+    """`Add-Content` resolves the name again - that is the whole defect."""
     body = _code_of("Write-SecureLogLine")
-    assert "New-SecureLogFile" in body
-    assert body.index("New-SecureLogFile") < body.index(
-        "Add-Content"
-    ), "the append must be reachable only after securing succeeded"
+    assert "Add-Content" not in body, "the line is being appended by pathname, not by handle"
+    assert "Open-VerifiedLogStream" in body, "the write must come from the verified stream"
     assert "LauncherFileLoggingDisabled" in body, "a failure must disable logging for the run"
+
+
+def test_no_pathname_is_cached_as_an_authorization():
+    """A boolean keyed on a path authorizes an object that no longer exists."""
+    code = [ln for ln in RUN_TEXT.splitlines() if not ln.lstrip().startswith("#")]
+    assert not [ln for ln in code if "SecuredLogs" in ln], "the path-keyed cache is back"
+
+
+def test_the_stream_is_pinned_against_replacement_while_it_is_verified():
+    """FileShare.Delete would let the name be renamed away between the two."""
+    body = _code_of("Open-VerifiedLogStream")
+    assert "[System.IO.FileShare]::ReadWrite" in body, "the share mode must not permit Delete"
+    assert "FileShare]::Delete" not in body, "granting Delete unpins the name"
+    assert body.index("FileStream]::new") < body.index(
+        "Test-OwnerOnlyLogFile"
+    ), "the handle must be held before the DACL is trusted"
+
+
+def test_windows_does_not_depend_on_a_type_absent_from_powershell_5_1():
+    """FileStreamOptions is .NET Core only; on 5.1 it threw and killed logging."""
+    body = _code_of("Open-VerifiedLogStream")
+    windows_branch = body[body.index("if ($script:IsWindowsHost) {") :].split("} else {")[0]
+    assert "FileStreamOptions" not in windows_branch, "5.1 cannot construct this"
 
 
 def test_exactly_one_launcher_remains():
