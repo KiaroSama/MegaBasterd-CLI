@@ -125,21 +125,22 @@ def _section(title: str) -> None:
 
 
 def _option_line(key: str, label: str) -> None:
-    """One menu row, coloured per part rather than as one flat string.
+    """One menu row: two spaces, a coloured `N.`, the label, then the default.
 
-    The number, the label and the `[1]` default marker carry different
-    information, so they get different colours - printing the whole row in a
-    single style made the list read as a wall of text and hid which entry is
-    the default.
+    Laid out exactly like the sibling FFmWiz launcher. The key is NOT padded to
+    a fixed width - right-aligning `1.` under `10.` produced a ragged left edge
+    on the single digits, which is the opposite of what the padding was for.
+    Left-aligned keys give one straight margin and let the labels sit where the
+    numbers end.
     """
     row = Text("  ")
-    row.append(f"{key:>2}.", style="mb.menu.key")
+    row.append(f"{key}.", style="mb.menu.key")
     row.append(" ")
     row.append(label, style="mb.menu.label")
     if key == "1":
-        row.append(" [", style="mb.menu.bracket")
-        row.append("1", style="mb.menu.default")
-        row.append("]", style="mb.menu.bracket")
+        # Brackets included in the colour: `[1]` is one token meaning "press
+        # Enter for this", not punctuation wrapped around a number.
+        row.append(" [1]", style="mb.menu.default")
     console.print(row)
 
 
@@ -185,8 +186,32 @@ def _classify(answer: str, allow_back: bool, back_token: str) -> None:
 _PROMPT_PART = re.compile(r"(\[[^\]]*\]|\{[^}]*\})")
 
 
+_HINT_STYLES = (
+    ("back", "mb.prompt.back"),
+    ("exit", "mb.prompt.exit"),
+    ("folder", "mb.prompt.folder"),
+)
+
+
+def _append_hints(styled: Text, group: str) -> None:
+    """Colour each `{...}` navigation token by what it does, not by position.
+
+    `back=0` and `quit=exit` used to share one style, so the two hints that
+    behave most differently looked identical. One hue per meaning - matched to
+    FFmWiz - makes "go back" and "leave entirely" distinguishable at a glance.
+    """
+    styled.append("{", style="mb.prompt.punct")
+    for index, token in enumerate(group[1:-1].split(", ")):
+        if index:
+            styled.append(", ", style="mb.prompt.punct")
+        lowered = token.lower()
+        style = next((s for word, s in _HINT_STYLES if word in lowered), "mb.prompt.other")
+        styled.append(token, style=style)
+    styled.append("}", style="mb.prompt.punct")
+
+
 def _styled_prompt(prompt: str) -> Text:
-    """Colour a prompt's bracketed default and braced hint separately.
+    """Colour a prompt's bracketed default and braced hints separately.
 
     Done here rather than at each call site: every prompt in the launcher
     already has the shape `label [default] {hints}: `, so one pass over that
@@ -197,10 +222,10 @@ def _styled_prompt(prompt: str) -> Text:
     for part in _PROMPT_PART.split(prompt):
         if not part:
             continue
-        if part.startswith("[") or part.startswith("{"):
-            styled.append(part[0], style="mb.menu.bracket")
-            styled.append(part[1:-1], style="mb.prompt.token")
-            styled.append(part[-1], style="mb.menu.bracket")
+        if part.startswith("{"):
+            _append_hints(styled, part)
+        elif part.startswith("["):
+            styled.append(part, style="mb.menu.default")
         else:
             styled.append(part, style="mb.prompt.label")
     return styled
