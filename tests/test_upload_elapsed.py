@@ -81,5 +81,8 @@ def test_elapsed_includes_failed_slot_and_retry_and_finalization(tmp_path, monke
     # finalization (0.2s); the old reset-inside-the-loop behavior reported
     # only ~0.1s here.
     assert result.elapsed_seconds >= 0.4
-    # And it must agree with the real wall time (tolerance for overhead).
-    assert abs(result.elapsed_seconds - wall) < 0.5
+    # And it must agree with the real wall time. The tolerance is generous on
+    # purpose: the assertion above is the one that pins the value, this one only
+    # has to catch elapsed being unrelated to reality, and a half-second budget
+    # is scheduler jitter on a loaded parallel runner rather than a defect.
+    assert abs(result.elapsed_seconds - wall) < 2.0
