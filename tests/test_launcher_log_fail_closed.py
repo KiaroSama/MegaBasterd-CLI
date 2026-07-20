@@ -626,6 +626,20 @@ def _verifier_harness(tmp_path: Path, sid_override: str = "") -> Path:
             f"[System.Security.Principal.SecurityIdentifier]::new('{sid_override}') }}\n"
         )
     body += '\n"VERDICT=$(Test-OwnerOnlyLogFile $Target)"\n'
+    # Same reasoning as the two-line harness: a bare True/False cannot explain a
+    # rejection, and a rejection that only happens on a CI runner is exactly the
+    # one you cannot step through.
+    body += """
+if (Test-Path -LiteralPath $Target) {
+    $probe = Get-Acl -LiteralPath $Target
+    $sidType = [System.Security.Principal.SecurityIdentifier]
+    "OWNER=$($probe.GetOwner($sidType).Value)"
+    "ME=$((Get-CurrentUserSid).Value)"
+    "PROTECTED=$($probe.AreAccessRulesProtected)"
+    "ACES=$(($probe.GetAccessRules($true,$true,$sidType) | ForEach-Object {
+        "$($_.AccessControlType):$($_.IdentityReference.Value):$($_.FileSystemRights)" }) -join ' | ')"
+}
+"""
     script = tmp_path / f"verify-{uuid.uuid4().hex[:6]}.ps1"
     script.write_text(body, encoding="utf-8")
     return script
@@ -641,6 +655,8 @@ def _verdict(tmp_path: Path, target: Path, sid_override: str = "") -> bool:
         timeout=120,
     )
     assert "VERDICT=" in proc.stdout, proc.stdout + proc.stderr
+    global LAST_VERDICT
+    LAST_VERDICT = proc.stdout + proc.stderr
     return "VERDICT=True" in proc.stdout
 
 
@@ -691,6 +707,9 @@ def _icacls(target: Path, *args: str, own: bool = True) -> None:
 
 LOCAL_SERVICE = "S-1-5-19"  # stable, well-known, and never the current user
 
+# Whatever the last _verdict() call saw, so a rejection can say why.
+LAST_VERDICT = ""
+
 
 @windows_only
 @requires_pwsh
@@ -700,7 +719,7 @@ def test_a_file_we_own_alone_with_full_control_is_accepted(tmp_path):
     target.write_text("", encoding="utf-8")
     _icacls(target, "/grant", f"*{_my_sid()}:(F)")
 
-    assert _verdict(tmp_path, target) is True
+    assert _verdict(tmp_path, target) is True, LAST_VERDICT
 
     proc = _run_two_line(tmp_path, target)
     assert "AFTER_SECOND=False" in proc.stdout, proc.stdout + proc.stderr
