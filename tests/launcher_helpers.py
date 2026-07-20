@@ -30,8 +30,54 @@ RUN_TEXT = RUN_PS1.read_text(encoding="utf-8")
 SECURE_LOG_CS = REPO / "launcher" / "SecureLog.cs"
 SECURE_LOG_SOURCE = SECURE_LOG_CS.read_text(encoding="utf-8")
 
-pwsh = shutil.which("pwsh") or shutil.which("powershell")
+
+def _powershell_hosts() -> dict[str, str]:
+    """Every PowerShell host on this machine, by name.
+
+    Windows PowerShell 5.1 and pwsh 7 disagree about what a native command's
+    redirected stderr means under ``$ErrorActionPreference = "Stop"`` - 5.1
+    turns it into a terminating error, pwsh leaves it as data. Anything that
+    runs a child process has to be exercised on both, not on whichever one
+    ``which`` happened to find first.
+    """
+    found = {}
+    for name in ("pwsh", "powershell"):
+        path = shutil.which(name)
+        if path is not None:
+            found[name] = path
+    return found
+
+
+POWERSHELL_HOSTS = _powershell_hosts()
+# Unchanged default: pwsh when present, Windows PowerShell otherwise. Every
+# pre-existing test keeps running on exactly the host it ran on before.
+pwsh = POWERSHELL_HOSTS.get("pwsh") or POWERSHELL_HOSTS.get("powershell")
 requires_pwsh = pytest.mark.skipif(pwsh is None, reason="PowerShell is not available")
+
+# Fans one test out over every host present. Pair it with @requires_pwsh so a
+# machine with no PowerShell reports a skip instead of the test disappearing.
+every_powershell_host = pytest.mark.parametrize(
+    "ps_host",
+    list(POWERSHELL_HOSTS.values()) or [None],
+    ids=list(POWERSHELL_HOSTS) or ["no-powershell"],
+)
+
+
+def run_powershell(ps_host: str, script: Path, timeout: int = 120) -> subprocess.CompletedProcess:
+    """Run a .ps1 under one specific host.
+
+    ``-ExecutionPolicy Bypass`` is for Windows PowerShell 5.1, which refuses
+    ``-File`` under the default machine policy. pwsh accepts and ignores it.
+    """
+    return subprocess.run(
+        [ps_host, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        stdin=subprocess.DEVNULL,
+    )
+
+
 posix_only = pytest.mark.skipif(
     os.name == "nt", reason="POSIX file modes are not a Windows concept"
 )
