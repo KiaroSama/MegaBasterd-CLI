@@ -114,7 +114,6 @@ def upload_chunk(
     aes_key: bytes,
     nonce: bytes,
     state: TransferState,
-    total_chunks: int,
 ) -> None:
     """Read, encrypt, POST one chunk."""
     if up._stop_event.is_set():

@@ -250,7 +250,7 @@ def test_oversized_completion_body_is_rejected(upload_env, monkeypatch):
 
     with pytest.raises(TransferError, match="more than"):
         MegaUploader._upload_chunk.retry_with(wait=wait_none())(
-            uploader, UPLOAD_URL, source, chunk, b"\x00" * 16, b"\x00" * 8, state, 1
+            uploader, UPLOAD_URL, source, chunk, b"\x00" * 16, b"\x00" * 8, state
         )
 
 
@@ -277,7 +277,7 @@ def _count_chunk_attempts(tmp_path: Path, exc: BaseException) -> int:
     with pytest.raises(type(exc)):
         # `wait_none` keeps the assertion about ATTEMPT COUNT, not backoff time.
         MegaUploader._upload_chunk.retry_with(wait=wait_none())(
-            uploader, UPLOAD_URL, source, chunk, b"\x00" * 16, b"\x00" * 8, state, 1
+            uploader, UPLOAD_URL, source, chunk, b"\x00" * 16, b"\x00" * 8, state
         )
     return attempts
 

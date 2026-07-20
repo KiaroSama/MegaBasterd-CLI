@@ -57,6 +57,7 @@ from .errors import (
     TransferCancelled,
     TransferError,
 )
+from .progress_ticker import progress_ticker
 from .range_validation import validate_range_response
 from .state import (
     TransferState,
@@ -450,8 +451,6 @@ class MegaDownloader:
         # moment chunks land, and the rolling meter reports the CURRENT rate
         # (the old ``bytes_done / total_elapsed`` was a lifetime average that
         # also counted resumed bytes, wildly overstating speed after resume).
-        progress_stop = threading.Event()
-
         def _emit_progress() -> None:
             if on_progress is None:
                 return
@@ -466,60 +465,39 @@ class MegaDownloader:
                 )
             )
 
-        def _progress_loop() -> None:
-            while not progress_stop.wait(0.5):
+        # Spawn workers. The pool exits (joining every worker) before the
+        # ticker does, so the ticker's final emit reports 100% of the bytes.
+        with (
+            progress_ticker(_emit_progress if on_progress else None, "mega-progress"),
+            ThreadPoolExecutor(max_workers=self.max_workers) as pool,
+        ):
+            futures = []
+            for chunk in pending:
+                if self._stop_event.is_set():
+                    break
+                fut = pool.submit(
+                    self._download_chunk,
+                    chunk,
+                    aes_key,
+                    nonce,
+                    destination,
+                    state,
+                )
+                futures.append((chunk, fut))
+
+            for chunk, fut in futures:
                 try:
-                    _emit_progress()
-                except Exception:
-                    log.debug("Progress callback raised", exc_info=True)
-
-        reporter: threading.Thread | None = None
-        if on_progress:
-            reporter = threading.Thread(target=_progress_loop, name="mega-progress", daemon=True)
-            reporter.start()
-
-        # Spawn workers
-        try:
-            with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
-                futures = []
-                for chunk in pending:
-                    if self._stop_event.is_set():
-                        break
-                    fut = pool.submit(
-                        self._download_chunk,
-                        chunk,
-                        aes_key,
-                        nonce,
-                        destination,
-                        state,
-                    )
-                    futures.append((chunk, fut))
-
-                for chunk, fut in futures:
-                    try:
-                        fut.result()
-                    except Exception as e:
-                        self._stop_event.set()
-                        if self.keep_state_files_on_error:
-                            with self._lock:
-                                state_to_save = snapshot_state(state)
-                            save_state(state_to_save)
-                        else:
-                            clear_state(destination)
-                        log.error("Chunk %d failed: %s", chunk.index, e)
-                        raise TransferError(message=f"Chunk {chunk.index} failed: {e}") from e
-        finally:
-            progress_stop.set()
-            if reporter is not None:
-                reporter.join(timeout=2.0)
-
-        if on_progress:
-            # Final synchronous report so the consumer sees 100% of the bytes.
-            try:
-                _emit_progress()
-            except Exception:
-                log.debug("Final progress callback raised", exc_info=True)
-
+                    fut.result()
+                except Exception as e:
+                    self._stop_event.set()
+                    if self.keep_state_files_on_error:
+                        with self._lock:
+                            state_to_save = snapshot_state(state)
+                        save_state(state_to_save)
+                    else:
+                        clear_state(destination)
+                    log.error("Chunk %d failed: %s", chunk.index, e)
+                    raise TransferError(message=f"Chunk {chunk.index} failed: {e}") from e
         committed = snapshot_state(state)
         save_state(committed)
 

@@ -41,6 +41,7 @@ from .crypto import (
     pack_file_key,
 )
 from .errors import MegaError, TransferError
+from .progress_ticker import progress_ticker
 from .responses import _expect_field, _expect_mapping
 from .state import TransferState, clear_state, load_state, save_state, snapshot_state
 
@@ -343,8 +344,6 @@ class MegaUploader:
         # arrives in late bursts), with the rolling meter's CURRENT rate (the
         # old ``bytes_done / total_elapsed`` was a lifetime average whose
         # pre-seeded resumed bytes wildly overstated speed after resume).
-        progress_stop = threading.Event()
-
         def _emit_progress() -> None:
             if on_progress is None:
                 return
@@ -360,21 +359,7 @@ class MegaUploader:
                 )
             )
 
-        def _progress_loop() -> None:
-            while not progress_stop.wait(0.5):
-                try:
-                    _emit_progress()
-                except Exception:
-                    log.debug("Upload progress callback raised", exc_info=True)
-
-        reporter: threading.Thread | None = None
-        if on_progress:
-            reporter = threading.Thread(
-                target=_progress_loop, name="mega-upload-progress", daemon=True
-            )
-            reporter.start()
-
-        try:
+        with progress_ticker(_emit_progress if on_progress else None, "mega-upload-progress"):
             while True:
                 pending = [c for c in all_chunks if not state.is_chunk_done(c.index)]
                 self._bytes_done = sum(c.size for c in all_chunks if state.is_chunk_done(c.index))
@@ -400,7 +385,6 @@ class MegaUploader:
                                 aes_key,
                                 nonce,
                                 state,
-                                len(all_chunks),
                             )
                             futures.append((chunk, fut))
 
@@ -442,18 +426,6 @@ class MegaUploader:
                     save_state(state_to_save)
                     log.info("Upload URL expired; requested a fresh upload slot")
                     continue
-        finally:
-            progress_stop.set()
-            if reporter is not None:
-                reporter.join(timeout=2.0)
-
-        if on_progress:
-            # Final synchronous report so the consumer sees 100% of the bytes.
-            try:
-                _emit_progress()
-            except Exception:
-                log.debug("Final upload progress callback raised", exc_info=True)
-
         if self._completion_token is None:
             raise TransferError(message="Upload finished without a completion token")
 
