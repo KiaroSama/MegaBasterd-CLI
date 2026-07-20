@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..utils.helpers import ensure_within_directory, sanitize_filename
-from .crypto import b64_url_decode, decrypt_attributes, str_to_a32, unpack_file_key
+from .crypto import b64_url_decode, bytes_to_a32, decrypt_attributes, unpack_file_key
 from .download_verify import DeclaredSizeError
 from .errors import TransferError
 from .link_services import (
@@ -36,6 +36,26 @@ from .links import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def decode_link_key(key: str, expected_len: int, what: str) -> bytes:
+    """Decode a user-supplied link key, refusing a truncated one.
+
+    `bytes_to_a32` zero-pads to a word boundary - `derive_key_legacy` depends
+    on that - so a key that lost one base64 character (42 chars, 31 bytes)
+    still produced exactly 8 uint32s and passed `unpack_file_key`'s length
+    guard. The user got a DIFFERENT AES key with no error at all: it surfaced
+    later as "File MAC verification failed", or as silent garbage on disk when
+    integrity verification was off. The length has to be checked here, at the
+    parse boundary, where the expected size is actually known.
+    """
+    raw = b64_url_decode(key)
+    if len(raw) != expected_len:
+        raise ValueError(
+            f"{what} key decodes to {len(raw)} bytes, expected {expected_len}; "
+            "the link's key is truncated or corrupt"
+        )
+    return raw
 
 
 @dataclass
@@ -92,7 +112,9 @@ def resolve_download_source(
         info = dl._get_with_quota_wait(lambda: dl.api.get_public_file_info(parsed.public_id))
         if "g" not in info:
             raise TransferError(message=f"No download URL returned: {info}")
-        key_a32 = str_to_a32(require_link_key(parsed, "download"))
+        key_a32 = bytes_to_a32(
+            decode_link_key(require_link_key(parsed, "download"), 32, "File link")
+        )
         encrypted_attrs = b64_url_decode(info.get("at", "") or "")
 
     cdn_url = info["g"]
@@ -157,13 +179,13 @@ def _resolve_folder_file(dl, parsed) -> tuple[dict, list[int], bytes]:
     file in the folder listing to get its wrapped key, and request the CDN URL
     with `n=<folder_id>` as an extra parameter.
     """
-    from .crypto import a32_to_bytes, aes_key_wrap_decrypt, bytes_to_a32
+    from .crypto import aes_key_wrap_decrypt
 
     folder_id = parsed.public_id
     file_handle = parsed.subpath
     if not file_handle:
         raise ValueError("FILE_IN_FOLDER link is missing the file handle")
-    folder_key = a32_to_bytes(str_to_a32(require_link_key(parsed, "download")))
+    folder_key = decode_link_key(require_link_key(parsed, "download"), 16, "Folder link")
 
     listing = dl._get_with_quota_wait(lambda: dl.api.get_public_folder_listing(folder_id))
     file_raw = next(
@@ -219,7 +241,7 @@ def _resolve_megacrypter_direct(
         password=password,
         selector=dl._selector,
     )
-    key_a32 = str_to_a32(mc_info.key)
+    key_a32 = bytes_to_a32(decode_link_key(mc_info.key, 32, "MegaCrypter file"))
     aes_key, nonce, mac_iv_a32 = unpack_file_key(key_a32)
     filename = rename_to or sanitize_filename(
         mc_info.name or mc_parsed.crypter_token or "megacrypter"

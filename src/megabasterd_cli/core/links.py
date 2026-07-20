@@ -37,11 +37,13 @@ MegaCrypter (third-party host; resolved in link_services.py):
 from __future__ import annotations
 
 import base64
+import binascii
 import re
 from dataclasses import dataclass, field
 from enum import Enum
 from urllib.parse import urlparse
 
+from .crypto import b64_url_decode
 from .errors import MegaError
 
 
@@ -484,6 +486,20 @@ def __dir__() -> list[str]:
     return sorted({*globals(), *__all__})
 
 
+# How many bytes a link's key must decode to, by link type. A file link
+# carries the full 32-byte file key; every folder-shaped link carries the
+# 16-byte folder share key - INCLUDING `FILE_IN_FOLDER`, whose fragment is the
+# parent folder's key, the file's own key being unwrapped from the listing.
+# Types absent here (MegaCrypter, ELC, password-protected, encrypted container)
+# carry something that is not a raw MEGA key, so they are not length-checked.
+_EXPECTED_KEY_BYTES = {
+    LinkType.FILE: 32,
+    LinkType.FILE_IN_FOLDER: 16,
+    LinkType.FOLDER: 16,
+    LinkType.FOLDER_IN_FOLDER: 16,
+}
+
+
 def require_link_key(parsed, what: str) -> str:
     """Return the link's decryption key, or fail with a message that says so.
 
@@ -491,12 +507,38 @@ def require_link_key(parsed, what: str) -> str:
     its `#fragment`. Callers that need to decrypt were passing it straight to
     `str_to_a32`, which raised a `TypeError` about NoneType from deep inside
     the crypto layer instead of telling the user their link is missing a key.
+
+    The length check is here for the same reason the None check is. `str_to_a32`
+    routes through `bytes_to_a32`, which zero-pads to a word boundary because
+    `derive_key_legacy` depends on that - so a key that lost one base64
+    character still produced a full-length key array and passed every guard
+    downstream. The user got a DIFFERENT AES key with no error, surfacing much
+    later as "File MAC verification failed", or as silent garbage on disk when
+    integrity verification was off. Twelve call sites decode a link key and
+    every one of them comes through here first, so this is the one place the
+    check cannot be forgotten.
     """
     if not parsed.key:
         raise MegaError(
             message=f"{what} needs a link that includes its decryption key (the part after '#')"
         )
-    return str(parsed.key)
+    key = str(parsed.key)
+    expected = _EXPECTED_KEY_BYTES.get(parsed.type)
+    if expected is not None:
+        try:
+            raw = b64_url_decode(key)
+        except (ValueError, binascii.Error) as exc:
+            raise MegaError(
+                message=f"{what} needs a link whose key is valid base64; this one is not"
+            ) from exc
+        if len(raw) != expected:
+            raise MegaError(
+                message=(
+                    f"{what} got a link key that decodes to {len(raw)} bytes, "
+                    f"expected {expected} - the key is truncated or corrupt"
+                )
+            )
+    return key
 
 
 def normalize_link(url: str) -> str:
