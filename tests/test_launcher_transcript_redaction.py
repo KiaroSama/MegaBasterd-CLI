@@ -21,26 +21,14 @@ from pathlib import Path
 
 import pytest
 
+from tests.launcher_helpers import extract_function as _extract_function
+
 ROOT = Path(__file__).resolve().parents[1]
 RUN_PS1 = ROOT / "Run.ps1"
 RUN_TEXT = RUN_PS1.read_text(encoding="utf-8")
 
 pwsh = shutil.which("pwsh") or shutil.which("powershell")
 pytestmark = pytest.mark.skipif(pwsh is None, reason="PowerShell is not available on this host")
-
-
-def _extract_function(name: str) -> str:
-    """Pull one PowerShell function out of Run.ps1 by brace matching."""
-    start = RUN_TEXT.index(f"function {name} {{")
-    depth = 0
-    for index in range(start, len(RUN_TEXT)):
-        if RUN_TEXT[index] == "{":
-            depth += 1
-        elif RUN_TEXT[index] == "}":
-            depth -= 1
-            if depth == 0:
-                return RUN_TEXT[start : index + 1]
-    raise AssertionError(f"unbalanced braces in {name}")
 
 
 TRANSCRIPT = """Host Application: pwsh -File Run.ps1 stream L --token TOKENVALUE
