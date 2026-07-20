@@ -30,15 +30,22 @@ def atomic_write_text(path: Path, payload: str) -> None:
         tf.flush()
         os.fsync(tf.fileno())
         tmp_path = tf.name
-    for attempt in range(5):
-        try:
-            os.replace(tmp_path, path)
-            break
-        except PermissionError:
-            # Windows: transient lock by AV/another replace.
-            if attempt == 4:
-                raise
-            time.sleep(0.05 * (attempt + 1))
+    try:
+        for attempt in range(5):
+            try:
+                os.replace(tmp_path, path)
+                break
+            except PermissionError:
+                # Windows: transient lock by AV/another replace.
+                if attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+    except BaseException:
+        # A swap that never happened must not leave its temp file behind, or a
+        # directory accumulates one per failed save.
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
     # Best effort: persist the directory entry on POSIX.
     if hasattr(os, "O_DIRECTORY"):
         with contextlib.suppress(OSError):
