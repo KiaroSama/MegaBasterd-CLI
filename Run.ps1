@@ -61,6 +61,12 @@ $script:LauncherFileLoggingDisabled = $false
 # exception message embeds the full path it failed on, and that path carries
 # whatever the user put in it - an account, an email, a secret in a filename.
 $script:LogFailureReason = "secure log operation failed"
+# Set by Initialize-SecureLogType so the Add-Type cost is paid at most once.
+$script:SecureLogTypeReady = $false
+# Diagnostic only: volume serial + file index of the object the last write
+# went to. Nothing authorizes anything from it - it exists so a test can prove
+# the verified handle is the written handle.
+$script:LastLogIdentity = ""
 $script:Palette = [ordered]@{
     success = "#22FF44"
     warning = "#F59E0B"
@@ -112,19 +118,10 @@ function Get-CurrentUserSid {
 
 function Test-OwnerOnlyLogFile {
     param([string] $Path)
-    # Answers "is this provably OUR OWN owner-only regular file", not "does it
-    # look plausible".
-    #
-    # This was a blacklist: it rejected a read ACE held by one of six well-known
-    # broad SIDs and accepted everything else. A protected DACL that granted the
-    # current user FullControl and, say, LOCAL SERVICE read passed - as did a
-    # file the current user could merely read rather than own. Neither is a
-    # file whose contents only we can see.
-    #
-    # It is now a positive allowlist of exactly one principal, matching the ACL
-    # this launcher writes when it creates a log: we own it, we hold
-    # FullControl, and nobody else holds anything. Anything the check cannot
-    # resolve is a rejection, never a pass.
+    # POSIX only. Windows verification moved into SecureLogNative, which reads
+    # the owner, the DACL and the file's identity from the OPEN HANDLE - a name
+    # can be pointed at a different object between the check and the write, and
+    # a handle cannot. Nothing on the Windows path calls this any more.
     try {
         $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
         if ($item -isnot [System.IO.FileInfo]) {
@@ -133,58 +130,379 @@ function Test-OwnerOnlyLogFile {
         if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
             return $false
         }
-        if (-not $script:IsWindowsHost) {
-            return ($item.UnixFileMode -eq $script:UnixOwnerOnly)
-        }
-        $me = Get-CurrentUserSid
-        if ($null -eq $me) {
-            return $false
-        }
-        $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
-        if (-not $acl.AreAccessRulesProtected) {
-            return $false
-        }
-        # SIDs throughout, never display names: "Administrators" is localized and
-        # two different principals can render as the same string.
-        $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier])
-        if ($null -eq $owner -or $owner.Value -ne $me.Value) {
-            return $false
-        }
-        $sidType = [System.Security.Principal.SecurityIdentifier]
-        $granted = 0
-        $mine = $false
-        foreach ($rule in $acl.GetAccessRules($true, $true, $sidType)) {
-            $sid = $rule.IdentityReference
-            if ($null -eq $sid) {
-                return $false
-            }
-            $allow = ($rule.AccessControlType -eq
-                [System.Security.AccessControl.AccessControlType]::Allow)
-            if ($sid.Value -ne $me.Value) {
-                # Somebody else's Allow ACE is disqualifying. Their Deny ACE only
-                # takes access away, so it is left alone rather than treated as
-                # tampering.
-                if ($allow) {
-                    return $false
-                }
-                continue
-            }
-            if (-not $allow) {
-                # A Deny on ourselves means the effective rights are not what the
-                # Allow ACEs say. Unresolvable, so refused.
-                return $false
-            }
-            $mine = $true
-            $granted = $granted -bor [int]$rule.FileSystemRights
-        }
-        if (-not $mine) {
-            return $false
-        }
-        $full = [int][System.Security.AccessControl.FileSystemRights]::FullControl
-        return (($granted -band $full) -eq $full)
+        return ($item.UnixFileMode -eq $script:UnixOwnerOnly)
     } catch {
         return $false
     }
+}
+
+# The Windows secure-open helper, compiled on first use by
+# Initialize-SecureLogType. It is C# 5-compatible on purpose: Windows
+# PowerShell 5.1 hosts the CodeDom compiler, which rejects string
+# interpolation, expression-bodied members and `out var`. Verified to compile
+# and behave identically under WinPS 5.1 (.NET Framework) and pwsh 7.6
+# (.NET 8).
+$script:SecureLogSource = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using Microsoft.Win32.SafeHandles;
+
+namespace MegaBasterd
+{
+    // A refusal carries a short fixed reason and never a path: the caller turns
+    // any failure into one fixed console warning, and a Win32 message would
+    // otherwise smuggle the log path (which may hold an account or a secret)
+    // into stderr.
+    public class SecureLogRefusal : Exception
+    {
+        public SecureLogRefusal(string reason) : base(reason) { }
+    }
+
+    public class SecureLogOpen
+    {
+        public SafeFileHandle Handle;
+        public bool Created;
+        public uint VolumeSerial;
+        public ulong FileIndex;
+    }
+
+    public static class SecureLogNative
+    {
+        const uint GENERIC_WRITE = 0x40000000;
+        const uint READ_CONTROL = 0x00020000;
+        const uint FILE_SHARE_READ = 0x00000001;
+        const uint FILE_SHARE_WRITE = 0x00000002;
+        const uint CREATE_NEW = 1;
+        const uint OPEN_EXISTING = 3;
+        const uint FILE_ATTRIBUTE_NORMAL = 0x00000080;
+        const uint FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000;
+        const uint FILE_ATTRIBUTE_DIRECTORY = 0x00000010;
+        const uint FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400;
+        const int ERROR_FILE_EXISTS = 80;
+        const int ERROR_ALREADY_EXISTS = 183;
+        const uint FILE_TYPE_DISK = 0x0001;
+        const int SE_FILE_OBJECT = 1;
+        const uint OWNER_SECURITY_INFORMATION = 0x00000001;
+        const uint DACL_SECURITY_INFORMATION = 0x00000004;
+        const int FileAttributeTagInfoClass = 9;
+        const int FILE_ALL_ACCESS = 0x001F01FF;
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct SECURITY_ATTRIBUTES
+        {
+            public int nLength;
+            public IntPtr lpSecurityDescriptor;
+            public int bInheritHandle;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct FILE_ATTRIBUTE_TAG_INFO
+        {
+            public uint FileAttributes;
+            public uint ReparseTag;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct BY_HANDLE_FILE_INFORMATION
+        {
+            public uint dwFileAttributes;
+            public System.Runtime.InteropServices.ComTypes.FILETIME ftCreationTime;
+            public System.Runtime.InteropServices.ComTypes.FILETIME ftLastAccessTime;
+            public System.Runtime.InteropServices.ComTypes.FILETIME ftLastWriteTime;
+            public uint dwVolumeSerialNumber;
+            public uint nFileSizeHigh;
+            public uint nFileSizeLow;
+            public uint nNumberOfLinks;
+            public uint nFileIndexHigh;
+            public uint nFileIndexLow;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern SafeFileHandle CreateFileW(string lpFileName, uint dwDesiredAccess,
+            uint dwShareMode, IntPtr lpSecurityAttributes, uint dwCreationDisposition,
+            uint dwFlagsAndAttributes, IntPtr hTemplateFile);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool GetFileInformationByHandleEx(SafeFileHandle hFile, int infoClass,
+            IntPtr lpFileInformation, uint dwBufferSize);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool GetFileInformationByHandle(SafeFileHandle hFile,
+            out BY_HANDLE_FILE_INFORMATION lpFileInformation);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern uint GetFileType(SafeFileHandle hFile);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        static extern uint GetSecurityInfo(SafeFileHandle handle, int objectType,
+            uint securityInfo, out IntPtr ppsidOwner, out IntPtr ppsidGroup,
+            out IntPtr ppDacl, out IntPtr ppSacl, out IntPtr ppSecurityDescriptor);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        static extern uint GetSecurityDescriptorLength(IntPtr pSecurityDescriptor);
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            string sddl, uint revision, out IntPtr pSecurityDescriptor, out uint size);
+
+        [DllImport("kernel32.dll")]
+        static extern IntPtr LocalFree(IntPtr hMem);
+
+        static string CurrentSid()
+        {
+            WindowsIdentity me = WindowsIdentity.GetCurrent();
+            if (me == null || me.User == null)
+            {
+                throw new SecureLogRefusal("no-current-sid");
+            }
+            return me.User.Value;
+        }
+
+        // The whole point of the native create: the security descriptor is built
+        // BEFORE the file exists and handed to CreateFileW, so the object is
+        // owner-only from the first instant it is nameable. Creating with the
+        // inherited/default DACL and calling Set-Acl afterwards leaves a window
+        // in which anyone the parent directory trusts can open the log.
+        //   O:sid  owner is us
+        //   G:sid  group is us
+        //   D:P    DACL protected - inheritance blocked
+        //   (A;;FA;;;sid)  exactly one ACE: us, file-all-access
+        static string CreationSddl(string sid)
+        {
+            return "O:" + sid + "G:" + sid + "D:P(A;;FA;;;" + sid + ")";
+        }
+
+        public static SecureLogOpen Open(string path)
+        {
+            string sid = CurrentSid();
+            SafeFileHandle handle = null;
+            bool created = false;
+
+            IntPtr pSd = IntPtr.Zero;
+            IntPtr pAttrs = IntPtr.Zero;
+            try
+            {
+                uint sdSize;
+                if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                        CreationSddl(sid), 1, out pSd, out sdSize))
+                {
+                    throw new SecureLogRefusal("security-descriptor-failed");
+                }
+                SECURITY_ATTRIBUTES sa = new SECURITY_ATTRIBUTES();
+                sa.nLength = Marshal.SizeOf(typeof(SECURITY_ATTRIBUTES));
+                sa.lpSecurityDescriptor = pSd;
+                sa.bInheritHandle = 0;
+                pAttrs = Marshal.AllocHGlobal(sa.nLength);
+                Marshal.StructureToPtr(sa, pAttrs, false);
+
+                handle = CreateFileW(path, GENERIC_WRITE | READ_CONTROL,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE, pAttrs, CREATE_NEW,
+                    FILE_ATTRIBUTE_NORMAL, IntPtr.Zero);
+                if (handle.IsInvalid)
+                {
+                    int err = Marshal.GetLastWin32Error();
+                    handle.Dispose();
+                    handle = null;
+                    if (err != ERROR_FILE_EXISTS && err != ERROR_ALREADY_EXISTS)
+                    {
+                        throw new SecureLogRefusal("create-failed");
+                    }
+                }
+                else
+                {
+                    created = true;
+                }
+            }
+            finally
+            {
+                if (pAttrs != IntPtr.Zero) { Marshal.FreeHGlobal(pAttrs); }
+                if (pSd != IntPtr.Zero) { LocalFree(pSd); }
+            }
+
+            if (handle == null)
+            {
+                // Pre-existing. FILE_FLAG_OPEN_REPARSE_POINT opens the reparse
+                // point ITSELF rather than its target, so a planted symlink or
+                // junction can be rejected on its own attributes instead of
+                // silently redirecting the write. Share mode omits DELETE, so
+                // while this handle is held the name cannot be renamed away or
+                // replaced underneath the verification.
+                handle = CreateFileW(path, GENERIC_WRITE | READ_CONTROL,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, IntPtr.Zero);
+                if (handle.IsInvalid)
+                {
+                    handle.Dispose();
+                    throw new SecureLogRefusal("open-failed");
+                }
+            }
+
+            try
+            {
+                SecureLogOpen result = new SecureLogOpen();
+                result.Handle = handle;
+                result.Created = created;
+                VerifyKind(handle);
+                if (!created)
+                {
+                    // A file this call just created carries the descriptor above
+                    // by construction. Anything else has to prove itself.
+                    VerifySecurity(handle, sid);
+                }
+                Identify(handle, result);
+                return result;
+            }
+            catch
+            {
+                handle.Dispose();
+                throw;
+            }
+        }
+
+        // Every decision below is taken from the OPEN HANDLE. A path lookup can
+        // describe a different object than the one being written to; a handle
+        // cannot.
+        static void VerifyKind(SafeFileHandle handle)
+        {
+            if (GetFileType(handle) != FILE_TYPE_DISK)
+            {
+                throw new SecureLogRefusal("not-a-disk-file");
+            }
+            int size = Marshal.SizeOf(typeof(FILE_ATTRIBUTE_TAG_INFO));
+            IntPtr buf = Marshal.AllocHGlobal(size);
+            try
+            {
+                if (!GetFileInformationByHandleEx(handle, FileAttributeTagInfoClass, buf, (uint)size))
+                {
+                    throw new SecureLogRefusal("attribute-query-failed");
+                }
+                FILE_ATTRIBUTE_TAG_INFO info =
+                    (FILE_ATTRIBUTE_TAG_INFO)Marshal.PtrToStructure(buf, typeof(FILE_ATTRIBUTE_TAG_INFO));
+                if ((info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+                {
+                    throw new SecureLogRefusal("reparse-point");
+                }
+                if ((info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
+                {
+                    throw new SecureLogRefusal("directory");
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buf);
+            }
+        }
+
+        static void VerifySecurity(SafeFileHandle handle, string sid)
+        {
+            IntPtr owner, group, dacl, sacl, pSd;
+            uint rc = GetSecurityInfo(handle, SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                out owner, out group, out dacl, out sacl, out pSd);
+            if (rc != 0 || pSd == IntPtr.Zero)
+            {
+                throw new SecureLogRefusal("security-query-failed");
+            }
+            byte[] raw;
+            try
+            {
+                uint len = GetSecurityDescriptorLength(pSd);
+                raw = new byte[len];
+                Marshal.Copy(pSd, raw, 0, (int)len);
+            }
+            finally
+            {
+                LocalFree(pSd);
+            }
+
+            RawSecurityDescriptor sd = new RawSecurityDescriptor(raw, 0);
+            if (sd.Owner == null || sd.Owner.Value != sid)
+            {
+                throw new SecureLogRefusal("owner-mismatch");
+            }
+            if ((sd.ControlFlags & ControlFlags.DiscretionaryAclProtected) == 0)
+            {
+                throw new SecureLogRefusal("dacl-not-protected");
+            }
+            RawAcl acl = sd.DiscretionaryAcl;
+            if (acl == null)
+            {
+                throw new SecureLogRefusal("no-dacl");
+            }
+            int granted = 0;
+            bool sawSelf = false;
+            for (int i = 0; i < acl.Count; i++)
+            {
+                CommonAce ace = acl[i] as CommonAce;
+                if (ace == null)
+                {
+                    // Object/callback ACE forms are not interpreted here, and an
+                    // ACE we cannot read is not an ACE we can clear.
+                    throw new SecureLogRefusal("unsupported-ace");
+                }
+                bool self = ace.SecurityIdentifier.Value == sid;
+                if (ace.AceQualifier == AceQualifier.AccessAllowed)
+                {
+                    if (!self)
+                    {
+                        throw new SecureLogRefusal("foreign-allow-ace");
+                    }
+                    sawSelf = true;
+                    granted |= ace.AccessMask;
+                }
+                else if (ace.AceQualifier == AceQualifier.AccessDenied)
+                {
+                    if (self)
+                    {
+                        // Allow ACEs stop describing effective rights once a Deny
+                        // on the same principal exists.
+                        throw new SecureLogRefusal("self-deny-ace");
+                    }
+                }
+                else
+                {
+                    throw new SecureLogRefusal("unsupported-ace-qualifier");
+                }
+            }
+            if (!sawSelf)
+            {
+                throw new SecureLogRefusal("no-self-ace");
+            }
+            if ((granted & FILE_ALL_ACCESS) != FILE_ALL_ACCESS)
+            {
+                throw new SecureLogRefusal("insufficient-rights");
+            }
+        }
+
+        // Volume serial + file index is the object's identity. It is returned so
+        // a test can prove the handle that was verified is the handle that was
+        // written, without a path-keyed cache ever existing.
+        static void Identify(SafeFileHandle handle, SecureLogOpen result)
+        {
+            BY_HANDLE_FILE_INFORMATION info;
+            if (!GetFileInformationByHandle(handle, out info))
+            {
+                throw new SecureLogRefusal("identity-query-failed");
+            }
+            result.VolumeSerial = info.dwVolumeSerialNumber;
+            result.FileIndex = ((ulong)info.nFileIndexHigh << 32) | info.nFileIndexLow;
+        }
+    }
+}
+'@
+
+function Initialize-SecureLogType {
+    # Compiled once per process, and only when a Windows log line is actually
+    # about to be written - a run whose logging is already disabled never pays
+    # for it. Measured cost: ~0.6s under pwsh 7, ~0.4s under Windows PowerShell
+    # 5.1, both one-time.
+    if ($script:SecureLogTypeReady) {
+        return
+    }
+    Add-Type -TypeDefinition $script:SecureLogSource -Language CSharp
+    $script:SecureLogTypeReady = $true
 }
 
 function Open-VerifiedLogStream {
@@ -193,22 +511,42 @@ function Open-VerifiedLogStream {
     # nothing. The caller writes through THIS handle; nothing resolves the name
     # again afterwards.
     #
-    # That is the entire point. The previous shape verified a pathname, cached
-    # the verdict in a $script:SecuredLogs hashtable, and then appended with
-    # Add-Content - which resolves the name a second time. A decision about one
-    # object authorized a write to whatever happened to own that name later, so
-    # removing the file after the first line and dropping a symlink in its place
-    # redirected every subsequent line.
+    # Windows goes through the native helper because the managed API cannot
+    # express two things this needs. `FileStream` has no way to attach a
+    # security descriptor to the CREATE, so the file existed with the parent's
+    # inherited DACL for the moment between creation and `Set-Acl`; and it has
+    # no way to open a reparse point *itself*, so a planted symlink had to be
+    # spotted by a separate `Get-Item` on the name - a different lookup from the
+    # one that opened the file.
     #
-    # On Windows the handle is opened WITHOUT FileShare.Delete. For as long as
-    # it is held the name cannot be renamed, deleted or replaced, so the DACL
-    # read below genuinely describes the object this stream is bound to. The
-    # order matters: pin first, verify second.
+    # `SecureLogNative.Open` closes both: the descriptor is passed to
+    # CreateFileW at CREATE_NEW, and FILE_FLAG_OPEN_REPARSE_POINT plus
+    # handle-based attribute, owner, DACL and identity queries mean every
+    # decision is taken about the object this handle is bound to.
+    if ($script:IsWindowsHost) {
+        Initialize-SecureLogType
+        $opened = [MegaBasterd.SecureLogNative]::Open($Path)
+        try {
+            # The verified SafeFileHandle itself, not a second open by name.
+            $stream = New-Object System.IO.FileStream(
+                $opened.Handle, [System.IO.FileAccess]::Write)
+            [void]$stream.Seek(0, [System.IO.SeekOrigin]::End)
+            # Recorded so a test can prove the object that was verified is the
+            # object that was written. It is diagnostic only - nothing consults
+            # it to authorize anything, which is what kept the old path cache
+            # from coming back in a new shape.
+            $script:LastLogIdentity = "$($opened.VolumeSerial):$($opened.FileIndex)"
+            return $stream
+        } catch {
+            $opened.Handle.Dispose()
+            throw
+        }
+    }
+
+    # POSIX, unchanged: O_NOFOLLOW-equivalent classification by name, then mode
+    # 0600 at creation.
     $existing = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
     if ($null -ne $existing) {
-        # Refused before opening. Opening a reparse point hands back a handle to
-        # its target, and the target's own ACL says nothing about the
-        # redirection - so it has to be caught by name, on the link itself.
         if ($existing -isnot [System.IO.FileInfo]) {
             throw "Refusing the log path - it is not a regular file."
         }
@@ -218,57 +556,19 @@ function Open-VerifiedLogStream {
     }
     $creating = ($null -eq $existing)
     $mode = if ($creating) { [System.IO.FileMode]::CreateNew } else { [System.IO.FileMode]::Open }
+    $options = [System.IO.FileStreamOptions]::new()
+    $options.Mode = $mode
+    $options.Access = [System.IO.FileAccess]::Write
     # ReadWrite deliberately omits Delete: the CLI appends to these same logs
     # from another process and must keep working, but nobody may swap the name.
-    $share = [System.IO.FileShare]::ReadWrite
-    if ($script:IsWindowsHost) {
-        # The 4-argument constructor, not FileStreamOptions: that type does not
-        # exist in Windows PowerShell 5.1, where the old code threw TypeNotFound
-        # and silently disabled launcher logging for the whole run.
-        $stream = [System.IO.FileStream]::new($Path, $mode, [System.IO.FileAccess]::Write, $share)
-    } else {
-        $options = [System.IO.FileStreamOptions]::new()
-        $options.Mode = $mode
-        $options.Access = [System.IO.FileAccess]::Write
-        $options.Share = $share
-        if ($creating) {
-            # Mode 0600 at creation, never 0644-then-chmod: that leaves a window
-            # in which the log is world-readable. Rejected outright when set on
-            # a non-creating FileMode, hence the guard.
-            $options.UnixCreateMode = $script:UnixOwnerOnly
-        }
-        $stream = [System.IO.FileStream]::new($Path, $options)
+    $options.Share = [System.IO.FileShare]::ReadWrite
+    if ($creating) {
+        # Mode 0600 at creation, never 0644-then-chmod: that leaves a window in
+        # which the log is world-readable.
+        $options.UnixCreateMode = $script:UnixOwnerOnly
     }
+    $stream = [System.IO.FileStream]::new($Path, $options)
     try {
-        if ($script:IsWindowsHost -and $creating) {
-            # Only a file this run just created is hardened. A pre-existing one
-            # is verified and otherwise refused - repairing somebody else's DACL
-            # would mean writing into a file we cannot prove was ever ours.
-            $me = Get-CurrentUserSid
-            # THE load-bearing line. Windows decides the owner of a new file,
-            # and for a member of the Administrators group that owner can be
-            # the *group* (S-1-5-32-544) rather than the account - which is
-            # exactly what a CI runner's elevated account looks like, and what
-            # an ordinary desktop account does not. The verifier requires the
-            # owner to be us, so set it rather than hope the host agrees.
-            # Setting the owner to yourself needs only the WRITE_OWNER a
-            # creator already holds; taking it *from* somebody else would not
-            # be possible, and is not what this does.
-            $acl = New-Object System.Security.AccessControl.FileSecurity
-            $acl.SetAccessRuleProtection($true, $false)
-            $acl.SetOwner($me)
-            # Granted to the SID, not to GetCurrent().Name: the verifier
-            # compares SIDs, so granting by display name leaves one name-to-SID
-            # resolution between what is written and what is checked.
-            $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
-                $me, "FullControl", "Allow")))
-            # Built fresh rather than fetched and edited. Same result on every
-            # ACL layout tested, and there is no remove-the-inherited-rules loop
-            # whose behaviour depends on what the parent directory grants.
-            Set-Acl -LiteralPath $Path -AclObject $acl
-        }
-        # Read back rather than assume: Set-Acl can be a no-op on some
-        # filesystems, and an unverified permission is not a permission.
         if (-not (Test-OwnerOnlyLogFile $Path)) {
             throw "Refusing to write the log - it is not a verifiable owner-only file."
         }
