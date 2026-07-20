@@ -15,7 +15,6 @@ from ..queue.manager import (
     QueueCorruptionError,
     QueueItem,
     QueueLockError,
-    QueueManager,
 )
 from ..ui.prompts import print_error, print_info, print_success
 from ..utils.redaction import redact_link
@@ -153,7 +152,11 @@ def watch_cmd(
                 # Never print the `#<key>` fragment: it is the decryption key.
                 print_success(f"Queued: {redact_link(line)}")
                 if run:
-                    if _has_pending_uploads(q) and not vault_passphrase:
+                    has_pending_uploads = any(
+                        i.type == JobType.UPLOAD.value and i.status == JobStatus.PENDING.value
+                        for i in q.items
+                    )
+                    if has_pending_uploads and not vault_passphrase:
                         print_info(
                             "Queued downloads were not run because pending uploads need "
                             "--vault-passphrase."
@@ -165,10 +168,3 @@ def watch_cmd(
     except KeyboardInterrupt:
         print_info("Watch stopped.")
         return
-
-
-def _has_pending_uploads(queue: QueueManager) -> bool:
-    return any(
-        item.type == JobType.UPLOAD.value and item.status == JobStatus.PENDING.value
-        for item in queue.items
-    )

@@ -537,9 +537,6 @@ class ConfigStore:
                 os.unlink(tmp_path)
             raise
 
-    def _is_nullable(self, key: str) -> bool:
-        return key in _OPTIONAL_STR_KEYS
-
     def _coerce(self, key: str, value):
         """Turn a CLI string into the field's typed value; parse null/none."""
         if key in DEPRECATED_CONFIG_KEYS:
@@ -548,7 +545,7 @@ class ConfigStore:
             raise KeyError(f"Unknown config key: {key}")
         # Nullable fields: an explicit null/none unsets to JSON null; any other
         # string is kept verbatim (so "null-value" or a URL stays a string).
-        if self._is_nullable(key) and isinstance(value, str):
+        if key in _OPTIONAL_STR_KEYS and isinstance(value, str):
             if value.strip().lower() in _NULL_TOKENS:
                 return None
             return value
@@ -587,7 +584,7 @@ class ConfigStore:
                 raise ValueError(f"{key} is deprecated: {DEPRECATED_CONFIG_KEYS[key]}")
             if not hasattr(self._config, key):
                 raise KeyError(f"Unknown config key: {key}")
-            if not self._is_nullable(key):
+            if key not in _OPTIONAL_STR_KEYS:
                 raise ValueError(
                     f"{key} is not a nullable field; use `config reset` to restore defaults"
                 )

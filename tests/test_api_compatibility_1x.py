@@ -26,7 +26,8 @@ from pathlib import Path
 
 import pytest
 
-REPO = Path(__file__).resolve().parents[1]
+from tests.launcher_helpers import REPO
+
 SRC = REPO / "src" / "megabasterd_cli"
 
 NOTE = "Compatibility surface retained for the 1.x series."

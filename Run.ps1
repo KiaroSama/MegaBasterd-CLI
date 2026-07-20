@@ -112,13 +112,6 @@ function Disable-LauncherFileLogging {
     }
 }
 
-function Get-CurrentUserSid {
-    # A seam, not indirection for its own sake: it is what lets a test drive the
-    # owner-mismatch branch without the privilege that changing a file's owner
-    # requires.
-    return [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-}
-
 function Test-OwnerOnlyLogFile {
     param([string] $Path)
     # POSIX only. Windows verification moved into SecureLogNative, which reads

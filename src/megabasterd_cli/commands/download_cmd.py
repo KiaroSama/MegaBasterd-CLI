@@ -39,14 +39,11 @@ log = logging.getLogger(__name__)
 
 def _read_links_file(path: Path) -> list[str]:
     """Read a list of MEGA URLs from a text file (one per line, # for comments)."""
-    urls: list[str] = []
-    with open(path, encoding="utf-8") as f:
-        for raw in f:
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            urls.append(line)
-    return urls
+    return [
+        line
+        for raw in path.read_text(encoding="utf-8").splitlines()
+        if (line := raw.strip()) and not line.startswith("#")
+    ]
 
 
 @click.command("download", short_help="Download a file or folder from a MEGA link.")

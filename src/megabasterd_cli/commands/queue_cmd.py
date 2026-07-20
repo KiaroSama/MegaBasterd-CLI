@@ -47,14 +47,14 @@ _HEARTBEAT_SECONDS = 30.0
 _HEARTBEAT_GRACE_SECONDS = LEASE_SECONDS / 2
 
 
-def _queue(ctx: click.Context | None = None) -> QueueManager:
+def _queue(ctx: click.Context) -> QueueManager:
     """Build a QueueManager; on a corrupt queue, report and exit non-zero.
 
     A corrupt file is preserved and backed up by the manager; the command
     exits with a clear error rather than acting on an empty queue.
     """
     q = QueueManager(data_dir() / "queue.json")
-    if q.is_corrupt and ctx is not None:
+    if q.is_corrupt:
         print_error(q._corrupt_reason)
         ctx.exit(1)
     return q

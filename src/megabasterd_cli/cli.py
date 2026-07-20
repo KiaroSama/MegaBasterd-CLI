@@ -42,6 +42,9 @@ from .utils.logger import setup_logging
 console = make_console()
 
 
+LINK_MARKERS = ("mega.nz/", "mega.co.nz/", "mc://", "mega://")
+
+
 def _redacted_argv(argv: list[str]) -> list[str]:
     """Hide share keys, passwords, and token-like values in debug logs."""
     redacted: list[str] = []
@@ -68,7 +71,7 @@ def _redacted_argv(argv: list[str]) -> list[str]:
         if "=" in arg and arg.split("=", 1)[0] in sensitive_options:
             redacted.append(arg.split("=", 1)[0] + "=<redacted>")
             continue
-        if any(prefix in arg for prefix in ("mega.nz/", "mega.co.nz/", "mc://", "mega://")):
+        if any(prefix in arg for prefix in LINK_MARKERS):
             redacted.append("<redacted-link>")
             continue
         redacted.append(arg)

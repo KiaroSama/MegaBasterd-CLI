@@ -281,12 +281,6 @@ def upload(
                 clients[acc.email] = client
             return client
 
-    def _worker_for_email(email_or_label: str) -> MegaClient | None:
-        """An ISOLATED per-transfer client (own API/HTTP session) reusing the
-        cached account's authenticated session material."""
-        base = _base_for_email(email_or_label)
-        return _worker_client(base) if base is not None else None
-
     ledger: QuotaLedger | None = None
     fixed_email: str | None = None
     if auto_account and not account:
@@ -385,7 +379,11 @@ def upload(
             size,
             ledger=ledger,
             fixed_email=fixed_email,
-            worker_for_email=_worker_for_email,
+            # An ISOLATED per-transfer client (own API/HTTP session) reusing the
+            # cached account's authenticated session material.
+            worker_for_email=lambda e: (
+                _worker_client(base) if (base := _base_for_email(e)) is not None else None
+            ),
             refresh_quota=_refresh_quota_after_error,
             resolve_target=_resolve_target_handle,
             make_uploader=_make_uploader,

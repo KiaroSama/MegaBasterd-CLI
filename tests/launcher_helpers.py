@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import shutil
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -47,6 +48,22 @@ def artifacts(log_dir: Path) -> list[Path]:
 def mode(path: Path) -> int:
     """POSIX permission bits, via lstat so a symlink is not followed."""
     return stat.S_IMODE(path.lstat().st_mode)
+
+
+def my_sid() -> str:
+    """The current user's SID, the way the launcher's own verifier reads it."""
+    probe = subprocess.run(
+        [
+            pwsh,
+            "-NoProfile",
+            "-Command",
+            "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    return probe.stdout.strip()
 
 
 def extract_function(name: str) -> str:

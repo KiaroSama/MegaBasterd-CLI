@@ -13,6 +13,7 @@ from megabasterd_cli.core.api import MegaAPIClient
 from megabasterd_cli.core.client import MegaClient, MegaSession
 from megabasterd_cli.core.errors import QuotaError
 from megabasterd_cli.core.uploader import MegaUploader, UploadResult
+from tests.upload_helpers import files as _files
 
 GB = 1024**3
 
@@ -47,15 +48,6 @@ def cli_env(tmp_path, monkeypatch):
         MegaClient, "get_quota", lambda self: {"cstrg": 100 * GB, "mstrg": 100 * GB}
     )
     return tmp_path, logins
-
-
-def _files(tmp_path, n):
-    paths = []
-    for i in range(n):
-        p = tmp_path / f"f{i}.bin"
-        p.write_bytes(b"x" * 64)
-        paths.append(str(p))
-    return paths
 
 
 def test_auto_account_parallel_runs_concurrently(cli_env, monkeypatch):

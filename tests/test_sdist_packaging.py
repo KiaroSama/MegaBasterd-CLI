@@ -13,7 +13,6 @@ it.
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
 import tarfile
@@ -21,12 +20,9 @@ from pathlib import Path
 
 import pytest
 
-REPO = Path(__file__).resolve().parents[1]
-MANIFEST = REPO / "MANIFEST.in"
+from tests.launcher_helpers import REPO, pwsh, requires_pwsh, windows_only
 
-pwsh = shutil.which("pwsh") or shutil.which("powershell")
-requires_pwsh = pytest.mark.skipif(pwsh is None, reason="PowerShell is not available")
-windows_only = pytest.mark.skipif(os.name != "nt", reason="the launcher smoke is Windows-only")
+MANIFEST = REPO / "MANIFEST.in"
 
 # `python -m build .` writes src/megabasterd_cli.egg-info INSIDE the repo, and a
 # session-scoped fixture runs once per xdist worker - so two workers built the

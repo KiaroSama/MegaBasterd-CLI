@@ -79,10 +79,6 @@ def format_bytes(num: int) -> str:
     return f"{scaled:.2f} EB"
 
 
-def format_speed(bytes_per_sec: float) -> str:
-    return f"{format_bytes(int(bytes_per_sec))}/s"
-
-
 def format_eta(seconds: float) -> str:
     """Format a duration as H:MM:SS or M:SS."""
     if seconds < 0 or seconds == float("inf"):
