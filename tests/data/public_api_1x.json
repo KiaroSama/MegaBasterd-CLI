@@ -344,6 +344,7 @@
     "ResolvedSource.mac_iv_a32",
     "ResolvedSource.nonce",
     "ResolvedSource.url_resolver",
+    "decode_link_key",
     "resolve_download_source"
   ],
   "megabasterd_cli.core.download_transport": [

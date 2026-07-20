@@ -476,8 +476,13 @@ class _StreamingRequestHandler(BaseHTTPRequestHandler):
                 continue
             decrypted = cipher.decrypt(block)
             if block_skip:
-                decrypted = decrypted[block_skip:]
-                block_skip = 0
+                # Consume the skip incrementally. Zeroing it after one slice
+                # dropped the remainder whenever the first block was shorter
+                # than the skip, shifting the served plaintext backwards - and
+                # `sent == length` still held, so nothing raised.
+                take = min(block_skip, len(decrypted))
+                decrypted = decrypted[take:]
+                block_skip -= take
             if sent + len(decrypted) > length:
                 decrypted = decrypted[: length - sent]
             if not decrypted:
