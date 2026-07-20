@@ -34,6 +34,11 @@ RUN_PS1 = REPO / "Run.ps1"
 
 SECRET = "SENTINEL-PW-4471"
 
+# Every test here spawns the real Run.ps1, which may create and install into
+# the project .venv. That is one shared resource, so they all run on a single
+# xdist worker (--dist loadgroup) rather than racing each other over it.
+pytestmark = pytest.mark.xdist_group("launcher_subprocess")
+
 pwsh = shutil.which("pwsh") or shutil.which("powershell")
 requires_pwsh = pytest.mark.skipif(pwsh is None, reason="PowerShell is not available")
 posix_only = pytest.mark.skipif(

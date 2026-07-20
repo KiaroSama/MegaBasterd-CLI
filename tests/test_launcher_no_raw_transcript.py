@@ -26,6 +26,11 @@ import pytest
 from tests.launcher_helpers import artifacts as _artifacts
 
 REPO = Path(__file__).resolve().parents[1]
+
+# Every test here spawns the real Run.ps1, which may create and install into
+# the project .venv. That is one shared resource, so they all run on a single
+# xdist worker (--dist loadgroup) rather than racing each other over it.
+pytestmark = pytest.mark.xdist_group("launcher_subprocess")
 RUN_PS1 = REPO / "Run.ps1"
 
 SECRET = "SENTINEL-PW-8842"

@@ -120,6 +120,9 @@ def test_stop_terminates_in_flight_tunnels(serve, fake_upstream) -> None:
     assert pool is not None
     client = _open_tunnel(port)
     try:
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and not list(pool._threads):
+            time.sleep(0.02)
         workers = list(pool._threads)
         assert workers, "the tunnel should be running on a pool worker"
         started = time.monotonic()
