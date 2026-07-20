@@ -127,7 +127,7 @@ def redact_text(value: str) -> str:
     value = _AUTH_SCHEME.sub(rf"\1 {REDACTED}", value)
     value = _FREE_TEXT_SECRET.sub(_redact_free_text, value)
     value = _FREE_TEXT_CODE.sub(rf"\1 {REDACTED}", value)
-    value = _SECRET_QUERY.sub(lambda m: f"{m.group(1)}=<redacted>", value)
+    value = _SECRET_QUERY.sub(rf"\1={REDACTED}", value)
     return value
 
 
@@ -149,7 +149,7 @@ def sanitize(value, _field: str | None = None):
     if isinstance(value, str):
         if field in LINK_OUTPUT_FIELDS:
             # Keep the full public link; only strip secret query params.
-            return _SECRET_QUERY.sub(lambda m: f"{m.group(1)}=<redacted>", value)
+            return _SECRET_QUERY.sub(rf"\1={REDACTED}", value)
         return redact_text(value)
     return value
 

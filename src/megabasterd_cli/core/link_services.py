@@ -403,31 +403,19 @@ def _dlc_origin(url: str) -> tuple[str, int]:
 
 
 def _validate_dlc_target(url: str, approved_host: str, approved_port: int) -> None:
-    """Reject any DLC URL that is not same-origin HTTPS with the approved host.
+    """`validate_safe_target` plus an exact same-origin pin on the approved host.
 
-    Enforces: https only; no embedded credentials; a real host; literal IPs must
-    be globally routable (blocks loopback/private/link-local/reserved/multicast/
-    unspecified); and the normalized host+port must match the approved origin.
-    This prevents SSRF via cross-host redirects even when the redirect uses
-    HTTPS, and resists trailing-dot / IDN-lookalike bypasses.
+    The base check (https only, no embedded credentials, a real host, literal
+    IPs globally routable) is identical for all three services and lives in one
+    place. DLC additionally requires the normalized host+port to match the
+    approved origin, which prevents SSRF via a cross-host redirect even when
+    that redirect uses HTTPS, and resists trailing-dot / IDN-lookalike bypasses.
+
+    Raises `UnsafeTargetError` (a `ValueError`) for the shared checks.
     """
-    parts = urlparse(url)
-    if parts.scheme != "https":
-        raise ValueError("Refusing to contact a non-HTTPS DLC URL")
-    if parts.username or parts.password:
-        raise ValueError("Refusing DLC URL with embedded credentials")
-    raw_host = parts.hostname or ""
-    host = _normalize_host(raw_host)
-    if not host:
-        raise ValueError("Refusing DLC URL without a host")
-    try:
-        ip = ipaddress.ip_address(raw_host)
-    except ValueError:
-        ip = None
-    if ip is not None and not ip.is_global:
-        raise ValueError("Refusing DLC URL to a non-global IP address")
-    if host != approved_host or (parts.port or 443) != approved_port:
-        raise ValueError("Refusing cross-origin DLC redirect")
+    validate_safe_target(url, what="DLC URL")
+    if _dlc_origin(url) != (approved_host, approved_port):
+        raise UnsafeTargetError("Refusing cross-origin DLC redirect")
 
 
 def _dlc_post(

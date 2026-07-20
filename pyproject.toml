@@ -34,7 +34,6 @@ dependencies = [
     "pycryptodome>=3.19.0",
     "tenacity>=8.2.0",
     "cryptography>=41.0.0",
-    "colorama>=0.4.6; platform_system=='Windows'",
 ]
 
 [project.optional-dependencies]

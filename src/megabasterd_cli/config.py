@@ -6,12 +6,11 @@ import contextlib
 import json
 import logging
 import os
-import tempfile
 import threading
-import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
+from .queue.storage import atomic_write_text
 from .utils.corruption import existing_backup_for, preserve_corrupt_file
 from .utils.filelock import FileLock, FileLockError
 
@@ -215,8 +214,6 @@ def validate_config(cfg: Config) -> list[str]:
         # Type check against the default's runtime type (None-able keys skip).
         if default is not None and current is not None:
             expected = type(default)
-            if expected in (int, float) and isinstance(current, bool):
-                pass  # bool is an int; treat as wrong type below only for numerics
             if expected is float and isinstance(current, int) and not isinstance(current, bool):
                 current = float(current)
                 setattr(cfg, f.name, current)
@@ -513,34 +510,11 @@ class ConfigStore:
         # leaves the original file untouched and drops no temp file.
         payload = json.dumps(asdict(self.config), indent=2)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=self.path.parent,
-            prefix=self.path.name + ".",
-            suffix=".tmp",
-            delete=False,
-        ) as tf:
-            tf.write(payload)
-            tf.flush()
-            os.fsync(tf.fileno())
-            tmp_path = tf.name
-        try:
-            for attempt in range(5):
-                try:
-                    os.replace(tmp_path, self.path)
-                    return
-                except PermissionError:
-                    if attempt == 4:
-                        raise
-                    time.sleep(0.05 * (attempt + 1))
-        except BaseException:
-            # Includes KeyboardInterrupt. Antivirus holding config.json open on
-            # Windows makes replace fail; without this every `config set` left a
-            # config.json.*.tmp orphan behind. Cleanup must not mask the cause.
-            with contextlib.suppress(OSError):
-                os.unlink(tmp_path)
-            raise
+        # The unique temp file, fsync, bounded PermissionError retry (antivirus
+        # holding config.json open on Windows) and the temp cleanup that keeps
+        # a failed `config set` from orphaning config.json.*.tmp all live in the
+        # shared helper.
+        atomic_write_text(self.path, payload)
 
     def _coerce(self, key: str, value):
         """Turn a CLI string into the field's typed value; parse null/none."""

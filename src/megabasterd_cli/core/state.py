@@ -14,7 +14,7 @@ import os
 import tempfile
 import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -316,13 +316,10 @@ def snapshot_state(state: TransferState) -> TransferState:
     a newer commit that already landed.
     """
     state.revision += 1
-    return TransferState(
-        revision=state.revision,
-        format_version=state.format_version,
-        transfer_type=state.transfer_type,
-        source=state.source,
-        destination=state.destination,
-        total_size=state.total_size,
+    # `replace` carries every scalar field (including the just-bumped revision)
+    # verbatim; only the three mutable containers need copying.
+    return replace(
+        state,
         completed_chunks=list(state.completed_chunks),
         chunk_macs=dict(state.chunk_macs),
         metadata=dict(state.metadata),

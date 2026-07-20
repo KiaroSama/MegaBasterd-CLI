@@ -19,13 +19,14 @@ import contextlib
 import json
 import logging
 import os
-import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+
+from ..queue.storage import atomic_write_text
 
 log = logging.getLogger(__name__)
 
@@ -293,42 +294,11 @@ class AccountStorage:
             "default_email": store.default_email,
             "accounts": [asdict(a) for a in store.accounts],
         }
-        # Unique temp file per save so concurrent writers (e.g. parallel
-        # --auto-account quota refreshes) never collide on one fixed name.
-        import tempfile
-
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=self.path.parent,
-            prefix=self.path.name + ".",
-            suffix=".tmp",
-            delete=False,
-        ) as f:
-            json.dump(data, f, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-            tmp = f.name
-        try:
-            # Same bounded retry as ConfigStore.save: on Windows an antivirus
-            # or indexer holding accounts.json open makes replace fail with a
-            # transient PermissionError, and losing a vault write is worse
-            # than losing a config write.
-            for attempt in range(5):
-                try:
-                    os.replace(tmp, self.path)
-                    break
-                except PermissionError:
-                    if attempt == 4:
-                        raise
-                    time.sleep(0.05 * (attempt + 1))
-        except BaseException:
-            # Includes KeyboardInterrupt: a failed replace (file held open by
-            # antivirus, disk full) must not orphan accounts.json.*.tmp next to
-            # the vault. Suppress only the cleanup error, never the original.
-            with contextlib.suppress(OSError):
-                os.unlink(tmp)
-            raise
+        # Unique temp file, fsync, bounded PermissionError retry (Windows AV
+        # holding the vault open) and temp cleanup all live in the shared
+        # helper. Losing a vault write is worse than losing a config write, so
+        # the retry matters more here, but it is the same retry.
+        atomic_write_text(self.path, json.dumps(data, indent=2))
         # Permission hardening on POSIX
         with contextlib.suppress(OSError, AttributeError):
             os.chmod(self.path, 0o600)
