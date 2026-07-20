@@ -45,8 +45,15 @@ def sdist(tmp_path_factory) -> Path:
         text=True,
         timeout=900,
     )
-    if done.returncode != 0:
-        pytest.skip(f"python -m build is unavailable here: {done.stderr[-400:]}")
+    # Deliberately not a skip. `build` is a declared dev dependency, so it
+    # being absent or failing is a broken environment, not a reason to pass -
+    # and a skip here means the suite reports success having never built the
+    # sdist this file exists to check.
+    assert done.returncode == 0, (
+        "python -m build failed; `build` is in the dev extra and must work:\n"
+        + done.stdout[-1500:]
+        + done.stderr[-1500:]
+    )
     archives = list(out.glob("*.tar.gz"))
     assert len(archives) == 1, archives
     return archives[0]
