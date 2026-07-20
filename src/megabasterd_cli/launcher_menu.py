@@ -610,6 +610,10 @@ def generic(command: str, prompt: str) -> Action:
 class Menu:
     title: str
     entries: list[tuple[str, Action]] = field(default_factory=list)
+    # Compatibility surface retained for the 1.x series: no menu in this file
+    # sets it, but it was a public constructor keyword, so dropping it turns an
+    # outside `Menu(..., subtitle=...)` into a TypeError.
+    subtitle: str | None = None
 
 
 ACCOUNT_MENU = Menu(
