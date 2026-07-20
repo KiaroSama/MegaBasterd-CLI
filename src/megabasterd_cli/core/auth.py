@@ -214,3 +214,19 @@ class AuthOperations(NodeOperations):
         if not self.session:
             raise AuthError(message="Not logged in")
         return self.api.get_user_info()
+
+    def restore_session(self, session: MegaSession) -> bool:
+        """Restore a previously-saved session. Returns True if the SID still works.
+
+        Compatibility surface retained for the 1.x series.
+        """
+        self.api.set_session(session.sid)
+        self.session = session
+        try:
+            self.api.get_user_info()
+            return True
+        except MegaError as exc:
+            log.info("Saved session is no longer valid: %s", exc)
+            self.api.clear_session()
+            self.session = None
+            return False

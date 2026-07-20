@@ -115,8 +115,22 @@ class TokenBucket:
 def make_limiter(kbps: float) -> TokenBucket:
     """Construct a rate limiter. A rate of 0 means unlimited.
 
-    There is no separate no-op class: `consume` already returns immediately
-    while `rate <= 0`, so a second type existed only to express the same thing
-    a second way - and it forced every annotation to spell the union.
+    Always a `TokenBucket`: `consume` already returns immediately while
+    `rate <= 0`, so production never needs a second type to say the same thing,
+    and no annotation has to spell a union. `NoOpLimiter` is still exported for
+    callers outside this package, but nothing here returns one.
     """
     return TokenBucket(rate=max(0.0, kbps) * 1024)
+
+
+class NoOpLimiter:
+    """No-op limiter when rate limiting is disabled.
+
+    Compatibility surface retained for the 1.x series.
+    """
+
+    def consume(self, amount: int) -> None:
+        pass
+
+    def set_rate(self, rate: float) -> None:
+        pass

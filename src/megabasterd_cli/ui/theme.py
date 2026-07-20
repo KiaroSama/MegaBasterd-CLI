@@ -21,6 +21,9 @@ PALETTE = {
     "value": "#2DD4BF",
     "prompt": "#FB7185",
     "dim": "#64748B",
+    # Read by the restored ui.progress compatibility surface.
+    "highlight": "#E879F9",
+    "primary": "#4F8CFF",
     # Launcher menu chrome, matched to the sibling FFmWiz launcher so the two
     # read as one family. These are that tool's literal ANSI colours, not
     # approximations: xterm 117 for the option keys and headings, ANSI bright
@@ -65,6 +68,12 @@ THEME = Theme(
         "mb.prompt.exit": PALETTE["hint_exit"],
         "mb.prompt.folder": PALETTE["hint_folder"],
         "mb.prompt.other": PALETTE["hint_other"],
+        # Consumed by build_progress / ProgressReporter, kept for the 1.x
+        # compatibility surface.
+        "mb.highlight": f"bold {PALETTE['highlight']}",
+        "mb.progress": PALETTE["primary"],
+        "mb.progress.done": PALETTE["success"],
+        "mb.progress.pulse": PALETTE["highlight"],
         "mb.table.header": f"bold {PALETTE['info']}",
         "mb.table.border": PALETTE["secondary"],
     }
