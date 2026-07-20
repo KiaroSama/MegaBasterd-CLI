@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
-import os
 import re
-import tempfile
-import time
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
@@ -17,6 +13,7 @@ from rich.table import Table
 
 from ..proxy.runtime import _load_persisted_pool, _pool_path
 from ..proxy.smart_proxy import SmartProxyPool
+from ..queue.storage import atomic_write_text
 from ..ui.prompts import confirm, print_error, print_info, print_success, print_warn
 from ..ui.theme import make_console
 from ..utils.filelock import FileLock
@@ -30,14 +27,6 @@ _POOL_LOCK_TIMEOUT_SECONDS = 10.0
 # Cap on a fetched proxy list. The URL is user-supplied and may be hostile, so
 # the body is streamed and cut off instead of being read into memory whole.
 MAX_FETCH_BYTES = 4 * 1024 * 1024
-
-
-def _load_pool() -> SmartProxyPool:
-    """Load the on-disk pool. Kept for backwards-compatibility with any
-    external caller; new code should import `effective_pool` from
-    `proxy.runtime` instead, since that also merges `smart_proxy_url`.
-    """
-    return _load_persisted_pool()
 
 
 def _pool_lock() -> FileLock:
@@ -79,52 +68,12 @@ def pool_transaction():
         lock.release()
 
 
-def _save_pool(pool: SmartProxyPool) -> None:
-    """Write the pool atomically under the cross-process lock.
-
-    Kept for any caller that already holds a complete pool and just needs it
-    persisted. Prefer `pool_transaction()` for read-modify-write.
-    """
-    lock = _pool_lock()
-    lock.acquire(timeout=_POOL_LOCK_TIMEOUT_SECONDS)
-    try:
-        _write_pool_locked(pool)
-    finally:
-        lock.release()
-
-
 def _write_pool_locked(pool: SmartProxyPool) -> None:
     """Serialize + atomic replace. The caller MUST already hold the lock."""
     path = _pool_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps({"proxies": [e.url for e in pool.list()]}, indent=2)
-    with tempfile.NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        dir=path.parent,
-        prefix=path.name + ".",
-        suffix=".tmp",
-        delete=False,
-    ) as tf:
-        tf.write(payload)
-        tf.flush()
-        os.fsync(tf.fileno())
-        tmp_path = tf.name
-    try:
-        for attempt in range(5):
-            try:
-                os.replace(tmp_path, path)
-                break
-            except PermissionError:
-                # Windows: a transient lock from AV or another replace.
-                if attempt == 4:
-                    raise
-                time.sleep(0.05 * (attempt + 1))
-    except BaseException:
-        # Never leave the temp file behind when the swap did not happen.
-        with contextlib.suppress(OSError):
-            os.unlink(tmp_path)
-        raise
+    atomic_write_text(path, payload)
 
 
 @click.group("proxy", short_help="Manage the Smart Proxy pool.")
@@ -141,7 +90,7 @@ def proxy_cmd() -> None:
 @click.pass_context
 def proxy_list(ctx: click.Context, config_urls: bool) -> None:
     cfg = ctx.obj["config"]
-    pool = _load_pool()
+    pool = _load_persisted_pool()
     persisted = {e.url for e in pool.list()}
     if config_urls:
         from ..proxy.runtime import _urls_from_config

@@ -18,7 +18,7 @@ from click.testing import CliRunner
 from megabasterd_cli.commands import proxy_cmd
 from megabasterd_cli.config import Config
 from megabasterd_cli.proxy import runtime
-from megabasterd_cli.proxy.smart_proxy import SmartProxyPool
+from megabasterd_cli.proxy.runtime import _load_persisted_pool
 from megabasterd_cli.ui.theme import make_console
 from megabasterd_cli.utils.filelock import FileLock, FileLockError
 
@@ -71,7 +71,7 @@ def test_corrupt_pool_is_preserved_untouched(data_dir: Path) -> None:
     path.write_text(raw, encoding="utf-8")
 
     with pytest.raises(runtime.ProxyPoolCorruptionError):
-        proxy_cmd._load_pool()
+        _load_persisted_pool()
 
     assert path.read_text(encoding="utf-8") == raw, "the corrupt file was modified"
     backups = list(data_dir.glob("proxies.json.corrupt.*"))
@@ -100,37 +100,50 @@ def test_corrupt_pool_blocks_mutating_commands(data_dir: Path) -> None:
 # --- atomic, locked write --------------------------------------------------
 
 
-def test_save_pool_does_not_clobber_when_replace_fails(data_dir: Path, monkeypatch) -> None:
+# These drive `pool_transaction()` rather than the thin `_save_pool` wrapper
+# they used to. The wrapper had no production caller at all, so the properties
+# below were only ever proven about code nothing ran; `pool_transaction` is the
+# path every proxy command actually takes.
+
+
+def test_a_failed_replace_leaves_the_pool_and_no_temp_file(data_dir: Path, monkeypatch) -> None:
     path = data_dir / "proxies.json"
     path.write_text(json.dumps({"proxies": ["http://old:1"]}), encoding="utf-8")
 
     def _boom(src, dst):
         raise OSError("simulated replace failure")
 
-    monkeypatch.setattr(proxy_cmd.os, "replace", _boom)
-    with pytest.raises(OSError, match="simulated replace failure"):
-        proxy_cmd._save_pool(SmartProxyPool(["http://new:2"]))
+    monkeypatch.setattr(os, "replace", _boom)
+    with (
+        pytest.raises(OSError, match="simulated replace failure"),
+        proxy_cmd.pool_transaction() as pool,
+    ):
+        pool.add("http://new:2")
 
     assert json.loads(path.read_text(encoding="utf-8"))["proxies"] == ["http://old:1"]
     assert not list(data_dir.glob("*.tmp")), "a temp file was left behind"
 
 
-def test_save_pool_refuses_while_another_holder_has_the_lock(data_dir: Path, monkeypatch) -> None:
+def test_a_transaction_refuses_while_another_holder_has_the_lock(
+    data_dir: Path, monkeypatch
+) -> None:
     monkeypatch.setattr(proxy_cmd, "_POOL_LOCK_TIMEOUT_SECONDS", 0.3)
     path = data_dir / "proxies.json"
     blocker = FileLock(data_dir / "proxies.json.lock")
     blocker.acquire(timeout=5)
     try:
-        with pytest.raises(FileLockError):
-            proxy_cmd._save_pool(SmartProxyPool(["http://new:2"]))
+        with pytest.raises(FileLockError), proxy_cmd.pool_transaction() as pool:
+            pool.add("http://new:2")
         assert not path.exists(), "a half-written pool file was produced under contention"
     finally:
         blocker.release()
 
 
-def test_save_pool_round_trips(data_dir: Path) -> None:
-    proxy_cmd._save_pool(SmartProxyPool(["http://a:1", "socks5://b:2"]))
-    assert [e.url for e in proxy_cmd._load_pool().list()] == ["http://a:1", "socks5://b:2"]
+def test_a_transaction_round_trips(data_dir: Path) -> None:
+    with proxy_cmd.pool_transaction() as pool:
+        pool.add("http://a:1")
+        pool.add("socks5://b:2")
+    assert [e.url for e in _load_persisted_pool().list()] == ["http://a:1", "socks5://b:2"]
     assert not list(data_dir.glob("*.tmp"))
 
 
