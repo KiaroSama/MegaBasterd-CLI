@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.launcher_helpers import RUN_TEXT
+from tests.launcher_helpers import RUN_TEXT, SECURE_LOG_SOURCE
 
 pwsh = shutil.which("pwsh") or shutil.which("powershell")
 requires_pwsh = pytest.mark.skipif(pwsh is None, reason="PowerShell is not available")
@@ -36,9 +36,8 @@ LOCAL_SERVICE = "S-1-5-19"
 
 
 def _source() -> str:
-    start = RUN_TEXT.index("$script:SecureLogSource = @'")
-    end = RUN_TEXT.index("'@", start)
-    return RUN_TEXT[start : end + 2]
+    """The shipped C#, as the here-string these harness snippets compile."""
+    return "$script:SecureLogSource = @'\n" + SECURE_LOG_SOURCE + "\n'@"
 
 
 def _run(tmp_path: Path, body: str, *args: str) -> subprocess.CompletedProcess:

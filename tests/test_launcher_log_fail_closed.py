@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.launcher_helpers import SECURE_LOG_CS, SECURE_LOG_SOURCE
 from tests.launcher_helpers import artifacts as _artifacts
 from tests.launcher_helpers import extract_function as _extract_function
 from tests.launcher_helpers import mode as _mode
@@ -90,15 +91,14 @@ def _script_var(name: str) -> str:
 
 
 def _secure_log_source() -> str:
-    """Lift the embedded C# helper out of Run.ps1 verbatim.
+    """Point the harness at the SHIPPED C# file, the way Run.ps1 does.
 
-    The harness compiles the SHIPPED source, not a copy: the whole point of
-    these tests is that the native create/verify path is the one the launcher
-    actually runs.
+    Not an inlined copy of the bytes: `Initialize-SecureLogType` is lifted out
+    of Run.ps1 verbatim and calls `Add-Type -Path $script:SecureLogSourcePath`,
+    so handing it the real path means the harness exercises the real load path
+    too - including the failure mode where that file is missing.
     """
-    start = RUN_TEXT.index("$script:SecureLogSource = @'")
-    end = RUN_TEXT.index("'@", start)
-    return RUN_TEXT[start : end + 2]
+    return f"$script:SecureLogSourcePath = '{SECURE_LOG_CS}'"
 
 
 HARNESS_PRELUDE = """param([string] $Target, [string] $Line = 'harness line')
@@ -731,7 +731,7 @@ def test_a_native_security_refusal_does_not_disclose_the_path(tmp_path):
 
 def test_no_native_refusal_carries_a_path():
     """Every SecureLogRefusal reason is a fixed token, never a formatted path."""
-    source = _secure_log_source()
+    source = SECURE_LOG_SOURCE
     refusals = re.findall(r"new SecureLogRefusal\(([^)]*)\)", source)
     assert refusals, "the native helper raises no refusals - this check is vacuous"
     for reason in refusals:
