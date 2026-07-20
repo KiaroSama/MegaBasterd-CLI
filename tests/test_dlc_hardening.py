@@ -331,10 +331,33 @@ def test_missing_rc_rejected(monkeypatch) -> None:
         decrypt_dlc_container("B" * 100, selector=ProxySelector(force=False))
 
 
+def code_without_docstring(fn) -> str:
+    """Source of `fn` with its docstring removed.
+
+    A plain `inspect.getsource` grep is satisfied by PROSE. These functions
+    describe their own security flags in their docstrings, so asserting
+    `"allow_redirects=False" in getsource(...)` stayed green after the real
+    keyword was flipped to True - verified by mutating it. Strip the docstring
+    and the assertion is about code again.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    body = tree.body[0].body  # type: ignore[attr-defined]
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+        body.pop(0)
+    return ast.unparse(tree)
+
+
 def test_tls_verification_not_disabled() -> None:
     # The resolver must never pass verify=False. Inspect the source for safety.
-    import inspect
-
-    src = inspect.getsource(links_mod._dlc_post)
+    src = code_without_docstring(links_mod._dlc_post)
     assert "verify=False" not in src
-    assert "allow_redirects=False" in src
+    # `allow_redirects=False` moved into the shared `_post_validated` hop loop,
+    # so assert it there and assert _dlc_post still routes through it.
+    assert "_post_validated" in src
+    shared = code_without_docstring(links_mod._post_validated)
+    assert "allow_redirects=False" in shared
+    assert "verify=False" not in shared

@@ -13,6 +13,7 @@ The session ID (`sid`) and a sequence number (`sn`) are passed as query params.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import random
@@ -404,25 +405,30 @@ class MegaAPIClient:
                         ) from exc
                     continue
                 break
-            response.raise_for_status()
         except (requests.ConnectionError, requests.Timeout):
             self._blame_proxy(picked_proxy)
-            raise
-        except requests.HTTPError as exc:
-            status = getattr(getattr(exc, "response", None), "status_code", None)
-            if status in PROXY_FAULT_STATUSES:
-                self._blame_proxy(picked_proxy)
             raise
 
         # The proxy is only credited once the body is proven usable: a captive
         # portal answering 200 with HTML was otherwise rewarded on every
         # request, and SmartProxyPool.pick weights by success ratio - so the
-        # broken proxy became progressively PREFERRED.
+        # broken proxy became progressively PREFERRED. The response is streamed,
+        # so it must be closed on the rejection paths too or urllib3 never gets
+        # the connection back.
         try:
+            response.raise_for_status()
             data = _parse_body(response)
+        except requests.HTTPError as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status in PROXY_FAULT_STATUSES:
+                self._blame_proxy(picked_proxy)
+            raise
         except MegaError:
             self._blame_proxy(picked_proxy)
             raise
+        finally:
+            with contextlib.suppress(Exception):
+                response.close()
         if picked_proxy and self.proxy_pool is not None:
             self.proxy_pool.report_success(picked_proxy)
 
