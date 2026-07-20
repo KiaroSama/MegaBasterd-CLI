@@ -46,6 +46,11 @@ posix_only = pytest.mark.skipif(
 windows_only = pytest.mark.skipif(os.name != "nt", reason="ACL check is Windows-specific")
 
 OWNER_ONLY = 0o600
+
+# Every test here spawns the real Run.ps1, which may create and install into
+# the project .venv. That is one shared resource, so they all run on a single
+# xdist worker (--dist loadgroup) rather than racing each other over it.
+pytestmark = pytest.mark.xdist_group("launcher_subprocess")
 BROAD = ("Everyone", "BUILTIN\\Users", "Authenticated Users")
 
 

@@ -82,7 +82,7 @@ def test_per_client_counters_return_to_zero_so_a_client_is_never_locked_out():
     Exercises every exit path that increments the counter: a served request, a
     refused one, and a connection reaped by the header timeout.
     """
-    server = _start(max_connections=4, max_connections_per_client=1, header_timeout=0.5)
+    server = _start(max_connections=4, max_connections_per_client=1, header_timeout=3.0)
     try:
         assert _status(server) == 200  # served
         stalled = _half_open(server)  # will be reaped by the header timeout

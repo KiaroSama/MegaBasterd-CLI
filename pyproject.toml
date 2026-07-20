@@ -102,5 +102,5 @@ python_files = ["test_*.py"]
 # module-level state cannot leak between tests that land on different
 # workers - which is also why nothing had to be rewritten to enable this.
 # Override with `-n0` when stepping through a single test in a debugger.
-addopts = "-v --tb=short --strict-markers -n auto --dist load"
+addopts = "-v --tb=short --strict-markers -n auto --dist loadgroup"
 pythonpath = ["src"]
