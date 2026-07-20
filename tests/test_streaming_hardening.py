@@ -28,6 +28,12 @@ import requests
 from megabasterd_cli.streaming import server as srv
 from megabasterd_cli.streaming.server import StreamingServer
 
+# These drive the `stream` command, and `stream_cmd` resolves its port with
+# `port or cfg.streaming_port` - so `--port 0` is falsy and every one of them
+# binds the SAME configured port rather than an ephemeral one. Sequentially
+# that is fine; on two xdist workers at once it is EADDRINUSE. One worker.
+pytestmark = pytest.mark.xdist_group("streaming_cli_port")
+
 # Any single blocking client call must finish well inside this.
 HARD_TIMEOUT = 10.0
 
