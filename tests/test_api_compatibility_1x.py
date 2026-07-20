@@ -32,8 +32,14 @@ SRC = REPO / "src" / "megabasterd_cli"
 
 NOTE = "Compatibility surface retained for the 1.x series."
 
+# Module-level constants: they carry the note in a nearby comment rather than a
+# docstring, because an `int`/`str` has no docstring of its own to carry it.
+CONSTANTS = {"REDACTED_KEY", "BUF_SIZE"}
+
 # (module, attribute, owning class or None)
 RESTORED = [
+    ("megabasterd_cli.utils.helpers", "format_speed", None),
+    ("megabasterd_cli.core.hashcash", "BUF_SIZE", None),
     ("megabasterd_cli.core.links", "normalize_link", None),
     ("megabasterd_cli.core.links", "needs_password", "ParsedLink"),
     ("megabasterd_cli.core.folder_downloader", "download_file_in_folder", "MegaFolderDownloader"),
@@ -75,8 +81,8 @@ def test_the_removed_public_name_imports_again(module, attr, owner):
 
 @pytest.mark.parametrize(
     ("module", "attr", "owner"),
-    [(m, a, o) for m, a, o in RESTORED if a != "REDACTED_KEY"],
-    ids=[f"{o + '.' if o else ''}{a}" for _, a, o in RESTORED if a != "REDACTED_KEY"],
+    [(m, a, o) for m, a, o in RESTORED if a not in CONSTANTS],
+    ids=[f"{o + '.' if o else ''}{a}" for _, a, o in RESTORED if a not in CONSTANTS],
 )
 def test_every_restored_name_says_it_is_a_compatibility_surface(module, attr, owner):
     """Otherwise the next cleanup pass deletes them again for the same reason."""
@@ -146,6 +152,37 @@ def test_redacted_key_keeps_its_previous_value():
     from megabasterd_cli.utils.redaction import REDACTED_KEY
 
     assert REDACTED_KEY == "#<key>"
+
+
+def test_format_speed_still_appends_per_second_to_a_byte_count():
+    from megabasterd_cli.utils.helpers import format_bytes, format_speed
+
+    assert format_speed(0) == "0 B/s"
+    assert format_speed(1536) == f"{format_bytes(1536)}/s"
+    # It took a float and truncated it; that is part of the signature.
+    assert format_speed(1024.9) == format_speed(1024)
+
+
+def test_buf_size_still_equals_the_solver_buffer_it_described():
+    from megabasterd_cli.core import hashcash
+
+    assert hashcash.BUF_SIZE == hashcash.PREFIX_BYTES + hashcash.REPEAT * hashcash.TOKEN_BYTES
+
+
+def test_menu_still_accepts_a_subtitle_keyword():
+    """A dataclass field, so losing it is a TypeError at the call site.
+
+    It cannot ride in RESTORED: the default is None, and the import check there
+    asserts the attribute is not None.
+    """
+    import dataclasses
+
+    from megabasterd_cli.launcher_menu import Menu
+
+    fields = {f.name: f for f in dataclasses.fields(Menu)}
+    assert "subtitle" in fields, "the public constructor keyword is gone"
+    assert Menu("Title").subtitle is None
+    assert Menu("Title", subtitle="Second line").subtitle == "Second line"
 
 
 def test_progress_for_is_still_a_context_manager_yielding_a_reporter():
@@ -227,7 +264,7 @@ def _calls_in(path: Path, name: str) -> list[str]:
 
 # NoOpLimiter is deliberately absent: `make_limiter` returning one is the 1.x
 # contract, so production DOES hand it back and must keep doing so.
-@pytest.mark.parametrize("name", ["ensure_unique_path", "file_md5", "progress_for"])
+@pytest.mark.parametrize("name", ["ensure_unique_path", "file_md5", "progress_for", "format_speed"])
 def test_no_production_module_routes_through_a_shim(name):
     """Restoring compatibility must not quietly revive the old code path."""
     callers = []
