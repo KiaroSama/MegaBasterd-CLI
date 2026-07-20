@@ -21,6 +21,7 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 from .chunks import Chunk, chunk_mac
 from .crypto import ctr_offset_to_counter, make_ctr_cipher
 from .errors import NonRetryableTransferError, RetryableTransferError
+from .link_services import PayloadTooLargeError, read_bounded_bytes
 from .state import TransferState, save_state, snapshot_state
 
 UPLOAD_URL_EXPIRY_STATUS = {403, 404, 410, 509}
@@ -51,16 +52,14 @@ def _report_proxy(up, picked_proxy, *, ok: bool) -> None:
 
 def read_bounded_body(resp: requests.Response, limit: int = MAX_UPLOAD_RESPONSE_BYTES) -> bytes:
     """Read at most `limit` bytes from a streamed upload response body."""
-    body = b""
-    for block in resp.iter_content(chunk_size=limit + 1):
-        body += block
-        if len(body) > limit:
-            # Deterministic: the endpoint answered the wrong shape, and it will
-            # answer the same way next time.
-            raise NonRetryableTransferError(
-                message=f"Upload endpoint returned more than {limit} bytes instead of a token"
-            )
-    return body
+    try:
+        return read_bounded_bytes(resp, limit)
+    except PayloadTooLargeError as exc:
+        # Deterministic: the endpoint answered the wrong shape, and it will
+        # answer the same way next time.
+        raise NonRetryableTransferError(
+            message=f"Upload endpoint returned more than {limit} bytes instead of a token"
+        ) from exc
 
 
 def is_final_chunk(chunk: Chunk, total_size: int) -> bool:

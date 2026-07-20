@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 import click
 
 from ..accounts.manager import AccountManager, AccountNotFound
 from ..config import accounts_file
-from ..core.api import MegaAPIClient
 from ..core.client import MegaClient, MegaNode
 from ..core.errors import MegaError
 from ..core.links import LinkType, parse_link
@@ -22,9 +22,72 @@ from ..ui.prompts import (
 )
 from ..ui.theme import SafeTable, make_console
 from ..utils.helpers import format_bytes
+from .api_support import api_for
 
 log = logging.getLogger(__name__)
 _console = make_console()
+
+
+def login_client(
+    ctx: click.Context,
+    vault_passphrase: str | None,
+    account: str | None,
+    mfa_code: str | None = None,
+    *,
+    ask_passphrase: Callable[[str], str] | None = None,
+    raises: bool = True,
+) -> MegaClient | None:
+    """Unlock vault, resolve account, log in, return a ready MegaClient.
+
+    ``raises`` picks the failure style, the only thing that ever differed
+    between the cloud commands and `mb share`: True aborts with a
+    `click.UsageError` (exit 2), False prints the error and returns None so
+    the caller can `return` on its own (exit 0).
+
+    ``ask_passphrase`` lets a caller supply the prompt from its own module,
+    so a passphrase stub patched onto that module still applies here.
+    """
+    from ..accounts.manager import resolve_account_id
+
+    cfg = ctx.obj["config"]
+    mgr = AccountManager(accounts_file())
+    account_id = resolve_account_id(mgr, cfg.default_account, account)
+    if not account_id:
+        if raises:
+            raise click.UsageError(
+                "No account specified and no default set. Use --account or set config."
+            )
+        print_error("No account specified.")
+        return None
+
+    prompt = ask_passphrase or ask_password
+    passphrase = vault_passphrase or prompt("Vault passphrase")
+    mgr.unlock(passphrase)
+    try:
+        acc = mgr.get_account(account_id)
+        password = mgr.get_password(account_id)
+    except AccountNotFound as exc:
+        if raises:
+            raise click.UsageError(f"Account not found: {account_id}") from exc
+        print_error(f"Account not found: {account_id}")
+        return None
+
+    api = api_for(cfg)
+    client = MegaClient(api=api)
+    try:
+        client.login(acc.email, password, mfa_code=mfa_code, mfa_prompt=ask_mfa_code)
+    except MegaError as exc:
+        # The caller only gets a client it can close if login succeeded, so
+        # a failure here has to release the session it just opened.
+        api.close()
+        if raises:
+            raise
+        print_error(f"Login failed: {exc}")
+        return None
+    except BaseException:
+        api.close()
+        raise
+    return client
 
 
 def _client(
@@ -33,41 +96,9 @@ def _client(
     account: str | None,
     mfa_code: str | None = None,
 ) -> MegaClient:
-    """Helper: unlock vault, resolve account, log in, return a ready MegaClient."""
-    from ..accounts.manager import resolve_account_id
-
-    cfg = ctx.obj["config"]
-    mgr = AccountManager(accounts_file())
-    account_id = resolve_account_id(mgr, cfg.default_account, account)
-    if not account_id:
-        raise click.UsageError(
-            "No account specified and no default set. Use --account or set config."
-        )
-
-    passphrase = vault_passphrase or ask_password("Vault passphrase")
-    mgr.unlock(passphrase)
-    try:
-        acc = mgr.get_account(account_id)
-        password = mgr.get_password(account_id)
-    except AccountNotFound as exc:
-        raise click.UsageError(f"Account not found: {account_id}") from exc
-
-    from ..proxy.runtime import effective_pool
-
-    proxy_pool = effective_pool(cfg)
-    api = MegaAPIClient(
-        timeout=cfg.timeout_seconds,
-        proxy_pool=proxy_pool,
-        force_proxy=cfg.force_smart_proxy,
-    )
-    client = MegaClient(api=api)
-    try:
-        client.login(acc.email, password, mfa_code=mfa_code, mfa_prompt=ask_mfa_code)
-    except BaseException:
-        # The caller only gets a client it can close if login succeeded, so
-        # a failure here has to release the session it just opened.
-        api.close()
-        raise
+    """`login_client` in its raising form, which never returns None."""
+    client = login_client(ctx, vault_passphrase, account, mfa_code, ask_passphrase=ask_password)
+    assert client is not None
     return client
 
 

@@ -156,21 +156,15 @@ def _native_solver_commands() -> list[list[str]]:
     if platform.system() != "Windows":
         return commands
 
-    roots = []
+    # Only the source checkout can hold a built solver: `tools/build_hashcash_windows.ps1`
+    # writes to `Bin/hashcash-solver-win64.exe`, and the wheel's package-data ships
+    # `native/windows/*.c` only - never a compiled `.exe` - so an installed package has
+    # nothing to find.
     source_root = _project_root()
     if source_root is not None:
-        roots.append(source_root)
-
-    for root in roots:
-        exe = root / "Bin" / "hashcash-solver-win64.exe"
+        exe = source_root / "Bin" / "hashcash-solver-win64.exe"
         if exe.is_file():
             commands.append([str(exe)])
-
-    packaged_exe = (
-        Path(__file__).resolve().parents[1] / "native" / "windows" / "hashcash_solver.exe"
-    )
-    if packaged_exe.is_file():
-        commands.append([str(packaged_exe)])
 
     powershell = shutil.which("pwsh.exe") or shutil.which("powershell.exe")
     if powershell and source_root is not None:

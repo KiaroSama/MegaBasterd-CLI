@@ -24,6 +24,7 @@ from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait
 
 from ..proxy.selector import ProxySelector
 from .errors import MegaError, RateLimitError, raise_for_code
+from .link_services import PayloadTooLargeError, read_bounded_text
 from .responses import _expect_mapping
 
 # --- Retry policy -----------------------------------------------------------
@@ -111,7 +112,6 @@ DEFAULT_APP_KEY = "BdARkQSQ"
 # stays well under this. Anything bigger is a proxy error page, a redirect
 # chain or a hostile body, and must not be handed to the JSON parser.
 MAX_RESPONSE_BYTES = 64 * 1024 * 1024
-RESPONSE_CHUNK_BYTES = 64 * 1024
 
 # Total wall-clock one request may spend on hashcash, ACROSS all 402 retries.
 # hashcash.DEFAULT_TIMEOUT_S is the per-solve cap for direct callers; this is
@@ -163,17 +163,14 @@ def _read_bounded(response) -> str:
     `Content-Encoding: gzip`, so a bomb is fully materialised before the cap is
     consulted. `iter_content` yields the DECODED bytes, so the cap applies to
     what actually lands in memory and an oversized body is dropped mid-read.
+
+    The cap is read from the module global on every call, so tests (and any
+    future runtime override) can lower it by patching `MAX_RESPONSE_BYTES`.
     """
-    total = 0
-    parts: list[bytes] = []
-    for block in response.iter_content(chunk_size=RESPONSE_CHUNK_BYTES):
-        total += len(block)
-        if total > MAX_RESPONSE_BYTES:
-            response.close()
-            raise MegaError(message="MEGA API response too large; refusing to parse it")
-        parts.append(block)
-    encoding = getattr(response, "encoding", None) or "utf-8"
-    return b"".join(parts).decode(encoding, errors="replace")
+    try:
+        return read_bounded_text(response, MAX_RESPONSE_BYTES)
+    except PayloadTooLargeError as exc:
+        raise MegaError(message="MEGA API response too large; refusing to parse it") from exc
 
 
 def default_user_agent() -> str:

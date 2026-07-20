@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import click
 
-from ..core.api import MegaAPIClient
 from ..core.link_services import resolve_elc_links
 from ..core.links import LinkType, parse_link
 from ..proxy.selector import ProxySelector
 from ..streaming.server import StreamingServer
 from ..ui.prompts import print_error, print_info
+from .api_support import api_for
 
 
 def _dialable_url(bound_host: str, port: int) -> str:
@@ -122,12 +122,9 @@ def stream(
             "into logs and history. Prefer the Authorization: Bearer header."
         )
 
-    api = MegaAPIClient(
-        timeout=cfg.timeout_seconds,
-        proxies=proxies,
-        proxy_pool=selector.pool,
-        force_proxy=cfg.force_smart_proxy,
-    )
+    # `selector.pool`, not the config default: an explicit --proxy is meant to
+    # suppress the rotating pool entirely.
+    api = api_for(cfg, proxies=proxies, proxy_pool=selector.pool)
     server = StreamingServer(
         api=api,
         host=host,

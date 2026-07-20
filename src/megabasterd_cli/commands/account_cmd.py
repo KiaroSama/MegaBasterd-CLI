@@ -5,11 +5,9 @@ from __future__ import annotations
 import click
 
 from ..accounts.manager import AccountManager, AccountNotFound
-from ..config import Config, accounts_file
-from ..core.api import MegaAPIClient
+from ..config import accounts_file
 from ..core.client import MegaClient
 from ..core.errors import MegaError
-from ..proxy.runtime import effective_pool
 from ..ui.prompts import (
     ask_mfa_code,
     ask_password,
@@ -20,15 +18,7 @@ from ..ui.prompts import (
 )
 from ..ui.tables import render_accounts
 from ..utils.redaction import redact_text
-
-
-def _api_for(cfg: Config) -> MegaAPIClient:
-    """Build a MegaAPIClient that honours the user's smart-proxy settings."""
-    return MegaAPIClient(
-        timeout=cfg.timeout_seconds,
-        proxy_pool=effective_pool(cfg),
-        force_proxy=cfg.force_smart_proxy,
-    )
+from .api_support import api_for
 
 
 @click.group("account", short_help="Manage MEGA accounts.")
@@ -76,7 +66,7 @@ def account_add(
 
     if verify:
         print_info("Verifying credentials...")
-        client = MegaClient(api=_api_for(cfg))
+        client = MegaClient(api=api_for(cfg))
         try:
             client.login(email, password, mfa_code=mfa_code, mfa_prompt=ask_mfa_code)
         except MegaError as e:
@@ -145,7 +135,7 @@ def account_info(
         print_error(f"Account not found: {email}")
         return
 
-    client = MegaClient(api=_api_for(cfg))
+    client = MegaClient(api=api_for(cfg))
     try:
         client.login(acc.email, password, mfa_code=mfa_code, mfa_prompt=ask_mfa_code)
         quota = client.get_quota()
@@ -183,7 +173,7 @@ def account_refresh_all(
             print_error(f"{acc.email}: vault decrypt failed ({exc})")
             continue
 
-        client = MegaClient(api=_api_for(cfg))
+        client = MegaClient(api=api_for(cfg))
         try:
             client.login(acc.email, password, mfa_code=mfa_code, mfa_prompt=ask_mfa_code)
             quota = client.get_quota()

@@ -27,6 +27,7 @@ from ..utils.selection import (
     compose_file_filters,
 )
 from ..utils.speed import make_limiter
+from .api_support import api_for
 from .download_support import (
     _download_file,
     _download_folder,
@@ -239,13 +240,7 @@ def download(
         and SID; independent parallel transfers must never share one. The
         proxy pool below IS shared — it is explicitly thread-safe.
         """
-        return MegaAPIClient(
-            timeout=cfg.timeout_seconds,
-            proxies=proxies,
-            proxy_pool=proxy_pool,
-            force_proxy=cfg.force_smart_proxy,
-            user_agent=cfg.user_agent,
-        )
+        return api_for(cfg, proxies=proxies, proxy_pool=proxy_pool, user_agent=cfg.user_agent)
 
     # ONE limiter per command: `speed_limit_kbps` (or --limit) is an aggregate
     # cap shared by every parallel transfer, not a per-file value.

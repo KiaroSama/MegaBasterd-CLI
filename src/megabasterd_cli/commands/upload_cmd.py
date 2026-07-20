@@ -29,6 +29,7 @@ from ..ui.transfer_progress import TransferProgress
 from ..upload_support import QuotaLedger, finalize_upload_success
 from ..utils.redaction import redact_text
 from ..utils.speed import make_limiter
+from .api_support import api_for
 
 log = logging.getLogger(__name__)
 
@@ -197,12 +198,7 @@ def upload(
     shared_limiter = make_limiter(speed_limit_kbps)
 
     def _new_api() -> MegaAPIClient:
-        return MegaAPIClient(
-            timeout=cfg.timeout_seconds,
-            proxy_pool=proxy_pool,
-            force_proxy=cfg.force_smart_proxy,
-            user_agent=cfg.user_agent,
-        )
+        return api_for(cfg, proxy_pool=proxy_pool, user_agent=cfg.user_agent)
 
     def _login_client(email: str, password: str) -> MegaClient | None:
         api = _new_api()
