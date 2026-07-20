@@ -4,12 +4,9 @@ from __future__ import annotations
 
 import click
 
-from ..accounts.manager import AccountManager, AccountNotFound
-from ..config import accounts_file
-from ..core.api import MegaAPIClient
-from ..core.client import MegaClient
 from ..core.errors import MegaError
-from ..ui.prompts import ask_mfa_code, ask_password, print_error, print_success
+from ..ui.prompts import ask_password, print_error, print_success
+from .cloud_cmd import login_client
 
 
 @click.command("share", short_help="Create a public MEGA link for one of your nodes.")
@@ -38,39 +35,18 @@ def share_cmd(
     mfa_code: str | None,
 ) -> None:
     """Make TARGET (handle or path) publicly accessible by URL."""
-    from ..accounts.manager import resolve_account_id
-
-    cfg = ctx.obj["config"]
-    mgr = AccountManager(accounts_file())
-    account_id = resolve_account_id(mgr, cfg.default_account, account)
-    if not account_id:
-        print_error("No account specified.")
-        return
-
-    passphrase = vault_passphrase or ask_password("Vault passphrase")
-    mgr.unlock(passphrase)
-    try:
-        acc = mgr.get_account(account_id)
-        pwd = mgr.get_password(account_id)
-    except AccountNotFound:
-        print_error(f"Account not found: {account_id}")
-        return
-
-    from ..proxy.runtime import effective_pool
-
-    proxy_pool = effective_pool(cfg)
-    api = MegaAPIClient(
-        timeout=cfg.timeout_seconds,
-        proxy_pool=proxy_pool,
-        force_proxy=cfg.force_smart_proxy,
+    # `raises=False`: share reports failures and exits 0, where the cloud
+    # commands abort with a UsageError. The helper releases the session on
+    # every failing path, since the `finally` below is never reached.
+    client = login_client(
+        ctx,
+        vault_passphrase,
+        account,
+        mfa_code,
+        ask_passphrase=ask_password,
+        raises=False,
     )
-    client = MegaClient(api=api)
-    try:
-        client.login(acc.email, pwd, mfa_code=mfa_code, mfa_prompt=ask_mfa_code)
-    except MegaError as exc:
-        print_error(f"Login failed: {exc}")
-        # This return skips the finally below, so release the session here.
-        api.close()
+    if client is None:
         return
 
     try:

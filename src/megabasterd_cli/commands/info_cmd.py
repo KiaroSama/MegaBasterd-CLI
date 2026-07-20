@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import click
 
-from ..core.api import MegaAPIClient
 from ..core.crypto import (
     a32_to_bytes,
     aes_key_wrap_decrypt,
@@ -21,8 +22,29 @@ from ..proxy.selector import ProxySelector
 from ..ui.prompts import print_error
 from ..ui.theme import SafeTable, make_console
 from ..utils.helpers import format_bytes
+from .api_support import api_for
 
 _console = make_console()
+
+
+def _subtree(raw_nodes: list[Any], root: str) -> list[Any]:
+    """The nodes under `root` (root included), by parent -> children walk.
+
+    A folder share lists the whole tree flat, so narrowing to one subfolder
+    means following the `p` (parent) links down from its handle.
+    """
+    children: dict[str, list[str]] = {}
+    for n in raw_nodes:
+        children.setdefault(n.get("p", ""), []).append(n.get("h", ""))
+    keep = {root}
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        for child in children.get(current, []):
+            if child and child not in keep:
+                keep.add(child)
+                stack.append(child)
+    return [n for n in raw_nodes if n.get("h") in keep]
 
 
 @click.command("info", short_help="Show public MEGA link metadata; no account or MFA needed.")
@@ -125,11 +147,7 @@ def info_cmd(
             _console.print(table)
             return
 
-    api = MegaAPIClient(
-        timeout=cfg.timeout_seconds,
-        proxy_pool=ProxySelector.from_config(cfg).pool,
-        force_proxy=cfg.force_smart_proxy,
-    )
+    api = api_for(cfg)
     table = SafeTable(show_header=False, title="Link info", border_style="mb.table.border")
     table.add_column("Field", style="mb.info")
     table.add_column("Value", style="mb.value")
@@ -139,19 +157,10 @@ def info_cmd(
             listing = api.get_public_folder_listing(parsed.public_id)
             raw_nodes = listing.get("f", [])
             if parsed.type == LinkType.FOLDER_IN_FOLDER and parsed.subpath:
-                children: dict[str, list[str]] = {}
+                # Built before the narrowing below: it answers whether the
+                # subfolder exists in the *whole* share.
                 by_handle = {n.get("h"): n for n in raw_nodes}
-                for n in raw_nodes:
-                    children.setdefault(n.get("p", ""), []).append(n.get("h", ""))
-                keep = {parsed.subpath}
-                stack = [parsed.subpath]
-                while stack:
-                    current = stack.pop()
-                    for child in children.get(current, []):
-                        if child and child not in keep:
-                            keep.add(child)
-                            stack.append(child)
-                raw_nodes = [n for n in raw_nodes if n.get("h") in keep]
+                raw_nodes = _subtree(raw_nodes, parsed.subpath)
                 if parsed.subpath not in by_handle:
                     print_error(
                         f"Subfolder {parsed.subpath!r} not found in folder {parsed.public_id!r}"
@@ -189,18 +198,7 @@ def info_cmd(
                 # Reached only via `folder_raw`, which was found BY this
                 # handle, so it cannot be None here.
                 assert file_handle is not None
-                subtree_children: dict[str, list[str]] = {}
-                for n in raw_nodes:
-                    subtree_children.setdefault(n.get("p", ""), []).append(n.get("h", ""))
-                keep = {file_handle}
-                stack = [file_handle]
-                while stack:
-                    current = stack.pop()
-                    for child in subtree_children.get(current, []):
-                        if child and child not in keep:
-                            keep.add(child)
-                            stack.append(child)
-                subtree = [n for n in raw_nodes if n.get("h") in keep]
+                subtree = _subtree(raw_nodes, file_handle)
                 table.add_row("Type", "Folder (inside folder share)")
                 table.add_row("Folder ID", folder_id)
                 table.add_row("Subfolder handle", file_handle or "?")

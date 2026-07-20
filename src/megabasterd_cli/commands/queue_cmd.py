@@ -213,7 +213,6 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
 
     from ..accounts.manager import AccountManager, AccountNotFound, resolve_account_id
     from ..config import accounts_file
-    from ..core.api import MegaAPIClient
     from ..core.client import MegaClient
     from ..core.downloader import MegaDownloader
     from ..core.errors import MegaError
@@ -223,6 +222,7 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
     from ..upload_support import finalize_upload_success
     from ..utils.redaction import redact_text
     from ..utils.speed import make_limiter
+    from .api_support import api_for
 
     cfg = ctx.obj["config"]
     quiet = bool(ctx.obj.get("quiet"))
@@ -240,12 +240,7 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
 
     proxy_pool = effective_pool(cfg)
 
-    api = MegaAPIClient(
-        timeout=cfg.timeout_seconds,
-        proxy_pool=proxy_pool,
-        force_proxy=cfg.force_smart_proxy,
-        user_agent=cfg.user_agent,
-    )
+    api = api_for(cfg, proxy_pool=proxy_pool, user_agent=cfg.user_agent)
     # Aggregate command-wide caps shared with every queue transfer.
     download_limiter = make_limiter(cfg.speed_limit_kbps)
     upload_limiter = make_limiter(cfg.upload_speed_limit_kbps)
@@ -294,12 +289,7 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
         except AccountNotFound:
             print_error(f"Account not found: {account_id}")
             return None
-        upload_api = MegaAPIClient(
-            timeout=cfg.timeout_seconds,
-            proxy_pool=proxy_pool,
-            force_proxy=cfg.force_smart_proxy,
-            user_agent=cfg.user_agent,
-        )
+        upload_api = api_for(cfg, proxy_pool=proxy_pool, user_agent=cfg.user_agent)
         upload_client = MegaClient(api=upload_api)
         try:
             upload_client.login(
