@@ -152,3 +152,6 @@ def sanitize(value, _field: str | None = None):
             return _SECRET_QUERY.sub(lambda m: f"{m.group(1)}=<redacted>", value)
         return redact_text(value)
     return value
+
+
+REDACTED_KEY = "#<key>"

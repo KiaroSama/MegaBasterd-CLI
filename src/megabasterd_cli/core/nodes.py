@@ -211,3 +211,10 @@ class NodeOperations:
             return [n for n in nodes if n.name and rx.search(n.name)]
         needle = pattern.lower()
         return [n for n in nodes if n.name and needle in n.name.lower()]
+
+    def find_inbox(self) -> str | None:
+        """Compatibility surface retained for the 1.x series."""
+        for node in self.list_files():
+            if node.is_inbox:
+                return node.handle
+        return None

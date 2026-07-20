@@ -57,3 +57,10 @@ def print_warn(msg: str | Text) -> None:
 
 def print_info(msg: str | Text) -> None:
     _console.print(_line("[mb.info]i[/mb.info]   ", msg))
+
+
+def print_panel(text: str | Text, title: str = "", style: str = "cyan") -> None:
+    """Compatibility surface retained for the 1.x series."""
+    from rich.panel import Panel
+
+    _console.print(Panel(literal(text), title=title, border_style=style))

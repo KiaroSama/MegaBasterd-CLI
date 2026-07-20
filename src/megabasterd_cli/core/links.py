@@ -75,6 +75,10 @@ class ParsedLink:
     def is_folder(self) -> bool:
         return self.type in (LinkType.FOLDER, LinkType.FOLDER_IN_FOLDER)
 
+    def needs_password(self) -> bool:
+        """Compatibility surface retained for the 1.x series."""
+        return self.type == LinkType.PASSWORD_PROTECTED
+
 
 @dataclass
 class ElcPayload:
@@ -453,6 +457,7 @@ __all__ = [
     "MegaCrypterInfo",
     "ParsedLink",
     "is_mega_url",
+    "normalize_link",
     "parse_link",
     "resolve_encrypted_container_link",
     "resolve_password_link",
@@ -485,3 +490,22 @@ def require_link_key(parsed, what: str) -> str:
             message=f"{what} needs a link that includes its decryption key (the part after '#')"
         )
     return str(parsed.key)
+
+
+def normalize_link(url: str) -> str:
+    """Return the link in modern format if possible.
+
+    Compatibility surface retained for the 1.x series.
+    """
+    p = parse_link(url)
+    if p.type == LinkType.FILE:
+        base = f"https://mega.nz/file/{p.public_id}"
+        return f"{base}#{p.key}" if p.key else base
+    if p.type == LinkType.FOLDER:
+        base = f"https://mega.nz/folder/{p.public_id}"
+        return f"{base}#{p.key}" if p.key else base
+    if p.type == LinkType.FILE_IN_FOLDER:
+        return f"https://mega.nz/folder/{p.public_id}#{p.key}/file/{p.subpath}"
+    if p.type == LinkType.FOLDER_IN_FOLDER:
+        return f"https://mega.nz/folder/{p.public_id}#{p.key}/folder/{p.subpath}"
+    return url

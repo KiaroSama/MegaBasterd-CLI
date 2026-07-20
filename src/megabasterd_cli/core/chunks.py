@@ -145,3 +145,18 @@ def condense_mac(file_mac: bytes) -> list[int]:
 
     mac_a32 = bytes_to_a32(file_mac)
     return [mac_a32[0] ^ mac_a32[1], mac_a32[2] ^ mac_a32[3]]
+
+
+def chunks_for_range(file_size: int, start: int, end: int) -> list[Chunk]:
+    """Return all chunks that overlap the byte range [start, end).
+
+    Compatibility surface retained for the 1.x series.
+    """
+    out = []
+    for ch in iter_chunks(file_size):
+        if ch.end <= start:
+            continue
+        if ch.offset >= end:
+            break
+        out.append(ch)
+    return out

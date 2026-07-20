@@ -544,3 +544,35 @@ class MegaFolderDownloader:
             on_progress=on_progress,
             url_resolver=_resolver,
         )
+
+    def download_file_in_folder(
+        self,
+        url: str,
+        output_dir: Path,
+        on_progress: Callable[[DownloadProgress], None] | None = None,
+    ) -> DownloadResult:
+        """Download one file from a public folder while preserving its path.
+
+        Compatibility surface retained for the 1.x series.
+        """
+        parsed = parse_link(url)
+        if parsed.type != LinkType.FILE_IN_FOLDER or not parsed.subpath:
+            raise ValueError(f"Link is not a file inside a folder share: {parsed.type}")
+
+        folder_key = a32_to_bytes(str_to_a32(require_link_key(parsed, "folder download")))
+        listing = self.api.get_public_folder_listing(parsed.public_id)
+        nodes = self._decrypt_folder_nodes(listing.get("f", []), folder_key)
+        if not nodes:
+            raise TransferError(message="No nodes returned for folder share")
+
+        target = next(
+            (n for n in nodes if n.handle == parsed.subpath and n.is_file),
+            None,
+        )
+        if target is None:
+            raise TransferError(message=f"File {parsed.subpath!r} not found in folder share")
+
+        root_handle = self._find_folder_root(nodes)
+        destination = self._local_path_for_node(nodes, output_dir, root_handle, target)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        return self._download_owned_file(parsed.public_id, target, destination, on_progress)
