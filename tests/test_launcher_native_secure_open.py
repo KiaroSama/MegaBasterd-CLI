@@ -19,6 +19,7 @@ the C# lifted verbatim out of Run.ps1, so what runs here is the shipped source.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import uuid
@@ -279,3 +280,94 @@ def test_only_the_first_creator_creates_and_the_second_verifies(tmp_path):
     assert not list(tmp_path.glob("*.tmp")), "a temp artifact was left behind"
     rendered = _acl_of(target)
     assert "PROTECTED=True" in rendered and f"OWNER={_my_sid()}" in rendered, rendered
+
+
+# ---------------------------------------------------------------------------
+# a created file is verified too
+# ---------------------------------------------------------------------------
+
+
+def test_verification_runs_for_created_and_pre_existing_alike():
+    """A successful CREATE_NEW says the call was accepted, not that it took.
+
+    The descriptor is handed to CreateFileW, but a volume without ACL support
+    drops it silently - so the read-back has to happen on both paths, not only
+    when the file was already there.
+    """
+    source = _source()
+    body = source[source.index("public static SecureLogOpen Open(") :]
+    body = body[: body.index("static void VerifyKind")]
+    code = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("//"))
+    assert "VerifySecurity(handle, sid);" in code, "the read-back is gone"
+    guarded = re.search(r"if\s*\(\s*!created\s*\)\s*\{[^}]*VerifySecurity", code, re.S)
+    assert not guarded, "VerifySecurity is skipped for newly created files again"
+
+
+CREATE_THEN_REFUSE = """
+[MegaBasterd.SecureLogNative]::CreationSddlOverride = $B
+try {
+    $r = [MegaBasterd.SecureLogNative]::Open($A)
+    $r.Handle.Dispose()
+    "RESULT=opened"
+} catch {
+    "RESULT=refused"
+    "REASON=$($_.Exception.Message)"
+}
+"EXISTS=$(Test-Path -LiteralPath $A)"
+"SIZE=$(if (Test-Path -LiteralPath $A) { (Get-Item -LiteralPath $A).Length } else { -1 })"
+"""
+
+
+@windows_only
+@requires_pwsh
+def test_a_created_file_whose_descriptor_did_not_take_is_refused(tmp_path):
+    """Deterministic stand-in for "the volume ignored the descriptor".
+
+    The override makes CreateFileW apply a descriptor that also grants a second
+    principal - which it accepts happily - so the only thing that can reject the
+    file is the post-create read-back this test exists to prove runs.
+    """
+    target = tmp_path / "created.log"
+    me = _my_sid()
+    bad = f"O:{me}G:{me}D:P(A;;FA;;;{me})(A;;FR;;;{LOCAL_SERVICE})"
+
+    out = _run(tmp_path, CREATE_THEN_REFUSE, str(target), bad).stdout
+
+    assert "RESULT=refused" in out, out
+    assert "foreign-allow-ace" in out, out
+    # It was created - that is the point - but not one byte was written to it.
+    assert "EXISTS=True" in out, out
+    assert "SIZE=0" in out, out
+
+
+@windows_only
+@requires_pwsh
+def test_the_launcher_survives_a_created_file_that_fails_verification(tmp_path):
+    """Zero bytes, one fixed warning, console still alive."""
+    target = tmp_path / "run.log"
+    me = _my_sid()
+    bad = f"O:{me}G:{me}D:P(A;;FA;;;{me})(A;;FR;;;{LOCAL_SERVICE})"
+    body = (
+        f"[MegaBasterd.SecureLogNative]::CreationSddlOverride = '{bad}'\n"
+        "$script:LauncherFileLoggingDisabled = $false\n"
+        "try {\n"
+        "    $r = [MegaBasterd.SecureLogNative]::Open($A)\n"
+        "    $r.Handle.Dispose()\n"
+        '    "RESULT=opened"\n'
+        "} catch {\n"
+        '    [Console]::Error.WriteLine("launcher: file logging disabled - '
+        'secure log operation failed")\n'
+        '    "RESULT=refused"\n'
+        "}\n"
+        '"STILL_ALIVE=yes"\n'
+    )
+
+    proc = _run(tmp_path, body, str(target))
+
+    assert "RESULT=refused" in proc.stdout, proc.stdout + proc.stderr
+    assert "STILL_ALIVE=yes" in proc.stdout, "execution stopped instead of degrading"
+    warnings = [ln for ln in proc.stderr.splitlines() if "file logging disabled" in ln.lower()]
+    assert len(warnings) == 1, f"expected exactly one warning, got {warnings!r}"
+    assert target.read_bytes() == b"", "bytes reached a file that failed verification"
+    for leak in (str(target), target.name, str(tmp_path)):
+        assert leak not in proc.stderr, f"{leak!r} leaked into stderr"

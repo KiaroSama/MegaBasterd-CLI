@@ -20,6 +20,7 @@ PALETTE = {
     "option": "#FACC15",
     "value": "#2DD4BF",
     "prompt": "#FB7185",
+    "command": "#F472B6",
     "dim": "#64748B",
     # Read by the restored ui.progress compatibility surface.
     "highlight": "#E879F9",
@@ -70,6 +71,7 @@ THEME = Theme(
         "mb.prompt.other": PALETTE["hint_other"],
         # Consumed by build_progress / ProgressReporter, kept for the 1.x
         # compatibility surface.
+        "mb.command": f"bold {PALETTE['command']}",
         "mb.highlight": f"bold {PALETTE['highlight']}",
         "mb.progress": PALETTE["primary"],
         "mb.progress.done": PALETTE["success"],

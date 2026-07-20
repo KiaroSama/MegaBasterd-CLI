@@ -112,15 +112,18 @@ class TokenBucket:
             self._sleep(min(wait, 1.0))
 
 
-def make_limiter(kbps: float) -> TokenBucket:
-    """Construct a rate limiter. A rate of 0 means unlimited.
+def make_limiter(kbps: float) -> TokenBucket | NoOpLimiter:
+    """Construct a rate limiter; returns NoOpLimiter when kbps <= 0.
 
-    Always a `TokenBucket`: `consume` already returns immediately while
-    `rate <= 0`, so production never needs a second type to say the same thing,
-    and no annotation has to spell a union. `NoOpLimiter` is still exported for
-    callers outside this package, but nothing here returns one.
+    The union is the 1.x contract and callers may branch on the type, so it
+    stays. Collapsing this to always-TokenBucket was a public behaviour change
+    made to tidy an annotation - `consume` does return immediately at rate 0,
+    but that is an argument about what this package needs internally, not about
+    what it already promised.
     """
-    return TokenBucket(rate=max(0.0, kbps) * 1024)
+    if kbps <= 0:
+        return NoOpLimiter()
+    return TokenBucket(rate=kbps * 1024)
 
 
 class NoOpLimiter:

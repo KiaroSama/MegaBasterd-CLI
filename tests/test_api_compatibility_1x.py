@@ -165,12 +165,38 @@ def test_progress_for_is_still_a_context_manager_yielding_a_reporter():
         reporter.update_download(_Progress())
 
 
-def test_build_progress_returns_a_rich_progress():
+def test_build_progress_renders_without_a_missing_style():
+    """isinstance was not enough, and that is exactly how mb.command went missing.
+
+    `Theme` does not validate that a referenced style exists - `MissingStyle` is
+    raised when the segment is painted. A test that only checks the returned
+    type passes over a progress bar that explodes on first draw.
+    """
+    from rich.console import Console
     from rich.progress import Progress
 
     from megabasterd_cli.ui.progress import build_progress
+    from megabasterd_cli.ui.theme import THEME
 
-    assert isinstance(build_progress(), Progress)
+    console = Console(theme=THEME, force_terminal=True, width=80, legacy_windows=False)
+    progress = build_progress(console)
+    assert isinstance(progress, Progress)
+    task = progress.add_task("compat", total=10)
+    progress.advance(task, 5)
+    with console.capture() as captured:
+        console.print(progress)
+    assert "compat" in captured.get()
+
+
+def test_every_style_the_progress_shim_names_exists_in_the_theme():
+    """A missing one only fails at render, so name them explicitly too."""
+    import re as _re
+
+    from megabasterd_cli.ui.theme import THEME
+
+    source = (SRC / "ui" / "progress.py").read_text(encoding="utf-8")
+    for style in sorted(set(_re.findall(r"[\"']?\[?(mb\.[a-z.]+)\]?[\"']?", source))):
+        assert style in THEME.styles, f"{style} is referenced but not defined"
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +224,9 @@ def _calls_in(path: Path, name: str) -> list[str]:
     return found
 
 
-@pytest.mark.parametrize("name", ["ensure_unique_path", "file_md5", "NoOpLimiter", "progress_for"])
+# NoOpLimiter is deliberately absent: `make_limiter` returning one is the 1.x
+# contract, so production DOES hand it back and must keep doing so.
+@pytest.mark.parametrize("name", ["ensure_unique_path", "file_md5", "progress_for"])
 def test_no_production_module_routes_through_a_shim(name):
     """Restoring compatibility must not quietly revive the old code path."""
     callers = []
@@ -207,14 +235,32 @@ def test_no_production_module_routes_through_a_shim(name):
     assert not callers, f"{name} is being used by production again: {callers}"
 
 
-def test_make_limiter_still_returns_the_canonical_token_bucket():
-    """NoOpLimiter is exported again, but nothing here hands one back."""
+def test_make_limiter_keeps_its_1x_return_contract():
+    """Callers may branch on the type, so the union is part of the promise.
+
+    Collapsing this to always-TokenBucket was defensible internally - `consume`
+    does return immediately at rate 0 - but it changed what the package hands
+    back, which is not an internal matter.
+    """
     from megabasterd_cli.utils.speed import NoOpLimiter, TokenBucket, make_limiter
 
-    for kbps in (0, -5, 128):
+    for kbps in (0, -5, -0.001):
+        assert isinstance(make_limiter(kbps), NoOpLimiter), kbps
+    for kbps in (0.5, 128, 4096):
         limiter = make_limiter(kbps)
-        assert isinstance(limiter, TokenBucket)
-        assert not isinstance(limiter, NoOpLimiter)
+        assert isinstance(limiter, TokenBucket), kbps
+        assert limiter.rate == kbps * 1024
+
+
+def test_needs_password_is_a_property_not_a_bound_method():
+    """It was `@property`; a restore that drops the decorator is truthy always."""
+    from megabasterd_cli.core.links import LinkType, ParsedLink
+
+    assert isinstance(ParsedLink.__dict__["needs_password"], property)
+    protected = ParsedLink(type=LinkType.PASSWORD_PROTECTED, public_id="ABC")
+    plain = ParsedLink(type=LinkType.FILE, public_id="DEF")
+    assert protected.needs_password is True
+    assert plain.needs_password is False
 
 
 def test_the_package_still_imports_from_a_clean_interpreter():
