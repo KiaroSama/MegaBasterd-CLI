@@ -244,14 +244,27 @@ function Open-VerifiedLogStream {
             # Only a file this run just created is hardened. A pre-existing one
             # is verified and otherwise refused - repairing somebody else's DACL
             # would mean writing into a file we cannot prove was ever ours.
-            $acl = Get-Acl -LiteralPath $Path
+            $me = Get-CurrentUserSid
+            # THE load-bearing line. Windows decides the owner of a new file,
+            # and for a member of the Administrators group that owner can be
+            # the *group* (S-1-5-32-544) rather than the account - which is
+            # exactly what a CI runner's elevated account looks like, and what
+            # an ordinary desktop account does not. The verifier requires the
+            # owner to be us, so set it rather than hope the host agrees.
+            # Setting the owner to yourself needs only the WRITE_OWNER a
+            # creator already holds; taking it *from* somebody else would not
+            # be possible, and is not what this does.
+            $acl = New-Object System.Security.AccessControl.FileSecurity
             $acl.SetAccessRuleProtection($true, $false)
-            foreach ($rule in @($acl.Access)) {
-                if ($null -ne $rule) { [void]$acl.RemoveAccessRule($rule) }
-            }
-            $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+            $acl.SetOwner($me)
+            # Granted to the SID, not to GetCurrent().Name: the verifier
+            # compares SIDs, so granting by display name leaves one name-to-SID
+            # resolution between what is written and what is checked.
             $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
                 $me, "FullControl", "Allow")))
+            # Built fresh rather than fetched and edited. Same result on every
+            # ACL layout tested, and there is no remove-the-inherited-rules loop
+            # whose behaviour depends on what the parent directory grants.
             Set-Acl -LiteralPath $Path -AclObject $acl
         }
         # Read back rather than assume: Set-Acl can be a no-op on some
