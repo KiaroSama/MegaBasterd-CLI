@@ -137,19 +137,6 @@ class AuthOperations(NodeOperations):
         self.api.set_session(sid)
         return self.session
 
-    def restore_session(self, session: MegaSession) -> bool:
-        """Restore a previously-saved session. Returns True if the SID still works."""
-        self.api.set_session(session.sid)
-        self.session = session
-        try:
-            self.api.get_user_info()
-            return True
-        except MegaError as exc:
-            log.info("Saved session is no longer valid: %s", exc)
-            self.api.clear_session()
-            self.session = None
-            return False
-
     def _decode_session_id(self, csid_encrypted: bytes, rsa_priv_blob: bytes) -> str:
         """Decode the session ID using the RSA private key (account v1/v2).
 

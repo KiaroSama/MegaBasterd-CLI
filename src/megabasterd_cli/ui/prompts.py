@@ -34,12 +34,6 @@ def confirm(question: str, default: bool = True) -> bool:
     return Confirm.ask(question, default=default)
 
 
-def print_panel(text: str | Text, title: str = "", style: str = "cyan") -> None:
-    from rich.panel import Panel
-
-    _console.print(Panel(literal(text), title=title, border_style=style))
-
-
 def print_success(msg: str | Text) -> None:
     _console.print(_line("[mb.success]OK[/mb.success]  ", msg))
 

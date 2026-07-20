@@ -198,12 +198,6 @@ class NodeOperations:
                 return node.handle
         return None
 
-    def find_inbox(self) -> str | None:
-        for node in self.list_files():
-            if node.is_inbox:
-                return node.handle
-        return None
-
     def children_of(self, parent_handle: str) -> list[MegaNode]:
         return [n for n in self.list_files() if n.parent == parent_handle]
 

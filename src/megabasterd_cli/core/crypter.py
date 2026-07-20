@@ -80,8 +80,6 @@ MAX_SCRYPT_R = 32
 MAX_SCRYPT_P = 16
 MAX_SCRYPT_MEMORY_BYTES = 256 * 1024 * 1024  # ~128 * N * r * p upper bound
 
-_V1_HEADER_LEN = len(MAGIC) + 1 + SALT_LEN + 4
-_V2_HEADER_LEN = len(MAGIC) + 1 + SALT_LEN + 4 + 8
 # Associated data appended per chunk: chunk index (u64) + final flag (u8).
 _CHUNK_AAD = struct.Struct(">QB")
 

@@ -149,7 +149,7 @@ class MegaDownloader:
         quota_max_wait_loops: int = 0,
         keep_state_files_on_error: bool = True,
         overwrite: bool = False,
-        limiter=None,  # Shared TokenBucket/NoOpLimiter for aggregate command caps
+        limiter=None,  # Shared TokenBucket for aggregate command caps
         auto_resume: bool = True,
         user_agent: str | None = None,
     ):

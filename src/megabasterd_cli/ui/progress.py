@@ -4,23 +4,10 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 
-from rich.console import Console, Group
+from rich.console import Group
 from rich.live import Live
-from rich.markup import escape
-from rich.progress import (
-    BarColumn,
-    DownloadColumn,
-    Progress,
-    SpinnerColumn,
-    TaskID,
-    TextColumn,
-    TimeRemainingColumn,
-    TransferSpeedColumn,
-)
 from rich.text import Text
 
 from ..utils.speed import RollingSpeedMeter
@@ -43,31 +30,6 @@ class ProgressFileState:
     total: int | None = None
     speed: float | None = 0.0
     status: str = "queued"
-
-
-def build_progress(console: Console | None = None) -> Progress:
-    """Build a Progress object with the standard MegaBasterd CLI column layout."""
-    return Progress(
-        SpinnerColumn(style="mb.highlight"),
-        TextColumn("[mb.command]{task.description}", justify="right"),
-        BarColumn(
-            bar_width=40,
-            style="mb.dim",
-            complete_style="mb.progress.done",
-            finished_style="mb.success",
-            pulse_style="mb.progress.pulse",
-        ),
-        "[mb.option]{task.percentage:>3.1f}%",
-        "[mb.dim]|[/mb.dim]",
-        DownloadColumn(),
-        "[mb.dim]|[/mb.dim]",
-        TransferSpeedColumn(),
-        "[mb.dim]|[/mb.dim]",
-        TimeRemainingColumn(),
-        console=console,
-        refresh_per_second=4,
-        transient=False,
-    )
 
 
 class MultiFileProgressView:
@@ -374,32 +336,3 @@ def _rich_bar(percent: float, width: int, status: str = "active") -> Text:
     text.append("━" * filled, style="bold #ff4f6d" if failed else "bold #00bfb9")
     text.append("─" * empty, style="#5a1f2b" if failed else "#d60044")
     return text
-
-
-class ProgressReporter:
-    """Adapter that wires the downloader's progress callback to a Rich task."""
-
-    def __init__(self, progress: Progress, task_id: TaskID):
-        self.progress = progress
-        self.task_id = task_id
-
-    def update_download(self, p) -> None:
-        # p is DownloadProgress
-        self.progress.update(self.task_id, completed=p.bytes_done, total=p.total_bytes)
-
-    def update_upload(self, p) -> None:
-        # p is UploadProgress
-        self.progress.update(self.task_id, completed=p.bytes_done, total=p.total_bytes)
-
-
-@contextmanager
-def progress_for(description: str, total: int) -> Iterator[ProgressReporter]:
-    """Convenience: create a Progress, add one task, yield a reporter, then close."""
-    console = make_console()
-    progress = build_progress(console)
-    with progress:
-        # Descriptions are usually filenames, i.e. untrusted remote text.
-        # `add_task` takes a str, so escape the markup rather than wrapping in
-        # a Text the API does not accept.
-        task_id = progress.add_task(escape(description), total=total)
-        yield ProgressReporter(progress, task_id)
