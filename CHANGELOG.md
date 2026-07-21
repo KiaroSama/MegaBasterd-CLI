@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Security (deep audit rounds)
+- Closed an SSRF in ELC and MegaCrypter link resolution: the service URL comes from the untrusted link, and although the initial URL was validated, redirects were followed automatically, so a hostile host could answer `307` and have the credential body (ELC user/API key, or the MegaCrypter link password and session) re-POSTed to loopback, link-local, or RFC1918 addresses. Every hop is now validated with automatic redirects disabled, matching the DLC path.
+- The MegaCrypter host-supplied download URL is now validated (HTTPS-only, no userinfo, globally-routable host) before any fetcher connects to it, for both `download` and `stream`.
+- Integrity verification now re-computes the file MAC from the bytes on disk instead of from the per-chunk MACs stored in the resume state, so a resumed file whose contents no longer match — a destination replaced between runs, or a silent disk write fault — fails verification instead of reporting success. A missing or truncated file fails closed.
+- A resume state is reused only when it records the exact decryption key of the current transfer; a state that omits or mismatches the key is refused rather than trusted, and a state written by a newer format version is left intact and refused instead of being deleted.
+- The MegaCrypter password-hashing iteration count from a hostile host is bounded before the exponent is materialized, so a crafted descriptor can no longer force a multi-gigabyte allocation.
+- Exception tracebacks printed to the console are now redacted the same way as the log file, so a secret inside an error can no longer reach the terminal in cleartext; diagnostics and Rich tracebacks go to stderr so `--json` stdout stays valid JSONL.
+- `config show`/`get` now redact any credential-bearing value (proxy URLs with `user:pass@`, authorization headers), and `proxy list`/`remove` redact schemeless proxy credentials that previously printed in full.
+- Link keys are validated strictly: a key with characters outside unpadded URL-safe base64 (commas, whitespace) or the wrong decoded length is rejected with a clear message instead of being silently truncated or reshaped into a different key.
+- `config show` and `proxy list` render untrusted values as plain text, so a stored config value or a fetched/imported proxy entry containing Rich markup can no longer restyle the output or crash the command.
+
+### Fixed (deep audit rounds)
+- A discarded or unusable resume state could leave a stale high revision on disk that silently blocked every save of the replacement transfer, so a long download persisted no resume state and an interruption lost all progress; the leftover is now cleared and an unreadable-as-state file no longer constrains saves.
+- Fixed corrupt output when streaming a byte range whose start is not block-aligned and the first upstream block is shorter than the alignment skip: the served data is no longer shifted backward, and a short response is reported instead of silently truncated.
+- The launcher now survives Windows PowerShell 5.1: the Python-interpreter probe and the pip/ensurepip step no longer abort on a candidate's stderr (the Microsoft Store `python3` alias, a conda/venv banner, or a `pip` warning), so the `py → python3 → python` fallback and the pip recovery both work on that host. A CI job now smoke-tests the launcher under 5.1.
+- `account add` and machine-mode (`--json`) commands no longer hang forever waiting on a hidden password prompt with closed/redirected stdin; they fail with a message telling you to pass `--password`/`--vault-passphrase`.
+- `account add` with the wrong vault passphrase no longer mixes credentials encrypted under two different passphrases into one vault: the passphrase is verified against an existing credential before anything is added.
+- A wrong vault passphrase now reports a clear message instead of an empty `Error:` line under a raw decryption traceback.
+- `proxy fetch` and `proxy serve` now exit non-zero when they fail, so a wrapper script can detect the failure.
+- A link-service proxy is credited only after the response body is proven usable and blamed when the request fails, so a captive portal or dead proxy no longer climbs the pool's success ranking; rejected streamed responses are closed instead of stranding the connection.
+- The launcher no longer leaves the tail of a quoted secret (`--password "…"`, `--token "…"`, etc.) unredacted in its log, and no longer creates a stray `Data\sessions` directory on non-Windows CI runs.
+
+### Removed
+- Dropped the declared `colorama` dependency: nothing in the project imports it, and `click` already pulls it in transitively on Windows.
+
 ### Added
 - `mb config unset <key>` clears a nullable setting to JSON null; `config set <key> null|none` also stores null while any other string (including a URL or the literal `null-value`) is kept verbatim.
 - `mb queue reset` recovers from a corrupt queue by writing a fresh empty one (the corrupt original is preserved as `queue.json.corrupt.<timestamp>.json`).
