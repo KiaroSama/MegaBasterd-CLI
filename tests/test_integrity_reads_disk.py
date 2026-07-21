@@ -19,7 +19,7 @@ from __future__ import annotations
 import os
 
 from megabasterd_cli.core.chunks import chunk_mac, combine_chunk_macs, condense_mac, iter_chunks
-from megabasterd_cli.core.download_verify import verify_file_integrity
+from megabasterd_cli.core.download_verify import _verify_file_on_disk
 
 AES_KEY = bytes(range(16))
 NONCE = bytes(range(8))
@@ -39,7 +39,7 @@ def test_a_correct_file_on_disk_verifies(tmp_path):
     dest.write_bytes(plaintext)
 
     chunks = list(iter_chunks(len(plaintext)))
-    assert verify_file_integrity(chunks, AES_KEY, NONCE, _mac_iv_for(plaintext), dest) is True
+    assert _verify_file_on_disk(chunks, AES_KEY, NONCE, _mac_iv_for(plaintext), dest) is True
 
 
 def test_a_byte_flipped_on_disk_is_caught(tmp_path):
@@ -59,7 +59,7 @@ def test_a_byte_flipped_on_disk_is_caught(tmp_path):
         f.write(bytes([plaintext[150_000] ^ 0x01]))
 
     chunks = list(iter_chunks(len(plaintext)))
-    assert verify_file_integrity(chunks, AES_KEY, NONCE, mac_iv, dest) is False
+    assert _verify_file_on_disk(chunks, AES_KEY, NONCE, mac_iv, dest) is False
 
 
 def test_a_truncated_file_on_disk_is_caught(tmp_path):
@@ -72,14 +72,14 @@ def test_a_truncated_file_on_disk_is_caught(tmp_path):
         f.truncate(len(plaintext) - 1)  # last chunk now short
 
     chunks = list(iter_chunks(len(plaintext)))
-    assert verify_file_integrity(chunks, AES_KEY, NONCE, mac_iv, dest) is False
+    assert _verify_file_on_disk(chunks, AES_KEY, NONCE, mac_iv, dest) is False
 
 
 def test_a_missing_file_fails_closed(tmp_path):
     plaintext = b"\x00" * 100
     chunks = list(iter_chunks(len(plaintext)))
     dest = tmp_path / "gone.bin"  # never created
-    assert verify_file_integrity(chunks, AES_KEY, NONCE, _mac_iv_for(plaintext), dest) is False
+    assert _verify_file_on_disk(chunks, AES_KEY, NONCE, _mac_iv_for(plaintext), dest) is False
 
 
 def test_the_zero_byte_file_verifies(tmp_path):
@@ -87,7 +87,51 @@ def test_the_zero_byte_file_verifies(tmp_path):
     dest.write_bytes(b"")
     chunks = list(iter_chunks(0))
     # iter_chunks(0) yields nothing; an empty combine matches the empty MAC IV.
-    assert verify_file_integrity(chunks, AES_KEY, NONCE, _mac_iv_for(b""), dest) is True
+    assert _verify_file_on_disk(chunks, AES_KEY, NONCE, _mac_iv_for(b""), dest) is True
+
+
+def test_public_verify_file_integrity_keeps_its_1x_signature(tmp_path):
+    """The 1.x public entry point takes `(state, all_chunks, aes_key, mac_iv)`
+    and pulls the nonce and destination out of the state. It must stay callable
+    that way AND now check the bytes on disk."""
+    from megabasterd_cli.core.download_verify import verify_file_integrity
+    from megabasterd_cli.core.state import TransferState
+
+    plaintext = bytes((i * 37) % 256 for i in range(300_000))
+    dest = tmp_path / "movie.bin"
+    dest.write_bytes(plaintext)
+    chunks = list(iter_chunks(len(plaintext)))
+    state = TransferState(
+        transfer_type="download",
+        source="https://mega.nz/file/ID#<key>",
+        destination=str(dest),
+        total_size=len(plaintext),
+        metadata={"nonce": NONCE.hex()},
+    )
+
+    # Exactly the old four-argument call.
+    assert verify_file_integrity(state, chunks, AES_KEY, _mac_iv_for(plaintext)) is True
+
+    with open(dest, "r+b") as f:
+        f.seek(150_000)
+        f.write(bytes([plaintext[150_000] ^ 0x01]))
+    assert verify_file_integrity(state, chunks, AES_KEY, _mac_iv_for(plaintext)) is False
+
+
+def test_public_verify_file_integrity_fails_closed_without_a_nonce(tmp_path):
+    from megabasterd_cli.core.download_verify import verify_file_integrity
+    from megabasterd_cli.core.state import TransferState
+
+    dest = tmp_path / "movie.bin"
+    dest.write_bytes(b"\x00" * 1024)
+    state = TransferState(
+        transfer_type="download",
+        source="s",
+        destination=str(dest),
+        total_size=1024,
+        metadata={},  # no nonce
+    )
+    assert verify_file_integrity(state, list(iter_chunks(1024)), AES_KEY, [0, 0]) is False
 
 
 def _run_download_writing(monkeypatch, tmp_path, plaintext, *, corrupt):
@@ -160,7 +204,7 @@ if __name__ == "__main__":  # quick self-check without pytest
                 AES_KEY,
             )
         )
-        assert verify_file_integrity(cs, AES_KEY, NONCE, iv, p) is True
+        assert _verify_file_on_disk(cs, AES_KEY, NONCE, iv, p) is True
         p.write_bytes(blob[:-1] + bytes([blob[-1] ^ 0x01]))
-        assert verify_file_integrity(cs, AES_KEY, NONCE, iv, p) is False
+        assert _verify_file_on_disk(cs, AES_KEY, NONCE, iv, p) is False
         print("ok")

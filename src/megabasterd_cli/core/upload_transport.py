@@ -114,8 +114,14 @@ def upload_chunk(
     aes_key: bytes,
     nonce: bytes,
     state: TransferState,
+    total_chunks: int | None = None,  # 1.x compatibility: accepted, unused
 ) -> None:
-    """Read, encrypt, POST one chunk."""
+    """Read, encrypt, POST one chunk.
+
+    `total_chunks` is a 1.x compatibility parameter. It was part of the public
+    signature and nothing in the body ever used it, so it is accepted and
+    ignored rather than removed, which would break a caller still passing it.
+    """
     if up._stop_event.is_set():
         return
 

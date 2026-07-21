@@ -47,8 +47,8 @@ from .download_verify import (
     DeclaredSizeError,
     InsufficientDiskSpaceError,
     _validate_declared_size,
+    _verify_file_on_disk,
     is_usable_download_state,
-    verify_file_integrity,
 )
 from .errors import (
     IntegrityError,
@@ -60,12 +60,14 @@ from .errors import (
 from .progress_ticker import progress_ticker
 from .range_validation import validate_range_response
 from .state import (
+    STATE_FORMAT_VERSION,
     TransferState,
     clear_state,
     load_state,
     save_state,
     snapshot_state,
     state_path_for,
+    unrecognized_state_version,
 )
 
 log = logging.getLogger(__name__)
@@ -392,6 +394,18 @@ class MegaDownloader:
         ):
             state = loaded
         else:
+            # A state file from a version we do not understand is left ALONE:
+            # deleting it would lose a newer client's resume progress, so refuse
+            # rather than clear. `load_state` already declined to resume it.
+            other_version = unrecognized_state_version(destination)
+            if other_version is not None:
+                raise TransferError(
+                    message=(
+                        f"Resume state for this file is format version {other_version}, but this "
+                        f"client uses {STATE_FORMAT_VERSION}. Refusing to delete it. Move "
+                        f"{state_path_for(destination).name} aside or download to another path."
+                    )
+                )
             # Whatever is on disk lost: it is unloadable, unusable, or resume is
             # off. Leaving it there let its `revision` outrank every snapshot of
             # the fresh state below (which starts at 0), so `save_state` dropped
@@ -605,7 +619,7 @@ class MegaDownloader:
         destination: Path,
     ) -> bool:
         """Re-MAC the file on disk and compare against the expected file MAC."""
-        return verify_file_integrity(all_chunks, aes_key, nonce, mac_iv_a32, destination)
+        return _verify_file_on_disk(all_chunks, aes_key, nonce, mac_iv_a32, destination)
 
     def _progress_snapshot(self) -> tuple[int, int]:
         with self._lock:

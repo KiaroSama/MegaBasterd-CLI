@@ -43,7 +43,15 @@ from .crypto import (
 from .errors import MegaError, TransferError
 from .progress_ticker import progress_ticker
 from .responses import _expect_field, _expect_mapping
-from .state import TransferState, clear_state, load_state, save_state, snapshot_state
+from .state import (
+    STATE_FORMAT_VERSION,
+    TransferState,
+    clear_state,
+    load_state,
+    save_state,
+    snapshot_state,
+    unrecognized_state_version,
+)
 
 log = logging.getLogger(__name__)
 
@@ -301,11 +309,22 @@ class MegaUploader:
                 state = None
 
         if state is None:
+            # A state file from a version we do not understand is left ALONE:
+            # deleting it would lose a newer client's upload progress, so refuse.
+            other_version = unrecognized_state_version(state_path)
+            if other_version is not None:
+                raise TransferError(
+                    message=(
+                        f"Upload resume state for this file is format version {other_version}, "
+                        f"but this client uses {STATE_FORMAT_VERSION}. Refusing to delete it. "
+                        "Move the upload-state file aside or retry with a different source."
+                    )
+                )
             # The branch above clears the state it rejected, but this one is
             # also reached when `load_state` returned None with the file still
-            # on disk (an unsupported format version, or bytes that could not
-            # be preserved for quarantine). Its `revision` would then outrank
-            # every snapshot of the fresh state below and silently block them.
+            # on disk (bytes that could not be preserved for quarantine). Its
+            # `revision` would then outrank every snapshot of the fresh state
+            # below and silently block them.
             clear_state(state_path)
             # Request a fresh upload slot
             upload_url = self._request_upload_url(file_size)

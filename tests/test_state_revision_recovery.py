@@ -26,7 +26,6 @@ from types import SimpleNamespace
 import pytest
 
 import megabasterd_cli.config as config_module
-import megabasterd_cli.core.uploader as uploader_module
 from megabasterd_cli.core.chunks import iter_chunks
 from megabasterd_cli.core.downloader import MegaDownloader
 from megabasterd_cli.core.errors import NonRetryableTransferError, TransferError
@@ -226,45 +225,40 @@ class _FakeResponse:
         pass
 
 
-def test_upload_persists_state_over_a_state_it_could_not_load(tmp_path: Path, monkeypatch):
-    """An unsupported-version file is ignored by `load_state` and left on disk.
+def test_upload_refuses_a_foreign_version_state_without_deleting_it(tmp_path: Path, monkeypatch):
+    """An unrecognized-version upload state must not be deleted.
 
-    Nothing quarantines it (it is not corrupt, just foreign), so only the
-    uploader clearing it on the `state is None` branch stops its revision from
-    blocking the fresh upload's saves.
+    `load_state` leaves it on disk (it is foreign, not corrupt), and the upload
+    REFUSES rather than clearing it - deleting it would throw away the progress
+    of the client that wrote it. The download side of this is covered in
+    `test_state_forward_compat.py`; the same-version clear-and-persist path (the
+    round-21 S1 fix) is still exercised by
+    `test_download_persists_state_over_a_state_it_refused_to_resume`.
     """
     monkeypatch.setattr(config_module, "data_dir", lambda: tmp_path / "data")
     file_size = 384 * 1024
     source = tmp_path / "file.bin"
     source.write_bytes(b"\x07" * file_size)
-    chunks = list(iter_chunks(file_size))
-    assert len(chunks) > 1
 
     state_path = MegaUploader._upload_state_destination(source)
     sp = state_path_for(state_path)
     sp.parent.mkdir(parents=True, exist_ok=True)
+    newer = STATE_FORMAT_VERSION + 1
     sp.write_text(
         json.dumps(
             {
                 "transfer_type": "upload",
-                "source": "a-completely-different-source",
+                "source": str(source),
                 "destination": str(state_path),
                 "total_size": file_size,
-                "format_version": STATE_FORMAT_VERSION - 1,
+                "format_version": newer,
                 "revision": 500,
             }
         ),
         encoding="utf-8",
     )
-    assert load_state(state_path) is None, "an unsupported version must not be resumed"
+    assert load_state(state_path) is None, "a foreign version must not be resumed"
 
-    def fake_post(url, data=b"", timeout=None, proxies=None, headers=None, stream=False):
-        offset = int(url.rsplit("/", 1)[-1])
-        if offset + len(data) >= file_size:
-            return _FakeResponse(status=403)  # fail the final chunk
-        return _FakeResponse()
-
-    monkeypatch.setattr(uploader_module.requests, "post", fake_post)
     client = SimpleNamespace(
         session=SimpleNamespace(master_key=b"\x00" * 16),
         api=SimpleNamespace(request_upload=lambda size: {"p": UPLOAD_URL}),
@@ -273,9 +267,9 @@ def test_upload_persists_state_over_a_state_it_could_not_load(tmp_path: Path, mo
     )
     uploader = MegaUploader(client=client)
 
-    with pytest.raises(TransferError):
+    with pytest.raises(TransferError, match=f"format version {newer}"):
         uploader.upload_file(source)
 
-    assert sp.exists(), "an interrupted upload must keep resume state"
+    assert sp.exists(), "a foreign-version upload state was deleted instead of refused"
     persisted = json.loads(sp.read_text(encoding="utf-8"))
-    assert persisted["source"] == str(source), "the leftover state file blocked every save"
+    assert persisted["format_version"] == newer, "the foreign state was overwritten"

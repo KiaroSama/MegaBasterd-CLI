@@ -132,6 +132,17 @@ def test_only_the_offset_final_chunk_is_final():
     assert is_final_chunk(_chunk(2), TOTAL)
 
 
+def test_upload_chunk_still_accepts_the_1x_total_chunks_argument(monkeypatch, source, tmp_path):
+    """`total_chunks` was a public parameter; a 1.x caller still passing the
+    eighth argument must not get a TypeError. It is accepted and ignored."""
+    up = _Uploader()
+    state = _state(source, tmp_path)
+    # The old eight-argument form, with total_chunks passed positionally; a
+    # final chunk (index 2) whose response carries the completion token.
+    _run(monkeypatch, up, source, state, _chunk(2), _Resp(200, b"TOKEN"))
+    upload_chunk(up, "https://up.invalid/s", source, _chunk(2), b"\x00" * 16, b"\x00" * 8, state, 3)
+
+
 # ---------------------------------------------------------------------------
 # Item 3 - the token
 # ---------------------------------------------------------------------------
