@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 from megabasterd_cli.core.chunks import chunk_mac, combine_chunk_macs, condense_mac, iter_chunks
 from megabasterd_cli.core.download_verify import _verify_file_on_disk
 
@@ -134,11 +136,37 @@ def test_public_verify_file_integrity_fails_closed_without_a_nonce(tmp_path):
     assert verify_file_integrity(state, list(iter_chunks(1024)), AES_KEY, [0, 0]) is False
 
 
+@pytest.mark.parametrize("nonce_bytes", [1, 7, 9, 16], ids=lambda n: f"{n}-byte-nonce")
+def test_public_verify_file_integrity_fails_closed_on_a_wrong_length_nonce(tmp_path, nonce_bytes):
+    """A valid-hex nonce of the wrong length must return False, not raise.
+
+    `chunk_mac` uses `nonce + nonce` as the 16-byte CBC IV, so anything but 8
+    bytes would explode inside the crypto for a non-empty file - the case
+    `bytes.fromhex` cannot catch and the docstring promises to fail closed on.
+    """
+    from megabasterd_cli.core.download_verify import verify_file_integrity
+    from megabasterd_cli.core.state import TransferState
+
+    dest = tmp_path / "movie.bin"
+    dest.write_bytes(b"\x00" * 300_000)  # non-empty: an 8-byte IV is actually used
+    state = TransferState(
+        transfer_type="download",
+        source="s",
+        destination=str(dest),
+        total_size=300_000,
+        metadata={"nonce": ("11" * nonce_bytes)},  # valid hex, wrong length
+    )
+    chunks = list(iter_chunks(300_000))
+    try:
+        result = verify_file_integrity(state, chunks, AES_KEY, [0, 0])
+    except Exception as exc:  # noqa: BLE001 - the whole point is that none escapes
+        pytest.fail(f"a {nonce_bytes}-byte nonce raised {type(exc).__name__} instead of False")
+    assert result is False
+
+
 def _run_download_writing(monkeypatch, tmp_path, plaintext, *, corrupt):
     """Drive a real `_run_download` whose chunk fetch writes `plaintext` to the
     preallocated destination (optionally corrupting one byte), verify on."""
-    import pytest
-
     from megabasterd_cli.core.downloader import MegaDownloader
     from megabasterd_cli.core.errors import IntegrityError
 

@@ -32,6 +32,8 @@ from .state import TransferState
 
 log = logging.getLogger(__name__)
 
+_NONCE_BYTES = 8  # a MEGA file nonce; `chunk_mac` uses `nonce + nonce` as the CBC IV
+
 
 class DeclaredSizeError(NonRetryableTransferError):
     """The remote declared a file size we refuse to plan a transfer around.
@@ -177,5 +179,14 @@ def verify_file_integrity(
         nonce = bytes.fromhex(nonce_hex)
     except (TypeError, ValueError):
         log.error("Integrity check: resume state nonce is not valid hex")
+        return False
+    # `chunk_mac` uses `nonce + nonce` as the 16-byte CBC IV, so a nonce that is
+    # not 8 bytes would raise a raw crypto error from inside the MAC rather than
+    # fail closed. A valid-hex nonce of the wrong length is exactly the case
+    # `bytes.fromhex` cannot catch.
+    if len(nonce) != _NONCE_BYTES:
+        log.error(
+            "Integrity check: resume state nonce is %d bytes, expected %d", len(nonce), _NONCE_BYTES
+        )
         return False
     return _verify_file_on_disk(all_chunks, aes_key, nonce, mac_iv_a32, Path(state.destination))
