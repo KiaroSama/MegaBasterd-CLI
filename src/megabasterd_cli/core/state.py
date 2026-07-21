@@ -332,6 +332,33 @@ def state_path_for(destination: str | Path) -> Path:
     return p.with_suffix(p.suffix + ".mbstate")
 
 
+def unrecognized_state_version(destination: str | Path) -> int | None:
+    """The `format_version` of a state file this client does not understand.
+
+    Returns the on-disk version when a parseable `.mbstate` for `destination`
+    declares a `format_version` other than `STATE_FORMAT_VERSION`; otherwise
+    None (no file, unparseable, or a version we do handle). `load_state`
+    declines to RESUME such a file without deleting it; the caller uses this to
+    REFUSE the transfer rather than clear a state written by another version and
+    lose its progress. Pass the same argument given to `load_state`.
+    """
+    sp = state_path_for(destination)
+    try:
+        data = json.loads(sp.read_bytes().decode("utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    version = data.get("format_version")
+    if (
+        isinstance(version, int)
+        and not isinstance(version, bool)
+        and version != STATE_FORMAT_VERSION
+    ):
+        return version
+    return None
+
+
 def load_state(destination: str | Path) -> TransferState | None:
     """Load existing state for a destination, or None when it cannot be trusted.
 
@@ -355,17 +382,25 @@ def load_state(destination: str | Path) -> TransferState | None:
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         _quarantine_state(sp, raw, f"not valid UTF-8 JSON ({type(exc).__name__})")
         return None
+    # Read the version BEFORE validating. A file from a DIFFERENT format version
+    # is not required to satisfy THIS version's schema, so validating it first
+    # would quarantine - and delete - a good state written by another client.
+    # The save path already refuses to overwrite such a file by version
+    # (`_disk_guard`); the load path must likewise leave it intact and simply
+    # decline to resume. The caller refuses the transfer rather than clearing it
+    # (see `unrecognized_state_version`).
+    version = data.get("format_version") if isinstance(data, dict) else None
+    if (
+        isinstance(version, int)
+        and not isinstance(version, bool)
+        and version != STATE_FORMAT_VERSION
+    ):
+        log.debug("Leaving transfer state %s from format version %s untouched", sp, version)
+        return None
     try:
         fields_ = validate_state_dict(data)
     except StateCorruptionError as exc:
         _quarantine_state(sp, raw, str(exc))
-        return None
-    if fields_["format_version"] != STATE_FORMAT_VERSION:
-        log.debug(
-            "Ignoring unsupported transfer state version %s in %s",
-            fields_["format_version"],
-            sp,
-        )
         return None
     try:
         return TransferState(**fields_)

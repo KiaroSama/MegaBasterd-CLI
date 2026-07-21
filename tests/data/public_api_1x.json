@@ -587,6 +587,7 @@
     "save_state",
     "snapshot_state",
     "state_path_for",
+    "unrecognized_state_version",
     "validate_state_dict"
   ],
   "megabasterd_cli.core.thumbnail": [
