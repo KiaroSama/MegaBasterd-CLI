@@ -72,8 +72,7 @@ def fetch_chunk(
                     message=f"CDN URL expired (HTTP {resp.status_code}) for chunk {chunk.index}"
                 )
             if resp.status_code not in (200, 206):
-                if picked_proxy and dl.proxy_pool is not None:
-                    dl.proxy_pool.report_failure(picked_proxy)
+                dl._selector.report_failure(picked_proxy)
                 if resp.status_code >= 500:
                     raise RetryableTransferError(
                         message=f"HTTP {resp.status_code} for chunk {chunk.index}"
@@ -98,8 +97,7 @@ def fetch_chunk(
                     state.total_size,
                 )
             except RangeNotHonoredError as exc:
-                if picked_proxy and dl.proxy_pool is not None:
-                    dl.proxy_pool.report_failure(picked_proxy)
+                dl._selector.report_failure(picked_proxy)
                 # A protocol violation, not a transient fault: retrying the
                 # same request against the same server would repeat it.
                 raise NonRetryableTransferError(
@@ -115,8 +113,7 @@ def fetch_chunk(
                 if dl._stop_event.is_set():
                     return
                 if len(encrypted) + len(block) > chunk.size:
-                    if picked_proxy and dl.proxy_pool is not None:
-                        dl.proxy_pool.report_failure(picked_proxy)
+                    dl._selector.report_failure(picked_proxy)
                     raise NonRetryableTransferError(
                         message=(
                             f"Upstream sent more than the requested range for chunk "
@@ -126,13 +123,11 @@ def fetch_chunk(
                 encrypted.extend(block)
                 dl.limiter.consume(len(block))
     except (requests.ConnectionError, requests.Timeout):
-        if picked_proxy and dl.proxy_pool is not None:
-            dl.proxy_pool.report_failure(picked_proxy)
+        dl._selector.report_failure(picked_proxy)
         raise
 
     if len(encrypted) != chunk.size:
-        if picked_proxy and dl.proxy_pool is not None:
-            dl.proxy_pool.report_failure(picked_proxy)
+        dl._selector.report_failure(picked_proxy)
         raise NonRetryableTransferError(
             message=f"Chunk {chunk.index} short read: got {len(encrypted)}, expected {chunk.size}"
         )
@@ -166,5 +161,4 @@ def fetch_chunk(
     if state_to_save is not None:
         save_state(state_to_save)
 
-    if picked_proxy and dl.proxy_pool is not None:
-        dl.proxy_pool.report_success(picked_proxy)
+    dl._selector.report_success(picked_proxy)

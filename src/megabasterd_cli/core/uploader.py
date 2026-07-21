@@ -125,6 +125,11 @@ class MegaUploader:
         self.proxies = proxies
         self.proxy_pool = proxy_pool
         self.force_proxy = force_proxy
+        # One selector for the whole uploader: `select()` and `report_*` only
+        # read the (thread-safe) pool, so a persistent one is identical to the
+        # per-request copies this used to build and is the single place the
+        # "credit the pool only if a proxy was picked" guard lives.
+        self._selector = ProxySelector(pool=proxy_pool, static=proxies, force=force_proxy)
         # A supplied limiter is shared across every parallel upload of one
         # command, making `speed_limit_kbps` an aggregate cap.
         self.limiter = limiter if limiter is not None else make_limiter(speed_limit_kbps)
@@ -144,9 +149,7 @@ class MegaUploader:
 
     def _proxies_for_request(self) -> tuple[dict[str, str] | None, str | None]:
         """Per-request proxy decision, delegated to the shared selector."""
-        return ProxySelector(
-            pool=self.proxy_pool, static=self.proxies, force=self.force_proxy
-        ).select()
+        return self._selector.select()
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -566,8 +569,7 @@ class MegaUploader:
                     stream=True,
                 )
             except (requests.ConnectionError, requests.Timeout):
-                if picked_proxy and self.proxy_pool is not None:
-                    self.proxy_pool.report_failure(picked_proxy)
+                self._selector.report_failure(picked_proxy)
                 raise
             try:
                 status = resp.status_code
@@ -578,11 +580,9 @@ class MegaUploader:
                 upload_url = self._request_upload_url(0)
                 continue
             if status != 200:
-                if picked_proxy and self.proxy_pool is not None:
-                    self.proxy_pool.report_failure(picked_proxy)
+                self._selector.report_failure(picked_proxy)
                 raise TransferError(message=f"Zero-byte upload HTTP {status}")
-            if picked_proxy and self.proxy_pool is not None:
-                self.proxy_pool.report_success(picked_proxy)
+            self._selector.report_success(picked_proxy)
             token = body
             break
         if not token:
