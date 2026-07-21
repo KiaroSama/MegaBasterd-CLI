@@ -191,3 +191,38 @@ def test_truncated_folder_link_key_is_rejected():
     parsed = parse_link(f"https://mega.nz/folder/AAAAAAAA#{full[:-2]}/file/BBBBBBBB")
     with pytest.raises(KEY_REFUSED, match="15 bytes"):
         ds._resolve_folder_file(dl, parsed)
+
+
+# ---------------------------------------------------------------------------
+# C3 follow-up: a raw link key must be URL-safe base64, not merely decodable
+# ---------------------------------------------------------------------------
+#
+# `b64_url_decode` strips `,` (a MEGA artifact elsewhere) before decoding, so a
+# key with commas would decode to the right byte count and pass the length
+# guard. `parse_link` captures the comma into the key, so `require_link_key`
+# must reject it on the raw string.
+
+
+@pytest.mark.parametrize(
+    "junk_key",
+    ["{good},,,,", "{good_head},{good_tail}", ",{good}", "{good} spaced"],
+    ids=["trailing-commas", "comma-in-middle", "leading-comma", "space"],
+)
+def test_a_link_key_with_non_urlsafe_characters_is_rejected(junk_key):
+    """`parse_link` captures these into the key (standard base64 `+/=` it
+    rejects itself), so `require_link_key` is the gate that must refuse them."""
+    from megabasterd_cli.core.links import require_link_key
+
+    good = b64_url_encode(os.urandom(32))
+    key = junk_key.format(good=good, good_head=good[:10], good_tail=good[10:])
+    parsed = parse_link(f"https://mega.nz/file/AAAAAAAA#{key}")
+    with pytest.raises(KEY_REFUSED, match="URL-safe base64"):
+        require_link_key(parsed, "download")
+
+
+def test_a_clean_url_safe_key_still_passes():
+    from megabasterd_cli.core.links import require_link_key
+
+    good = b64_url_encode(os.urandom(32))  # only [A-Za-z0-9_-]
+    parsed = parse_link(f"https://mega.nz/file/AAAAAAAA#{good}")
+    assert require_link_key(parsed, "download") == good
