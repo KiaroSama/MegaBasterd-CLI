@@ -15,7 +15,9 @@ References:
 from __future__ import annotations
 
 import base64
+import binascii
 import json
+import re
 import struct
 from collections.abc import Iterable
 from typing import Any
@@ -28,9 +30,22 @@ from Crypto.Util import Counter
 # ---------------------------------------------------------------------------
 
 
+_STD_B64_RE = re.compile(r"\A[A-Za-z0-9+/]*\Z")
+
+
 def b64_url_decode(data: str) -> bytes:
-    """Decode MEGA's URL-safe base64 (no padding)."""
+    """Decode MEGA's URL-safe base64 (no padding).
+
+    Rejects characters outside the base64 alphabet instead of silently dropping
+    them. `base64.b64decode(..., validate=False)` discards non-alphabet chars
+    before checking padding, so a tampered key (a valid key plus junk) could
+    decode to the right length and slip past a length-only guard. We gate on the
+    alphabet *after* the URL-safe translation and the deliberate `,` strip, so
+    valid input still decodes byte-identically.
+    """
     data = data.replace("-", "+").replace("_", "/").replace(",", "")
+    if not _STD_B64_RE.match(data):
+        raise binascii.Error("non-base64 character in MEGA data")
     padding = "=" * ((4 - len(data) % 4) % 4)
     return base64.b64decode(data + padding)
 
