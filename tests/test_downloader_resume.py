@@ -8,18 +8,17 @@ from megabasterd_cli.core.errors import IntegrityError
 from megabasterd_cli.core.state import TransferState, save_state, state_path_for
 
 
-def test_integrity_fails_when_completed_chunk_mac_is_missing(tmp_path: Path):
-    chunks = list(iter_chunks(1024))
-    state = TransferState(
-        transfer_type="download",
-        source="https://mega.nz/file/test#key",
-        destination=str(tmp_path / "file.bin"),
-        total_size=1024,
-        completed_chunks=[0],
-    )
-    downloader = MegaDownloader(api=None)
+def test_integrity_fails_closed_when_the_file_cannot_be_read(tmp_path: Path):
+    """Integrity now re-MACs the bytes on disk, so a destination that is not
+    there (or is short) fails closed rather than trusting the resume state.
 
-    assert downloader._verify_integrity(state, chunks, b"\0" * 16, [0, 0]) is False
+    Chunk-completeness is a separate gate in the downloader; this method only
+    answers whether the file that exists matches the file MAC."""
+    chunks = list(iter_chunks(1024))
+    downloader = MegaDownloader(api=None)
+    missing = tmp_path / "file.bin"  # never written
+
+    assert downloader._verify_integrity(chunks, b"\0" * 16, b"\0" * 8, [0, 0], missing) is False
 
 
 def test_resume_state_must_match_source_destination_and_crypto(tmp_path: Path):

@@ -17,9 +17,16 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import cast
 
-from .chunks import MAX_CHUNKS, MAX_FILE_SIZE, Chunk, chunk_count, combine_chunk_macs, condense_mac
+from .chunks import (
+    MAX_CHUNKS,
+    MAX_FILE_SIZE,
+    Chunk,
+    chunk_count,
+    chunk_mac,
+    combine_chunk_macs,
+    condense_mac,
+)
 from .errors import NonRetryableTransferError
 from .state import TransferState
 
@@ -101,17 +108,45 @@ def is_usable_download_state(
 
 
 def verify_file_integrity(
-    state: TransferState,
     all_chunks: list[Chunk],
     aes_key: bytes,
+    nonce: bytes,
     mac_iv_a32: list[int],
+    destination: Path,
 ) -> bool:
-    """Combine per-chunk MACs and compare against the expected file MAC."""
-    chunk_macs = [state.get_chunk_mac(c.index) for c in all_chunks]
-    if any(m is None for m in chunk_macs):
-        missing = [c.index for c in all_chunks if state.get_chunk_mac(c.index) is None]
-        log.error("Missing chunk MACs for chunk(s) %s; integrity verification failed", missing)
+    """Re-MAC the file ON DISK and compare against the MAC in the file key.
+
+    The per-chunk MACs kept in the resume state are computed from each chunk's
+    plaintext in memory as it downloads, so combining THOSE only proves the
+    transfer decoded correctly - not that the bytes the user is left with match.
+    A chunk written by an earlier run against a destination that was replaced
+    since, or a silent disk write fault, leaves a stored MAC describing bytes
+    the file no longer holds, and the check passed regardless.
+
+    The destination file IS the decrypted plaintext (`fetch_chunk` writes each
+    chunk's plaintext at its offset), so reading it back and re-MACing is a true
+    check of the file that exists. It runs only when `verify_integrity` is on,
+    which is the point of that flag; the cost is one sequential read pass, small
+    beside the download it follows. Any read short of a chunk's length -
+    truncation, a missing file - fails closed.
+    """
+    macs: list[bytes] = []
+    try:
+        with open(destination, "rb") as f:
+            for c in all_chunks:
+                f.seek(c.offset)
+                data = f.read(c.size)
+                if len(data) != c.size:
+                    log.error(
+                        "Integrity check: chunk %d reads %d bytes from disk, expected %d",
+                        c.index,
+                        len(data),
+                        c.size,
+                    )
+                    return False
+                macs.append(chunk_mac(data, aes_key, nonce))
+    except OSError as exc:
+        log.error("Integrity check could not read the destination: %s", exc)
         return False
-    file_mac = combine_chunk_macs(cast(list[bytes], chunk_macs), aes_key)
-    condensed = condense_mac(file_mac)
+    condensed = condense_mac(combine_chunk_macs(macs, aes_key))
     return condensed[0] == mac_iv_a32[0] and condensed[1] == mac_iv_a32[1]

@@ -530,7 +530,9 @@ class MegaDownloader:
         # Integrity check
         integrity_ok = True
         if self.verify_integrity:
-            integrity_ok = self._verify_integrity(state, all_chunks, aes_key, mac_iv_a32)
+            integrity_ok = self._verify_integrity(
+                all_chunks, aes_key, nonce, mac_iv_a32, destination
+            )
             if not integrity_ok:
                 state_path = state_path_for(destination)
                 if self.keep_state_files_on_error:
@@ -596,13 +598,14 @@ class MegaDownloader:
 
     def _verify_integrity(
         self,
-        state: TransferState,
         all_chunks: list[Chunk],
         aes_key: bytes,
+        nonce: bytes,
         mac_iv_a32: list[int],
+        destination: Path,
     ) -> bool:
-        """Combine per-chunk MACs and compare against the expected file MAC."""
-        return verify_file_integrity(state, all_chunks, aes_key, mac_iv_a32)
+        """Re-MAC the file on disk and compare against the expected file MAC."""
+        return verify_file_integrity(all_chunks, aes_key, nonce, mac_iv_a32, destination)
 
     def _progress_snapshot(self) -> tuple[int, int]:
         with self._lock:
