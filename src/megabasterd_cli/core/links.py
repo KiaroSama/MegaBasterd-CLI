@@ -499,6 +499,14 @@ _EXPECTED_KEY_BYTES = {
     LinkType.FOLDER_IN_FOLDER: 16,
 }
 
+# A raw MEGA link key is unpadded URL-safe base64 and nothing else. The general
+# `b64_url_decode` strips `,` (a MEGA artifact in other contexts) before
+# decoding, so a key like `KEY,,,,` or `KE,Y` would otherwise reach the same
+# 32/16 bytes and pass the length guard. `parse_link`'s pattern does capture a
+# `,` into the key, so it has to be rejected HERE, on the raw string, not left
+# to a decoder that is deliberately lenient about it.
+_RAW_KEY_RE = re.compile(r"\A[A-Za-z0-9_-]+\Z")
+
 
 def require_link_key(parsed, what: str) -> str:
     """Return the link's decryption key, or fail with a message that says so.
@@ -525,6 +533,10 @@ def require_link_key(parsed, what: str) -> str:
     key = str(parsed.key)
     expected = _EXPECTED_KEY_BYTES.get(parsed.type)
     if expected is not None:
+        if not _RAW_KEY_RE.match(key):
+            raise MegaError(
+                message=f"{what} needs a link whose key is URL-safe base64; this one is not"
+            )
         try:
             raw = b64_url_decode(key)
         except (ValueError, binascii.Error) as exc:
