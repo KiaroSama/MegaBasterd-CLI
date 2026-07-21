@@ -93,10 +93,16 @@ def is_usable_download_state(
         return False
     if Path(state.destination) != destination:
         return False
+    # A resumable state must RECORD the crypto it belongs to and have it match.
+    # The old `metadata.get("aes_key") and ...` skipped the check when the key
+    # was absent, so a state that simply omitted it was reused - its completed
+    # chunks trusted without ever proving they were decrypted with this key. The
+    # downloader has written aes_key/nonce since v1.1.0 (format version 1), so a
+    # keyless state is tampered, not legacy; fail closed and start fresh.
     metadata = state.metadata or {}
-    if metadata.get("aes_key") and metadata.get("aes_key") != aes_key.hex():
+    if metadata.get("aes_key") != aes_key.hex():
         return False
-    if metadata.get("nonce") and metadata.get("nonce") != nonce.hex():
+    if metadata.get("nonce") != nonce.hex():
         return False
     chunk_indexes = {c.index for c in all_chunks}
     completed = set(state.completed_chunks)
