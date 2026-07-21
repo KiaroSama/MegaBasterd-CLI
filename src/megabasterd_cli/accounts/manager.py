@@ -7,7 +7,7 @@ import logging
 import threading
 from pathlib import Path
 
-from .storage import Account, AccountStorage, AccountStore, CredentialVault
+from .storage import Account, AccountStorage, AccountStore, CredentialVault, VaultUnlockError
 
 log = logging.getLogger(__name__)
 
@@ -102,6 +102,20 @@ class AccountManager:
     ) -> Account:
         if not self._vault:
             raise RuntimeError("Account store is locked; call unlock() first")
+        # Refuse to encrypt under a passphrase that doesn't open the rest of the
+        # vault: appending here would split the store across two passphrases
+        # with no single one that decrypts them all. `unlock()` cannot tell a
+        # right passphrase from a wrong one, so verify it against a real
+        # credential before the first mutation that writes new ciphertext.
+        if self.store.accounts:
+            try:
+                self._vault.decrypt(self.store.accounts[0].enc_password)
+            except VaultUnlockError as exc:
+                raise VaultUnlockError(
+                    "Passphrase does not match this vault; refusing to add an account "
+                    "that could not be decrypted with the others (or the first stored "
+                    "credential is corrupt)."
+                ) from exc
         # Check for duplicates
         for a in self.store.accounts:
             if a.email.lower() == email.lower():

@@ -110,6 +110,13 @@ def account_add(
 ) -> None:
     cfg = ctx.obj["config"]
     if password is None:
+        # Same trap as the vault passphrase (round-21): on Windows `getpass`
+        # reads the console through `msvcrt`, so a redirected/closed stdin never
+        # raises EOF and the process blocks forever, silent. Refuse before the
+        # prompt when it could not be answered.
+        if not _stdin_is_interactive():
+            print_error("Account password required: pass --password.")
+            ctx.exit(1)
         password = ask_password(f"Password for {email}")
 
     if verify:
@@ -132,6 +139,11 @@ def account_add(
     try:
         mgr.add_account(email, password, label=label, make_default=make_default)
         print_success(f"Account added: {email}")
+    except VaultUnlockError as e:
+        # A wrong passphrase would encrypt this account under a key the others
+        # do not share; refusing keeps the vault openable by one passphrase.
+        print_error(str(e))
+        ctx.exit(1)
     except ValueError as e:
         print_error(str(e))
 
