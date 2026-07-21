@@ -36,20 +36,6 @@ class UploadUrlExpiredError(Exception):
     """Raised when an upload slot is no longer usable and must be refreshed."""
 
 
-def _report_proxy(up, picked_proxy, *, ok: bool) -> None:
-    """Credit or debit the proxy that carried this request, once.
-
-    Every call site guards on the same two conditions, and the debit sites now
-    outnumber the credit site four to one - inlining the guard five times is
-    how one of them ends up missing it.
-    """
-    if picked_proxy and up.proxy_pool is not None:
-        if ok:
-            up.proxy_pool.report_success(picked_proxy)
-        else:
-            up.proxy_pool.report_failure(picked_proxy)
-
-
 def read_bounded_body(resp: requests.Response, limit: int = MAX_UPLOAD_RESPONSE_BYTES) -> bytes:
     """Read at most `limit` bytes from a streamed upload response body."""
     try:
@@ -156,7 +142,7 @@ def upload_chunk(
             stream=True,
         )
     except (requests.ConnectionError, requests.Timeout):
-        _report_proxy(up, picked_proxy, ok=False)
+        up._selector.report_failure(picked_proxy)
         raise
     if resp.status_code in UPLOAD_URL_EXPIRY_STATUS:
         # MEGA retired the slot. The proxy delivered the answer faithfully, so
@@ -164,7 +150,7 @@ def upload_chunk(
         resp.close()
         raise UploadUrlExpiredError(f"Upload URL expired on chunk {chunk.index}")
     if resp.status_code != 200:
-        _report_proxy(up, picked_proxy, ok=False)
+        up._selector.report_failure(picked_proxy)
         resp.close()
         if resp.status_code >= 500:
             raise RetryableTransferError(
@@ -207,7 +193,7 @@ def upload_chunk(
                 )
             )
     except Exception:
-        _report_proxy(up, picked_proxy, ok=False)
+        up._selector.report_failure(picked_proxy)
         raise
 
     # Only now is the response known to be well-formed. Reporting success
@@ -215,7 +201,7 @@ def upload_chunk(
     # and `SmartProxyPool.pick` weights by success ratio - so the broken proxy
     # was progressively PREFERRED. Kept OUTSIDE the block above so a later
     # bookkeeping failure cannot turn a delivered chunk into a proxy blame.
-    _report_proxy(up, picked_proxy, ok=True)
+    up._selector.report_success(picked_proxy)
     # Data before state: an upload has no local destination to flush, so
     # its durability point is the HTTP 200 above - the endpoint already
     # holds the chunk before the state below claims it does. The ordering

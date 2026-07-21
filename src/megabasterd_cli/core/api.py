@@ -215,6 +215,13 @@ class MegaAPIClient:
         self.proxy_pool = proxy_pool
         self.force_proxy = force_proxy
         self._static_proxies = dict(proxies) if proxies else None
+        # One selector per client: `select()` and `report_*` only read the
+        # (thread-safe) pool, so a persistent one matches the per-request copies
+        # this built before and is the single home of the "credit only a
+        # picked proxy" guard. `clone()` gives each client its own.
+        self._selector = ProxySelector(
+            pool=proxy_pool, static=self._static_proxies, force=force_proxy
+        )
         # Non-secret identity instrumentation: lets tests and -vv runs prove
         # that independent parallel transfers use distinct client/session
         # objects (never log SIDs or keys here).
@@ -240,9 +247,7 @@ class MegaAPIClient:
 
     def _request_proxies(self) -> tuple[dict[str, str] | None, str | None]:
         """Per-request proxy decision, delegated to the shared selector."""
-        return ProxySelector(
-            pool=self.proxy_pool, static=self._static_proxies, force=self.force_proxy
-        ).select()
+        return self._selector.select()
 
     # ------------------------------------------------------------------
     # Session
@@ -429,8 +434,7 @@ class MegaAPIClient:
         finally:
             with contextlib.suppress(Exception):
                 response.close()
-        if picked_proxy and self.proxy_pool is not None:
-            self.proxy_pool.report_success(picked_proxy)
+        self._selector.report_success(picked_proxy)
 
         log.debug("MEGA API response: %s", data)
 
@@ -460,8 +464,7 @@ class MegaAPIClient:
 
     def _blame_proxy(self, picked_proxy: str | None) -> None:
         """Count a failure against the proxy that actually caused it."""
-        if picked_proxy and self.proxy_pool is not None:
-            self.proxy_pool.report_failure(picked_proxy)
+        self._selector.report_failure(picked_proxy)
 
     # ------------------------------------------------------------------
     # Convenience methods for common API actions

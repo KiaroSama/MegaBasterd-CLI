@@ -38,7 +38,7 @@ from megabasterd_cli.core.upload_transport import (
     is_retryable_upload_error,
     upload_chunk,
 )
-from megabasterd_cli.proxy.selector import ProxyRequiredError
+from megabasterd_cli.proxy.selector import ProxyRequiredError, ProxySelector
 
 TOTAL = 3072
 CHUNK_SIZE = 1024
@@ -83,6 +83,9 @@ class _Uploader:
         self.timeout = 5
         self.user_agent = "test"
         self.proxy_pool = pool
+        # Mirror the real uploader: reporting goes through a persistent selector
+        # over the same pool, not a raw `proxy_pool.report_*` call.
+        self._selector = ProxySelector(pool=pool)
         self.limiter = type("L", (), {"consume": lambda self, n: None})()
         self._speed_meter = type("M", (), {"update": lambda self, n: None})()
 
