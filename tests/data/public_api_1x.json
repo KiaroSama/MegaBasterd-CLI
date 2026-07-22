@@ -205,6 +205,16 @@
     "validate_config",
     "validate_config_value"
   ],
+  "megabasterd_cli.core._link_http": [
+    "MAX_SERVICE_REDIRECTS",
+    "MAX_SERVICE_RESPONSE_BYTES",
+    "PayloadTooLargeError",
+    "STREAM_CHUNK_BYTES",
+    "UnsafeTargetError",
+    "read_bounded_bytes",
+    "read_bounded_text",
+    "validate_safe_target"
+  ],
   "megabasterd_cli.core.api": [
     "API_BASE_URL",
     "AmbiguousMutationError",

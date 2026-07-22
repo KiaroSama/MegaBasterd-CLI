@@ -12,13 +12,25 @@ reverse - so there is no import cycle.
 
 from __future__ import annotations
 
-import contextlib
-import ipaddress
-import json
 import re
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse
 
+from ._link_http import MAX_SERVICE_REDIRECTS as MAX_SERVICE_REDIRECTS  # re-export
+from ._link_http import (
+    MAX_SERVICE_RESPONSE_BYTES,
+    PayloadTooLargeError,
+    UnsafeTargetError,
+    _close_quietly,
+    _normalize_host,
+    _post_validated,
+    _read_bounded_json,
+    _require_selector,
+    read_bounded_text,
+    validate_safe_target,
+)
+from ._link_http import STREAM_CHUNK_BYTES as STREAM_CHUNK_BYTES  # re-export
+from ._link_http import read_bounded_bytes as read_bounded_bytes  # re-export
 from .links import (
     MAX_MEGACRYPTER_PBKDF2_ITERATIONS,
     ElcPayload,
@@ -32,83 +44,11 @@ from .links import (
     parse_link,
 )
 
-
-def _require_selector(selector, caller: str):
-    """Refuse to guess a proxy policy.
-
-    Defaulting to `ProxySelector()` here made force_smart_proxy depend on every
-    caller remembering to pass it: one omission (MegaDownloader's MegaCrypter
-    hop) silently opened a direct socket. A missing policy is now a programming
-    error, caught before any request is built.
-    """
-    if selector is None:
-        raise ValueError(
-            f"{caller}() requires an explicit selector: omitting it would silently "
-            "disable force_smart_proxy for this request. Pass "
-            "ProxySelector.from_config(cfg), or ProxySelector(force=False) to opt out."
-        )
-    return selector
-
-
-class PayloadTooLargeError(ValueError):
-    """An untrusted payload or response exceeded the size we are willing to buffer."""
-
-
 # A real ELC link carries a few KB of gzip. Both ends are bounded because the
 # ratio between them is attacker-chosen: deflate reaches ~1029:1, so capping the
 # input alone still allows a 1 MiB link to inflate to a gigabyte.
 MAX_ELC_COMPRESSED_BYTES = 1 << 20  # 1 MiB taken straight from the pasted link
 MAX_ELC_DECOMPRESSED_BYTES = 8 << 20  # 8 MiB after inflation
-# Real ELC / MegaCrypter replies are a few KB.
-MAX_SERVICE_RESPONSE_BYTES = 2_000_000
-
-
-STREAM_CHUNK_BYTES = 65536
-
-
-def read_bounded_bytes(response, limit: int, what: str = "Service") -> bytes:
-    """Return the body, refusing to buffer more than `limit` bytes.
-
-    Must be used with `stream=True`. Touching `response.text` or
-    `response.json()` first is useless as a defence - by then `requests` has
-    already read the whole body AND transparently inflated any
-    `Content-Encoding: gzip`, which makes every response its own decompression
-    bomb. `iter_content` yields the DECODED bytes, so the cap applies to what
-    actually lands in memory.
-
-    The chunk size is capped at `limit + 1` so a small cap cannot buffer a full
-    64 KiB block before noticing: overshoot is always at most one byte past the
-    cap or one block, whichever is smaller.
-
-    `core.api` and `core.upload_transport` wrap this to translate
-    `PayloadTooLargeError` into the exception type their own callers catch.
-    """
-    total = 0
-    parts: list[bytes] = []
-    for block in response.iter_content(chunk_size=min(STREAM_CHUNK_BYTES, limit + 1)):
-        total += len(block)
-        if total > limit:
-            close = getattr(response, "close", None)
-            if close is not None:
-                close()
-            raise PayloadTooLargeError(f"{what} response is unexpectedly large")
-        parts.append(block)
-    return b"".join(parts)
-
-
-def read_bounded_text(response, limit: int, what: str = "Service") -> str:
-    """`read_bounded_bytes` decoded with the response's own declared encoding."""
-    raw = read_bounded_bytes(response, limit, what)
-    encoding = getattr(response, "encoding", None) or "utf-8"
-    return raw.decode(encoding, errors="replace")
-
-
-def _read_bounded_json(response, limit: int, what: str):
-    text = read_bounded_text(response, limit, what)
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{what} returned non-JSON data: {text[:120]}") from exc
 
 
 def _gunzip_bounded(payload: bytes) -> bytes:
@@ -176,75 +116,6 @@ def decode_elc_payload(parsed: ParsedLink) -> ElcPayload:
     token_len = int.from_bytes(take(2), "little", signed=False)
     data_token = take(token_len).decode("utf-8")
     return ElcPayload(encrypted_links, service_url, data_token)
-
-
-# Maximum number of HTTPS redirects any link-service POST will follow.
-MAX_SERVICE_REDIRECTS = 5
-
-
-def _post_validated(
-    url: str,
-    validate,  # Callable[[str], None] - raises on a destination we refuse
-    selector,  # ProxySelector
-    timeout: int,
-    what: str,
-    max_redirects: int = MAX_SERVICE_REDIRECTS,
-    **post_kwargs,
-):
-    """POST without automatic redirects, re-validating every hop.
-
-    The ONE hop loop shared by all three link services. `validate_safe_target`
-    (or, for DLC, the stricter same-origin check) used to run once on the
-    initial URL while `requests` was left to follow redirects itself, so an
-    attacker-named host could answer 307 and have the credential body re-POSTed
-    to loopback, link-local or RFC1918. Redirects are therefore followed by
-    hand: `allow_redirects=False`, validate, then connect.
-
-    Returns `(response, picked_proxy)`. The proxy is NOT credited here - only
-    the caller knows whether the body proved usable - but a transport failure
-    is blamed on it immediately, since that is unambiguous. The proxy is
-    selected per hop, so a redirect can never downgrade to a direct request,
-    and the reply is requested with `stream=True` so the caller can bound the
-    body while reading it.
-    """
-    import requests
-
-    current = url
-    for _ in range(max_redirects + 1):
-        # Validate before connecting: covers the initial URL and every redirect.
-        validate(current)
-        request_proxies, picked = selector.select()
-        try:
-            resp = requests.post(
-                current,
-                timeout=timeout,
-                proxies=request_proxies,
-                allow_redirects=False,
-                stream=True,
-                **post_kwargs,
-            )
-        except requests.RequestException:
-            selector.report_failure(picked)
-            raise
-        status = getattr(resp, "status_code", 200)
-        if status in (301, 302, 303, 307, 308):
-            location = resp.headers.get("Location") if hasattr(resp, "headers") else None
-            with contextlib.suppress(Exception):
-                resp.close()
-            if not location:
-                raise ValueError(f"{what} redirect is missing a Location header")
-            # Resolve relative redirects against the current URL; the next loop
-            # iteration validates the result before any request is sent.
-            current = urljoin(current, location.strip())
-            continue
-        return resp, picked
-    raise ValueError(f"{what} exceeded the maximum number of redirects")
-
-
-def _close_quietly(response) -> None:
-    """Return the connection to the pool even when the response was rejected."""
-    with contextlib.suppress(Exception):
-        response.close()
 
 
 def resolve_elc_links(
@@ -338,62 +209,6 @@ MAX_DLC_REDIRECTS = 5
 # official JDownloader DLC service is allowed; any other initial endpoint is
 # refused to prevent SSRF, even if it uses HTTPS and resolves publicly.
 _APPROVED_DLC_ORIGINS = frozenset({("service.jdownloader.org", 443)})
-
-
-def _normalize_host(host: str) -> str:
-    """Normalize a hostname for exact origin comparison.
-
-    Lowercases, strips a single trailing dot, and converts to ASCII/IDNA so a
-    Unicode lookalike or trailing-dot variant cannot be mistaken for an approved
-    host. IP literals and un-encodable values are returned lowercased unchanged
-    (they simply will not match the domain allowlist).
-    """
-    host = (host or "").strip().lower().rstrip(".")
-    if not host:
-        return ""
-    try:
-        # idna encoding maps Unicode lookalikes to punycode; pure-ASCII hosts
-        # are returned unchanged.
-        return host.encode("idna").decode("ascii")
-    except (UnicodeError, ValueError):
-        return host
-
-
-class UnsafeTargetError(ValueError):
-    """A link payload named a destination we refuse to contact."""
-
-
-def validate_safe_target(url: str, *, what: str) -> None:
-    """Reject any destination an untrusted link payload must not reach.
-
-    ELC and MegaCrypter both take their service URL from the LINK ITSELF, so a
-    crafted link could previously point them at `http://127.0.0.1`, a cloud
-    metadata address, or an RFC1918 host - and the resolver would happily POST
-    the user's ELC credentials or link password there.
-
-    Enforces: HTTPS only; no embedded userinfo; a real host; and, for literal
-    IPs, globally routable only (blocks loopback, private, link-local -
-    including 169.254.169.254 - reserved, multicast and unspecified, for both
-    IPv4 and IPv6).
-
-    Hostname-based targets still resolve through DNS at connect time; this is
-    the same limitation the DLC allowlist works around by pinning an approved
-    origin, and is documented rather than silently assumed away.
-    """
-    parts = urlparse(url or "")
-    if parts.scheme != "https":
-        raise UnsafeTargetError(f"Refusing to contact a non-HTTPS {what} endpoint")
-    if parts.username or parts.password:
-        raise UnsafeTargetError(f"Refusing {what} endpoint with embedded credentials")
-    raw_host = parts.hostname or ""
-    if not _normalize_host(raw_host):
-        raise UnsafeTargetError(f"Refusing {what} endpoint without a host")
-    try:
-        ip = ipaddress.ip_address(raw_host)
-    except ValueError:
-        ip = None
-    if ip is not None and not ip.is_global:
-        raise UnsafeTargetError(f"Refusing {what} endpoint at a non-global IP address")
 
 
 def _dlc_origin(url: str) -> tuple[str, int]:
