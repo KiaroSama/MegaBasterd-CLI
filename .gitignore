@@ -174,3 +174,8 @@ explain-AI.md
 /.env.*
 /.kiro/
 /explain-AI.md
+
+!/.env.example
+!/.env.sample
+!/.env.template
+!/.env.dist
