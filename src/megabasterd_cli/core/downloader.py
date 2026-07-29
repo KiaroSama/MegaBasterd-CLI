@@ -27,6 +27,7 @@ so the public surface is unchanged:
 from __future__ import annotations
 
 import logging
+import socket
 import threading
 import time
 from collections.abc import Callable
@@ -135,6 +136,32 @@ def _is_transient_chunk_failure(exc: BaseException) -> bool:
     )
 
 
+def _local_route_fingerprint() -> str | None:
+    """The local address the OS would use to reach the internet, or None.
+
+    `connect()` on a DATAGRAM socket transmits nothing: it only asks the kernel
+    to pick a route and bind a source address. The destination is 192.0.2.0/24
+    (TEST-NET-1, the documentation range), which is never routed anywhere. So
+    this costs no packet, no DNS lookup and no third party - unlike a "what is
+    my IP" service, which would answer more precisely at the price of telling a
+    host the user never chose that they are downloading right now. This project
+    already refuses to contact link-supplied hosts for that same class of
+    reason, so one is not added here.
+
+    The trade is deliberate and one-sided in the safe direction: this sees the
+    LOCAL end of the route, so a change is proof the route changed, but the
+    absence of a change proves nothing. A VPN reconnect, a redial or an
+    interface swap is caught; a public IP that changes behind NAT (router
+    reboot) stays invisible and waits the backoff out exactly as before.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("192.0.2.1", 9))
+            return str(probe.getsockname()[0])
+    except OSError:
+        return None
+
+
 class MegaDownloader:
     """Multi-threaded downloader for one MEGA file."""
 
@@ -215,15 +242,43 @@ class MegaDownloader:
     # Quota recovery
     # ------------------------------------------------------------------
     def _get_with_quota_wait(self, fn):
-        """Call `fn()` retrying on EOVERQUOTA by sleeping per the config."""
+        """Call `fn()` retrying on EOVERQUOTA, cutting the wait short when the
+        route can change.
+
+        A quota block belongs to the exit IP that hit it, not to the clock, so
+        sleeping the full backoff on a route that is known to be blocked is the
+        one thing that cannot help. Two cheap local signals shorten it:
+
+        * a configured proxy pool with an available entry is worth ONE
+          immediate retry - the next request re-selects through
+          `ProxySelector`, so it can leave the blocked route. Exactly one, so a
+          single-proxy pool cannot burn the whole attempt budget in a blink;
+        * the local route changing during the wait (see `_wait_out_quota`).
+
+        Neither adds an attempt or a second of sleep: both only ever REMOVE
+        waiting from the same bounded `quota_max_wait_loops x
+        quota_wait_seconds` budget.
+        """
         attempts = max(1, self.quota_max_wait_loops or 1)
+        escalated = False
         for i in range(attempts):
             try:
                 return fn()
             except QuotaError as exc:
                 wait = self.quota_wait_seconds
-                if wait <= 0 or i == attempts - 1:
+                if wait <= 0 or i == attempts - 1 or self._stop_event.is_set():
                     raise
+                if not escalated and self._pool_route_available():
+                    escalated = True
+                    log.warning(
+                        "MEGA quota exceeded (%s); retrying through the proxy pool "
+                        "instead of waiting %ds (%d/%d)",
+                        exc,
+                        wait,
+                        i + 1,
+                        attempts,
+                    )
+                    continue
                 log.warning(
                     "MEGA quota exceeded (%s); waiting %ds before retry (%d/%d)",
                     exc,
@@ -231,15 +286,41 @@ class MegaDownloader:
                     i + 1,
                     attempts,
                 )
-                # Sleep responsively to stop signals
-                slept = 0
-                while slept < wait and not self._stop_event.is_set():
-                    time.sleep(min(2.0, wait - slept))
-                    slept += 2
+                self._wait_out_quota(wait)
                 if self._stop_event.is_set():
                     raise
         # Unreachable but keeps type checkers happy
         raise QuotaError(message="Quota recovery exhausted")
+
+    def _pool_route_available(self) -> bool:
+        """True when the pool still holds an entry it could hand the next try.
+
+        Read-only on purpose. `select()` would raise ProxyRequiredError under
+        force mode, turning "should I wait?" into a hard failure, and `pick()`
+        would mutate `last_used` for a request nobody is making. The retry
+        itself still goes through `ProxySelector.select()` like every other
+        request, so this decides only WHEN to retry - never whether the socket
+        may be direct.
+        """
+        pool = self._selector.pool
+        return pool is not None and any(entry.is_available for entry in pool.list())
+
+    def _wait_out_quota(self, wait: int) -> None:
+        """Sleep up to `wait` seconds, waking early on cancel or a route change.
+
+        The route is re-read on the tick the stop event already needs, so
+        detection costs one local syscall every two seconds and no extra
+        wakeups. A probe that fails mid-wait returns None and is NOT treated as
+        a change; no baseline at all disables detection entirely.
+        """
+        route = _local_route_fingerprint()
+        slept = 0
+        while slept < wait and not self._stop_event.is_set():
+            time.sleep(min(2.0, wait - slept))
+            slept += 2
+            if route is not None and _local_route_fingerprint() not in (None, route):
+                log.info("Local route changed during the quota wait; retrying now")
+                return
 
     # ------------------------------------------------------------------
     # URL refresh helpers
