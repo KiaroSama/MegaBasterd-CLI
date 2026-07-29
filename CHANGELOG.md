@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- Account login works again. Every login that went through the RSA session path failed with "Malformed RSA private key in login response": the account's private key is wrapped block by block with a zero IV, but it was being unwrapped as one chained CBC stream, so only its first 16 bytes survived and the four length-prefixed integers no longer parsed. The same path also rendered the decrypted session id at the full modulus width, which prepended padding bytes and truncated the id; it is now derived the way MEGA's own client derives it.
+
 ### Security (deep audit rounds)
 - Closed an SSRF in ELC and MegaCrypter link resolution: the service URL comes from the untrusted link, and although the initial URL was validated, redirects were followed automatically, so a hostile host could answer `307` and have the credential body (ELC user/API key, or the MegaCrypter link password and session) re-POSTed to loopback, link-local, or RFC1918 addresses. Every hop is now validated with automatic redirects disabled, matching the DLC path.
 - The MegaCrypter host-supplied download URL is now validated (HTTPS-only, no userinfo, globally-routable host) before any fetcher connects to it, for both `download` and `stream`.
