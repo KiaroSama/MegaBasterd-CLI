@@ -27,6 +27,7 @@ from ..ui.prompts import (
 )
 from ..ui.transfer_progress import TransferProgress
 from ..upload_support import QuotaLedger, finalize_upload_success
+from ..utils.hooks import run_all_finished_command
 from ..utils.redaction import redact_text
 from ..utils.speed import make_limiter
 from .account_cmd import require_vault_passphrase
@@ -252,6 +253,9 @@ def upload(
     clients: dict[str, MegaClient] = {}  # email -> logged-in BASE client (cached)
     client_cache_lock = threading.Lock()
     failures = 0
+    succeeded = 0
+    # Guards BOTH counters: they are written from parallel upload workers and
+    # read once, on this thread, to summarise the batch.
     fail_lock = threading.Lock()
     notes: list[tuple[str, str]] = []
     notes_lock = threading.Lock()
@@ -375,8 +379,9 @@ def upload(
     )
 
     def _run_one(job: tuple[Path, int]) -> None:
+        nonlocal succeeded
         file_path, size = job
-        _upload_one_sequential(
+        ok = _upload_one_sequential(
             file_path,
             size,
             ledger=ledger,
@@ -400,6 +405,9 @@ def upload(
             fail_item=_fail_item,
             machine=machine,
         )
+        if ok:
+            with fail_lock:
+                succeeded += 1
 
     # Parallel whenever more than one FLAT file is queued — including
     # `--auto-account`, which selects/reserves per file safely from the
@@ -429,6 +437,14 @@ def upload(
     printer = {"success": print_success, "info": print_info, "error": print_error}
     for kind, message in notes:
         printer[kind](message)
+
+    # Exactly once per invocation, on this thread, after every job has been
+    # attempted - parallel or not, `--keep-going` or not. `ctx.exit` below
+    # raises, so this must come first. An empty batch is filtered in the hook.
+    run_all_finished_command(
+        cfg.all_finished_command, kind="upload", succeeded=succeeded, failed=failures
+    )
+
     if failures:
         print_warn(f"{failures} upload item(s) failed.")
         ctx.exit(1)
@@ -454,8 +470,14 @@ def _upload_one_sequential(
     note,
     fail_item,
     machine: MachineOutput | None = None,
-) -> None:  # noqa: C901 - one cohesive per-file state machine
-    """Upload one job, selecting the account at start time.
+) -> bool:  # noqa: C901 - one cohesive per-file state machine
+    """Upload one job, selecting the account at start time. True when it landed.
+
+    The return value is what lets the caller count SUCCEEDED jobs for the
+    batch-completion hook. Deriving it from `len(jobs) - failures` instead
+    would be wrong: one `--keep-going` tree reports one failure per failed file
+    inside it, so a run with a failed tree plus a successful file subtracts to
+    zero (or below) and loses the file that actually made it.
 
     Thread-safe: safe to call concurrently (one call per file). The account is
     reserved from the live ledger immediately before the file starts, and each
@@ -478,13 +500,13 @@ def _upload_one_sequential(
                     f"No stored account has enough known free space for {file_path.name}.",
                     path=file_path,
                 )
-                return
+                return False
         else:
             email = fixed_email
             if email is None:
                 progress.finish_item(row, "failed")
                 fail_item(f"No active session for {file_path.name}.", path=file_path)
-                return
+                return False
 
         client = worker_for_email(email)
         if client is None:
@@ -494,7 +516,7 @@ def _upload_one_sequential(
                 continue
             progress.finish_item(row, "failed")
             fail_item(f"No active session for {file_path.name}.", path=file_path, account=email)
-            return
+            return False
         if ledger is not None:
             note("info", f"Using {email} for {file_path.name}")
 
@@ -511,7 +533,7 @@ def _upload_one_sequential(
                     exc=exc,
                     account=email,
                 )
-                return
+                return False
 
             uploader = make_uploader(client)
             try:
@@ -543,7 +565,7 @@ def _upload_one_sequential(
                         progress.finish_item(row, "failed")
                         if ledger is not None:
                             refresh_quota(email)
-                    return
+                    return tree_ok
                 result = uploader.upload_file(
                     file_path,
                     target_handle=target_handle,
@@ -561,7 +583,7 @@ def _upload_one_sequential(
                     machine=machine,
                 )
                 progress.finish_item(row, "complete")
-                return
+                return True
             except QuotaError as exc:
                 attempted.add(email)
                 refresh_quota(email)
@@ -576,7 +598,7 @@ def _upload_one_sequential(
                     exc=exc,
                     account=email,
                 )
-                return
+                return False
             except MegaError as exc:
                 if ledger is not None:
                     # A failed single file consumed nothing; a partial tree DID
@@ -592,7 +614,7 @@ def _upload_one_sequential(
                     exc=exc,
                     account=email,
                 )
-                return
+                return False
             except Exception as exc:  # noqa: BLE001
                 log.exception("Unexpected error during upload")
                 if ledger is not None:
@@ -607,7 +629,7 @@ def _upload_one_sequential(
                     exc=exc,
                     account=email,
                 )
-                return
+                return False
         finally:
             # Close the per-transfer worker's HTTP session WITHOUT logging out
             # the shared cached account session.
