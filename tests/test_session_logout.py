@@ -207,3 +207,20 @@ def test_a_cloud_command_does_not_invalidate_the_session_it_cached():
         "client.logout()" not in source
     ), "a cloud command ends the session it just cached; use close() to keep it"
     assert "client.close()" in source
+
+
+def test_the_launcher_offers_logout_in_both_account_menus():
+    """A CLI-only command is invisible to anyone driving the launcher.
+
+    `mb account logout` landed as a command but not as a menu entry, so the
+    answer to "where is logout?" was "in a help page you were not reading".
+    Both menus that already offer add/list must offer it too, or the two
+    disagree about what the app can do.
+    """
+    from megabasterd_cli import launcher_menu as lm
+
+    for menu in (lm.ACCOUNT_MENU, lm.SETTINGS_MENU):
+        labels = [label for label, _ in menu.entries]
+        assert any(
+            "Log out" in label for label in labels
+        ), f"{menu.title} lists add/list but no way to log out: {labels}"
