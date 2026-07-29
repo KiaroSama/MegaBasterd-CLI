@@ -8,7 +8,7 @@ from collections.abc import Callable
 import click
 
 from ..accounts.manager import AccountManager, AccountNotFound
-from ..config import accounts_file
+from ..config import accounts_file, session_dir
 from ..core.client import MegaClient, MegaNode
 from ..core.errors import MegaError
 from ..core.links import LinkType, parse_link
@@ -26,6 +26,55 @@ from .api_support import api_for
 
 log = logging.getLogger(__name__)
 _console = make_console()
+
+
+def _session_path(account_id: str):
+    """One encrypted session file per account, under the user's data dir."""
+    from hashlib import sha256
+
+    # The account id can be an email or a label; hash it so the filename never
+    # carries the address around on disk.
+    return session_dir() / f"{sha256(account_id.lower().encode('utf-8')).hexdigest()[:32]}.session"
+
+
+def _restore_session(client: MegaClient, account_id: str, passphrase: str) -> bool:
+    """Reuse a stored session instead of logging in again.
+
+    The passphrase is the one already given to unlock the account vault, so
+    reusing a session costs the user no extra prompt - and a new machine, or a
+    changed passphrase, simply falls through to a normal login.
+
+    A stored session can be stale (MEGA expired it, or the user logged out
+    elsewhere), so it is PROVEN before it is trusted: one cheap authenticated
+    call. A dead session must never be handed to a command as if it worked.
+    """
+    path = _session_path(account_id)
+    if not path.is_file():
+        return False
+    session = client.load_session(path, passphrase)
+    if session is None:
+        return False
+    client.session = session
+    client.api.set_session(session.sid)
+    try:
+        client.api.request({"a": "ug"})
+    except Exception:  # noqa: BLE001 - any failure means "log in properly"
+        log.debug("Stored session for %s is no longer valid; logging in again", account_id)
+        client.session = None
+        client.invalidate_cache()
+        return False
+    log.debug("Reused the stored session for %s", account_id)
+    return True
+
+
+def _remember_session(client: MegaClient, account_id: str, passphrase: str) -> None:
+    """Persist the session encrypted with the vault passphrase; never fatal."""
+    try:
+        session_dir().mkdir(parents=True, exist_ok=True)
+        client.save_session(_session_path(account_id), passphrase)
+    except (OSError, MegaError) as exc:
+        # Losing the cache is an inconvenience, not a failed command.
+        log.debug("Could not store the session for %s: %s", account_id, exc)
 
 
 def login_client(
@@ -74,8 +123,11 @@ def login_client(
 
     api = api_for(cfg)
     client = MegaClient(api=api)
+    if _restore_session(client, account_id, passphrase):
+        return client
     try:
         client.login(acc.email, password, mfa_code=mfa_code, mfa_prompt=ask_mfa_code)
+        _remember_session(client, account_id, passphrase)
     except MegaError as exc:
         # The caller only gets a client it can close if login succeeded, so
         # a failure here has to release the session it just opened.
