@@ -28,6 +28,20 @@ from .responses import _expect_field, _expect_mapping
 log = logging.getLogger(__name__)
 
 
+def _read_mpi(blob: bytes, offset: int) -> tuple[int, int]:
+    """One MEGA MPI at `offset` -> (value, bytes consumed including the prefix).
+
+    The prefix is a BIT count, not a byte count. Every length-prefixed integer
+    MEGA sends uses this shape - the four private-key factors and the encrypted
+    session id alike - so they read through here rather than each call site
+    re-deriving it, which is how the session id ended up being parsed as if the
+    prefix were part of the number.
+    """
+    bit_len = int.from_bytes(blob[offset : offset + 2], "big")
+    byte_len = (bit_len + 7) // 8
+    return int.from_bytes(blob[offset + 2 : offset + 2 + byte_len], "big"), 2 + byte_len
+
+
 @dataclass
 class MegaSession:
     """Active MEGA login session."""
@@ -146,26 +160,31 @@ class AuthOperations(NodeOperations):
     def _decode_session_id(self, csid_encrypted: bytes, rsa_priv_blob: bytes) -> str:
         """Decode the session ID using the RSA private key (account v1/v2).
 
-        The RSA private key is stored as four big-endian length-prefixed integers
-        (p, q, d, u). We decrypt CSID with d/n and take the first 43 bytes.
+        The RSA private key is four MPIs (p, q, d, u) and CSID is one more. We
+        decrypt CSID with d/n and take the first 43 bytes.
         """
         parts = []
         cursor = 0
         for _ in range(4):
             if cursor + 2 > len(rsa_priv_blob):
                 break
-            bit_len = int.from_bytes(rsa_priv_blob[cursor : cursor + 2], "big")
-            byte_len = (bit_len + 7) // 8
-            cursor += 2
-            parts.append(int.from_bytes(rsa_priv_blob[cursor : cursor + byte_len], "big"))
-            cursor += byte_len
+            value, width = _read_mpi(rsa_priv_blob, cursor)
+            parts.append(value)
+            cursor += width
 
         if len(parts) < 4:
             raise AuthError(message="Malformed RSA private key in login response")
 
         p, q, d, _u = parts
         n = p * q
-        decrypted = pow(int.from_bytes(csid_encrypted, "big"), d, n)
+        # CSID is an MPI too, so the 2-byte BIT-LENGTH prefix is not part of the
+        # number. Feeding the whole blob in shifts the ciphertext by two bytes
+        # and pushes it past n, so `pow` silently operated on `ciphertext mod n`
+        # - a different value entirely. The RSA maths still ran and login still
+        # "succeeded", but the session id was garbage and the first real API
+        # call after it came back ESID (-15). `account add --verify` never made
+        # that second call, which is why it looked fine.
+        decrypted = pow(_read_mpi(csid_encrypted, 0)[0], d, n)
         # Minimal-width, NOT padded to the modulus. The plaintext is always
         # smaller than n, so padding to the modulus width prepends zero bytes
         # and shifts the session id: the first 43 bytes would then be padding

@@ -68,15 +68,21 @@ def _login_response(rsa_key, master_key: bytes, session_id: bytes) -> dict:
     blob = _mpi(rsa_key.p) + _mpi(rsa_key.q) + _mpi(rsa_key.d) + _mpi(rsa_key.u)
     blob += b"\x00" * (-len(blob) % 16)
 
-    # CSID is that block encrypted to the account's PUBLIC key.
+    # CSID is that block encrypted to the account's PUBLIC key - and it goes on
+    # the wire as an MPI, exactly like the four private-key integers above.
+    # This fixture used to emit the bare ciphertext instead, so it agreed with a
+    # reader that fed the 2-byte length prefix into the RSA exponentiation as
+    # part of the number. The maths still ran (on ciphertext mod n), the test
+    # still passed, and every real login produced a session id the server
+    # rejected with ESID. A fixture that does not match the wire only proves the
+    # reader is self-consistent.
     plaintext = _csid_plaintext(rsa_key, session_id)
     csid = pow(int.from_bytes(plaintext, "big"), rsa_key.e, rsa_key.n)
-    csid_bytes = csid.to_bytes((rsa_key.n.bit_length() + 7) // 8, "big")
 
     return {
         "k": b64_url_encode(aes_key_wrap_encrypt(master_key, login_key)),
         "privk": b64_url_encode(aes_key_wrap_encrypt(blob, master_key)),
-        "csid": b64_url_encode(csid_bytes),
+        "csid": b64_url_encode(_mpi(csid)),
         "u": "user-handle",
     }
 
