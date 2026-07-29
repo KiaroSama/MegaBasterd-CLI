@@ -104,3 +104,52 @@ def test_the_derived_key_is_cached_per_parameter_set():
     vault.decrypt(blob)
     assert len(seen) == 2, "both reads go through _derive"
     assert len(set(seen)) == 1, "and share one parameter set, so scrypt runs once"
+
+
+def test_adding_an_account_to_an_older_vault_says_so_not_wrong_passphrase(tmp_path):
+    """The add path must not flatten the vault's reason into "wrong passphrase".
+
+    `add_account` verifies the passphrase against a stored credential before
+    writing new ciphertext, which is right - but it replaced whatever the vault
+    said with one generic message. Someone whose credentials predate the
+    current format was therefore told their passphrase was wrong and retyped it
+    forever: NO passphrase opens an older-format blob. The vault's own answer
+    already names the fix, so it has to survive the wrapping.
+    """
+    import json
+
+    from megabasterd_cli.accounts.manager import AccountManager
+
+    path = tmp_path / "accounts.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "default_email": None,
+                "accounts": [
+                    {"email": "old@example.com", "enc_password": _legacy_blob(PASSPHRASE, SECRET)}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manager = AccountManager(path)
+    manager.unlock(PASSPHRASE)
+    with pytest.raises(VaultUnlockError, match="older vault format"):
+        manager.add_account("new@example.com", "pw")
+
+
+def test_a_genuinely_wrong_passphrase_is_still_reported_as_one(tmp_path):
+    """The generic message must survive for the case it was written for."""
+    from megabasterd_cli.accounts.manager import AccountManager
+
+    path = tmp_path / "accounts.json"
+    writer = AccountManager(path)
+    writer.unlock(PASSPHRASE)
+    writer.add_account("a@example.com", "pw")
+
+    reader = AccountManager(path)
+    reader.unlock("not-the-passphrase")
+    with pytest.raises(VaultUnlockError, match="Wrong vault passphrase"):
+        reader.add_account("b@example.com", "pw")

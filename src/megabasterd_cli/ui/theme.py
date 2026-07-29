@@ -173,7 +173,13 @@ def styled_prompt(prompt: str) -> Text:
         if part.startswith("{"):
             _append_hints(styled, part)
         elif part.startswith("["):
-            styled.append(part, style="mb.menu.default")
+            # Only the VALUE is coloured; the brackets are punctuation and stay
+            # plain, exactly as `{`/`}`/`,` already do above. Colouring the
+            # whole token made the delimiters compete with the one character
+            # that carries the information.
+            styled.append("[", style="mb.prompt.punct")
+            styled.append(part[1:-1], style="mb.menu.default")
+            styled.append("]", style="mb.prompt.punct")
         else:
             styled.append(part, style="mb.prompt.label")
     return styled

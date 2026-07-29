@@ -109,6 +109,7 @@
   ],
   "megabasterd_cli.commands.proxy_cmd": [
     "MAX_FETCH_BYTES",
+    "MAX_PROBE_THREADS",
     "pool_transaction",
     "proxy_add",
     "proxy_clear",
@@ -117,7 +118,8 @@
     "proxy_import",
     "proxy_list",
     "proxy_remove",
-    "proxy_serve"
+    "proxy_serve",
+    "proxy_test"
   ],
   "megabasterd_cli.commands.queue_cmd": [
     "queue",
@@ -146,6 +148,7 @@
     "APP_AUTHOR",
     "APP_NAME",
     "Config",
+    "Config.all_finished_command",
     "Config.auto_resume",
     "Config.connect_proxy_allow_any_port",
     "Config.connect_proxy_password",
@@ -926,6 +929,7 @@
   "megabasterd_cli.utils.hooks": [
     "append_upload_log",
     "parse_hook_command",
+    "run_all_finished_command",
     "run_post_transfer_command"
   ],
   "megabasterd_cli.utils.logger": [

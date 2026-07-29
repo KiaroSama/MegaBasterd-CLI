@@ -56,3 +56,23 @@ def test_the_password_prompt_is_styled_like_every_other_prompt():
     assert _render(prompts._prompt_text("Password for user@example.com")) == _render(
         styled_prompt("Password for user@example.com: ")
     )
+
+
+def test_the_brackets_stay_plain_and_only_the_value_is_coloured():
+    """`[1]` must colour the 1, not the delimiters.
+
+    The braces already worked this way - `{`, `}` and `,` are punctuation and
+    the tokens between them carry the colour - but `[...]` was appended whole,
+    so the two delimiters competed with the one character that carries the
+    information. This pins the two shapes to the same rule.
+    """
+    out = _render(styled_prompt("Choose [1] {back=0}: "))
+    # The colour starts AFTER the opening bracket and ends BEFORE the closing
+    # one, so each bracket sits outside any styled span.
+    assert "[\x1b[" in out, "the opening bracket was swallowed into the styled span"
+    assert "m]" in out, "the closing bracket was swallowed into the styled span"
+
+
+def test_the_skip_hint_follows_the_same_rule():
+    out = _render(styled_prompt("Vault passphrase [blank to skip]: "))
+    assert "[\x1b[" in out and "m]" in out

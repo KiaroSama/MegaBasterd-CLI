@@ -111,10 +111,15 @@ class AccountManager:
             try:
                 self._vault.decrypt(self.store.accounts[0].enc_password)
             except VaultUnlockError as exc:
+                # Keep the REASON the vault gave. Flattening every failure into
+                # "passphrase does not match" sent people hunting for a wrong
+                # passphrase when the real answer was that the credential
+                # predates the current vault format - which says exactly what
+                # to do about it, and no amount of retyping the passphrase
+                # would ever have worked.
                 raise VaultUnlockError(
-                    "Passphrase does not match this vault; refusing to add an account "
-                    "that could not be decrypted with the others (or the first stored "
-                    "credential is corrupt)."
+                    f"Refusing to add an account: the stored vault could not be "
+                    f"opened with this passphrase. {exc}"
                 ) from exc
         # Check for duplicates
         for a in self.store.accounts:
