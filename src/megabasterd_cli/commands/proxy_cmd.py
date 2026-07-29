@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+import socket
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
@@ -288,17 +290,26 @@ def _safe_source(url: str) -> str:
     return _scrub(url, _url_secrets(url))
 
 
+def _safe_exc(exc: BaseException, secrets: list[str]) -> str:
+    """One exception, reduced to a display-safe `Class: message`.
+
+    Never bare `str(exc)`: `requests`/`urllib3`/`socket` faithfully repeat the
+    address they were handed, so the message carries whatever credential the
+    entry holds. The class name is kept because "it failed" is not diagnosable.
+    """
+    return f"{type(exc).__name__}: {_scrub(str(exc), secrets)}"
+
+
 def _safe_fetch_error(url: str, exc: BaseException, secrets: list[str]) -> str:
     """A structured, display-safe line for one failed source.
 
     Never `f"{url}: {exc}"`: both halves repeat whatever secret the user put in
-    `--source`. The exception is reduced to its class name plus a scrubbed
-    message so the failure stays diagnosable without the credential.
+    `--source`.
 
     `secrets` covers EVERY source of this run, not only the one that failed: a
     redirect or fallback makes the error for source A quote source B's URL.
     """
-    return f"{_safe_source(url)}: {type(exc).__name__}: {_scrub(str(exc), secrets)}"
+    return f"{_safe_source(url)}: {_safe_exc(exc, secrets)}"
 
 
 def _read_capped(resp) -> str:
@@ -422,3 +433,117 @@ def proxy_fetch(
     if errors:
         for e in errors:
             print_error(e)
+
+
+# Concurrency cap for `proxy test`. Same number and same reasoning as
+# `connect_proxy.MAX_PROXY_THREADS`: one mostly-idle socket per thread, so a
+# fetched 200-entry list is worth probing wide, but not unboundedly wide.
+MAX_PROBE_THREADS = 64
+
+
+def _probe(url: str, timeout: float) -> tuple[bool, str]:
+    """Open and immediately close a bounded TCP connection to one proxy.
+
+    Returns `(reachable, latency-or-reason)`. The reason is scrubbed HERE, not
+    at print time, so a future consumer of the result cannot reintroduce the
+    leak - same rule as the `errors` list in `proxy fetch`.
+
+    ponytail: TCP reachability only. It proves the port answers, not that the
+    peer speaks HTTP CONNECT or SOCKS5 - but a dead host is what kills the
+    overwhelming majority of a fetched free-proxy list, and a real handshake
+    needs a third-party host to tunnel to, i.e. this command would have to send
+    someone else's server traffic to find out. Add the handshake if "answers
+    but does not proxy" shows up in practice.
+    """
+    start = time.monotonic()
+    try:
+        # Schemeless is normal here: `proxy add`/`proxy import` store the line
+        # exactly as typed, and `urlsplit` reads a bare `host:8080` as a scheme.
+        parsed = urlsplit(url if "://" in url else f"//{url}")
+        host, port = parsed.hostname, parsed.port
+        if not host or not port:
+            return False, "no host:port in the stored entry"
+        socket.create_connection((host, port), timeout).close()
+    except Exception as exc:  # noqa: BLE001
+        return False, _safe_exc(exc, _url_secrets(url))
+    return True, f"{(time.monotonic() - start) * 1000:.0f} ms"
+
+
+@proxy_cmd.command("test", short_help="Probe every proxy in the pool for reachability.")
+@click.pass_context
+def proxy_test(ctx: click.Context) -> None:
+    """Probe every pooled proxy concurrently and report which ones answer.
+
+    Exits non-zero when nothing is reachable, so `mb proxy test && mb download
+    ...` runs the transfer only when the pool can actually carry it.
+    """
+    from concurrent.futures import ThreadPoolExecutor, wait
+
+    from ..proxy.runtime import _urls_from_config
+
+    cfg = ctx.obj["config"]
+    # Same pool `proxy list` shows: persisted entries plus `smart_proxy_url`.
+    # Not `effective_pool`, which returns None while smart_proxy_enabled is off
+    # - testing the pool before switching it on is the point of the command.
+    pool = _load_persisted_pool()
+    for url in _urls_from_config(cfg):
+        pool.add(url)
+    entries = pool.list()
+    if not entries:
+        print_error("No proxies stored; nothing to test.")
+        ctx.exit(1)
+
+    # The project's existing per-request timeout is each probe's connect
+    # deadline, and the whole run gets one deadline per WAVE of probes. A pool
+    # bigger than the thread cap queues the remainder, so a single-timeout run
+    # budget would expire with entries that were never given a socket - and
+    # report them as dead. The run deadline still earns its keep on its own:
+    # `create_connection` applies its timeout to the connect and never to the
+    # `getaddrinfo` in front of it, so one unresolvable host would otherwise
+    # hang the command outright.
+    timeout = cfg.timeout_seconds
+    workers = min(len(entries), MAX_PROBE_THREADS)
+    executor = ThreadPoolExecutor(max_workers=workers)
+    try:
+        futures = [executor.submit(_probe, e.url, timeout) for e in entries]
+        wait(futures, timeout=timeout * -(-len(entries) // workers))
+    finally:
+        # Not `with`, whose __exit__ joins the workers: the entire point of the
+        # deadline is to return the report while a probe is still stuck.
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    # SafeTable, not Table, for the same reason as `proxy list`: these URLs come
+    # from `proxy fetch` (a remote public list) and `proxy import` (an arbitrary
+    # file), so one poisoned line with an unbalanced tag would kill the render.
+    table = SafeTable(
+        title="Proxy Reachability",
+        show_header=True,
+        header_style="mb.table.header",
+        border_style="mb.table.border",
+    )
+    table.add_column("URL", style="mb.path")
+    table.add_column("Reachable")
+    table.add_column("Latency / reason", style="mb.muted")
+    reachable = 0
+    for entry, future in zip(entries, futures, strict=True):
+        # `_safe_source`, not the raw url: a pooled proxy routinely carries
+        # `user:pass@` and this table gets screenshotted into bug reports.
+        # `done()` alone is a trap: shutdown cancels every still-queued probe,
+        # and a CANCELLED future is `done()` - so `.result()` raised
+        # CancelledError and destroyed the whole report, the probes that DID
+        # answer included. A cancelled entry also must not be called dead: it
+        # was never given a socket, and "no" next to a working proxy is how
+        # someone deletes a good one.
+        if future.cancelled():
+            ok, detail = False, "not probed within the run budget"
+        elif future.done():
+            ok, detail = future.result()
+        else:
+            ok, detail = False, f"no answer within {timeout}s"
+        reachable += ok
+        table.add_row(_safe_source(entry.url), "yes" if ok else "no", detail)
+    _console.print(table)
+    print_info(f"{reachable}/{len(entries)} reachable.")
+    if not reachable:
+        # Matches `proxy fetch`/`proxy serve`: a reported failure never exits 0.
+        ctx.exit(1)

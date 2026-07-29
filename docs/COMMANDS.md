@@ -258,11 +258,26 @@ current job `interrupted` and its row canceled).
 .\Run.ps1 proxy clear
 .\Run.ps1 proxy import PATH
 .\Run.ps1 proxy fetch [--protocol http|socks4|socks5] [--source URL] [--limit N] [--timeout N]
+.\Run.ps1 proxy test
 .\Run.ps1 proxy serve [--port N] [--password TEXT] [--any-port]
 ```
 
 `proxy serve` starts a local CONNECT proxy for MEGA traffic. `proxy fetch`
 imports public proxy lists into the local pool.
+
+`proxy test` probes every pooled proxy concurrently and prints which ones
+answer, with the latency or the reason. It exits non-zero only when *nothing*
+is reachable, so `proxy test` can gate a transfer:
+
+```powershell
+.\Run.ps1 proxy test; if ($LASTEXITCODE -eq 0) { .\Run.ps1 download URL }
+```
+
+It checks TCP reachability — that the port answers — not that the peer really
+speaks HTTP CONNECT or SOCKS5, because a full handshake would have to tunnel
+to a third-party host to find out. A dead host is what kills most of a fetched
+free-proxy list, and that is what this catches. Credentials in a stored proxy
+URL are redacted in the table.
 
 ## Crypter Commands
 
