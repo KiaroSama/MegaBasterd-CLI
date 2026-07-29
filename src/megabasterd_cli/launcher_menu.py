@@ -354,7 +354,7 @@ class Step:
     kind: str = "text"  # text | secret | yesno
     default: object = ""
     option: str | None = None  # CLI option this value feeds, if any
-    required: bool = False  # blank answer abandons the wizard
+    required: bool = False  # blank answer re-asks this step; only `0` goes back
     numeric: bool = False
     raw: bool = False  # free-form extras appended verbatim
     path: bool = False  # shorten the shown default
@@ -391,7 +391,12 @@ def run_wizard(title: str, steps: Sequence[Step]) -> dict[str, object] | None:
             index -= 1
             continue
         if step.required and not str(values[step.key]).strip():
-            return None
+            # Re-ask, do NOT abandon. Leaving a required field blank used to
+            # return None, which threw away every earlier answer and dropped the
+            # user back at the menu - many steps back, from an input mistake.
+            # `0` is the one way backwards, and it moves exactly one step.
+            _note(f"{step.label} is required.", "mb.warning")
+            continue
         index += 1
     return values
 
