@@ -60,7 +60,7 @@ def test_a_blob_written_at_a_different_cost_still_opens():
 
 
 def test_an_older_format_blob_is_reported_as_such_not_as_a_bad_passphrase():
-    with pytest.raises(VaultUnlockError, match="older vault format"):
+    with pytest.raises(VaultUnlockError, match="not written by the current vault format"):
         CredentialVault(PASSPHRASE).decrypt(_legacy_blob(PASSPHRASE, SECRET))
 
 
@@ -78,14 +78,14 @@ def test_a_hostile_cost_in_the_file_is_refused_before_deriving(log2n):
     process allocating - the same shape as a hostile PBKDF2 iteration count.
     """
     body = bytes([CredentialVault.VERSION, log2n, 8, 1]) + b"\x00" * 44
-    with pytest.raises(ValueError, match="out of range"):
+    with pytest.raises(VaultUnlockError, match="out of range"):
         CredentialVault(PASSPHRASE).decrypt(base64.b64encode(body).decode("ascii"))
 
 
 @pytest.mark.parametrize(("r", "p"), [(0, 1), (33, 1), (8, 0), (8, 17)])
 def test_hostile_r_and_p_are_refused_too(r, p):
     body = bytes([CredentialVault.VERSION, 15, r, p]) + b"\x00" * 44
-    with pytest.raises(ValueError, match="out of range"):
+    with pytest.raises(VaultUnlockError, match="out of range"):
         CredentialVault(PASSPHRASE).decrypt(base64.b64encode(body).decode("ascii"))
 
 
@@ -120,7 +120,7 @@ def test_reading_a_stale_credential_still_names_the_format_not_the_passphrase(tm
     path = _vault_file(tmp_path, ("old@example.com", _legacy_blob(PASSPHRASE, SECRET)))
     manager = AccountManager(path)
     manager.unlock(PASSPHRASE)
-    with pytest.raises(VaultUnlockError, match="older vault format"):
+    with pytest.raises(VaultUnlockError, match="not written by the current vault format"):
         manager.get_password("old@example.com")
 
 
@@ -170,7 +170,7 @@ def test_the_old_format_is_not_reported_with_an_invented_version_number():
     """
     with pytest.raises(VaultUnlockError) as excinfo:
         CredentialVault(PASSPHRASE).decrypt(_legacy_blob(PASSPHRASE, SECRET))
-    assert "older vault format" in str(excinfo.value)
+    assert "not written by the current vault format" in str(excinfo.value)
     assert not re.search(r"\(v\d+\)", str(excinfo.value)), str(excinfo.value)
 
 

@@ -569,6 +569,31 @@ def generic(command: str, prompt: str) -> Action:
     return lambda: generic_wizard(command, prompt)
 
 
+def sub(group: str, subcommand: str, prompt: str) -> Action:
+    """A menu entry for `mb <group> <subcommand> [args]`.
+
+    `generic()` passes the whole answer through as the argument list, so the
+    user has to type the subcommand as well - and a prompt that already names
+    it reads as though it were applied. That is how `logout [email]` produced
+    `mb account <email>` and a "No such command" error.
+
+    Blank is passed through here rather than refused, because these
+    subcommands are meaningful with no arguments (`account logout` ends the
+    default account's session). `generic_wizard` refuses blank, which is right
+    for a bare group but wrong once the verb is already decided.
+    """
+
+    def run() -> None:
+        _section(f"{group} {subcommand}")
+        try:
+            raw = ask_text(prompt)
+        except _Back:
+            return
+        dispatch([group, subcommand, *split_args(raw)])
+
+    return run
+
+
 @dataclass
 class Menu:
     title: str
@@ -584,9 +609,18 @@ ACCOUNT_MENU = Menu(
     [
         ("Add/login account", account_add_wizard),
         ("List stored accounts", cmd("account", "list")),
-        ("Log out of an account", generic("account", "Enter: logout [email-or-label] [--all]")),
-        ("Set default account", generic("account", "Enter: default <email-or-label>")),
-        ("Show account quota", generic("account", "Enter: info [email-or-label] [options]")),
+        (
+            "Log out of an account",
+            sub("account", "logout", "Account email/label [blank = default; --all for every one]"),
+        ),
+        (
+            "Set default account",
+            sub("account", "default", "Account email/label"),
+        ),
+        (
+            "Show account quota",
+            sub("account", "info", "Account email/label [blank = default]"),
+        ),
         (
             "List cloud files",
             generic("ls", "Enter remote path/options [blank path is root; type . for root]"),
@@ -671,8 +705,14 @@ SETTINGS_MENU = Menu(
         ("Set ELC API credentials", elc_credentials_wizard),
         ("Add/login MEGA account", account_add_wizard),
         ("List accounts", cmd("account", "list")),
-        ("Log out of an account", generic("account", "Enter: logout [email-or-label] [--all]")),
-        ("Set default account", generic("account", "Enter: default <email-or-label>")),
+        (
+            "Log out of an account",
+            sub("account", "logout", "Account email/label [blank = default; --all for every one]"),
+        ),
+        (
+            "Set default account",
+            sub("account", "default", "Account email/label"),
+        ),
         ("Show config path", cmd("config", "path")),
         ("Reset config", cmd("config", "reset")),
     ],

@@ -224,3 +224,34 @@ def test_the_launcher_offers_logout_in_both_account_menus():
         assert any(
             "Log out" in label for label in labels
         ), f"{menu.title} lists add/list but no way to log out: {labels}"
+
+
+@pytest.mark.parametrize(
+    ("typed", "expected"),
+    [
+        (
+            "movahedimobin5801@example.invalid",
+            ["account", "logout", "movahedimobin5801@example.invalid"],
+        ),
+        ("", ["account", "logout"]),
+        ("--all", ["account", "logout", "--all"]),
+    ],
+)
+def test_the_menu_entry_supplies_the_subcommand_itself(monkeypatch, typed, expected):
+    """Typing only the email must not become `mb account <email>`.
+
+    `generic()` passes the whole answer through as the argument list, so the
+    entry required the user to type `logout <email>` while the prompt already
+    said "logout" - and the CLI answered "No such command 'someone@...'".
+    Blank must reach the CLI too: `account logout` with no argument is the
+    default account, which `generic_wizard` would have refused as empty.
+    """
+    from megabasterd_cli import launcher_menu as lm
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(lm, "dispatch", lambda args, **kw: calls.append(list(args)))
+    monkeypatch.setattr(lm, "ask_text", lambda *a, **kw: typed)
+
+    lm.sub("account", "logout", "prompt")()
+
+    assert calls == [expected]
