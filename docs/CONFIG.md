@@ -25,7 +25,8 @@ negative speed limits or quota waits, unknown log levels) and exits non-zero,
 and invalid values found in a hand-edited `config.json` produce a warning and
 fall back to the default instead of crashing at runtime. Optional (nullable)
 keys are type-checked too: `default_account`, `smart_proxy_url`,
-`run_command`, `upload_log_path`, `connect_proxy_password`, and
+`run_command`, `all_finished_command`, `upload_log_path`,
+`connect_proxy_password`, and
 `megacrypter_server` must be strings or null, and `elc_accounts` must be
 `{host: {field: string}}`. Booleans are not accepted for numeric keys.
 
@@ -142,6 +143,7 @@ You can avoid storing ELC credentials by passing `--elc-user` and
 | `log_backups` | `5` | Keep this many rotated Python log files. |
 | `user_agent` | `""` | HTTP user agent for API and transfer requests. Empty means `MegaBasterd-CLI/<installed version>`. |
 | `run_command` | `null` | Command run after each completed transfer. Parsed with Windows rules on Windows and POSIX rules elsewhere; the transferred path is appended as exactly one argument. Hook arguments are not written to logs. |
+| `all_finished_command` | `null` | Command run ONCE after a whole `download`, `upload`, or `queue run` finishes — the hook for "shut down when everything is done", which `run_command` cannot express because the last file's hook has no way to know it was the last. `<download\|upload\|queue> <succeeded> <failed>` is appended as three arguments. Never run for an empty batch, never once per parallel worker, and a hook that fails is reported but does not fail the batch. |
 | `upload_log_path` | `null` | JSON-lines upload log path (written by every upload mode, including queue and directory uploads). |
 
 ## Runtime Data

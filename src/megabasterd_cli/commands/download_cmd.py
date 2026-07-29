@@ -22,6 +22,7 @@ from ..proxy.selector import ProxySelector
 from ..ui.machine_output import MachineOutput
 from ..ui.prompts import print_error
 from ..ui.transfer_progress import TransferProgress
+from ..utils.hooks import run_all_finished_command
 from ..utils.selection import (
     build_folder_file_filter,
     compose_file_filters,
@@ -371,6 +372,10 @@ def download(
             print_error(f"Unsupported link type: {parsed.type}")
             failures += 1
 
+    # Links that never became a job (parse/resolve/unsupported). They are still
+    # items this run attempted, so the batch summary below matches the exit code.
+    unusable_links = failures
+
     # One shared progress system for every download mode: single files,
     # parallel files, and file-in-folder links share this controller; each
     # full folder link gets its own controller (its manifest defines it).
@@ -483,6 +488,17 @@ def download(
             run_command=cfg.run_command,
         ):
             failures += 1
+
+    # Exactly once per invocation, on this thread, after every item has been
+    # attempted - failures included. `ctx.exit` below raises, so this must come
+    # first. An empty batch is filtered inside the hook.
+    attempted = len(file_jobs) + len(folder_file_jobs) + len(folder_jobs) + unusable_links
+    run_all_finished_command(
+        cfg.all_finished_command,
+        kind="download",
+        succeeded=attempted - failures,
+        failed=failures,
+    )
 
     if failures:
         print_error(f"{failures} download item(s) failed.")

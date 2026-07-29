@@ -220,6 +220,7 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
     from ..ui.prompts import ask_mfa_code, ask_password
     from ..ui.transfer_progress import TransferProgress, redact_link
     from ..upload_support import finalize_upload_success
+    from ..utils.hooks import run_all_finished_command
     from ..utils.redaction import redact_text
     from ..utils.speed import make_limiter
     from .api_support import api_for
@@ -308,6 +309,10 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
         return upload_client
 
     failures = 0
+    # Counted, not derived as `attempted - failures`: a QueueLockError fails
+    # the RUN rather than an item, so the subtraction would go negative and
+    # report a job that never existed.
+    succeeded = 0
     notes: list[tuple[str, str]] = []
     progress = TransferProgress(
         title="MEGA Queue Run",
@@ -438,6 +443,7 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
                         )
                         progress.set_item_name(row, f"↓ {result.path.name}")
                         progress.finish_item(row, "complete")
+                        succeeded += 1
                         q.update_status(
                             item.id, JobStatus.DONE, run_id=run_id, lease_epoch=item.lease_epoch
                         )
@@ -487,6 +493,7 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
                             note=lambda kind, msg: notes.append((kind, msg)),
                         )
                         progress.finish_item(row, "complete")
+                        succeeded += 1
                         q.update_status(
                             item.id, JobStatus.DONE, run_id=run_id, lease_epoch=item.lease_epoch
                         )
@@ -536,6 +543,16 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
     printer = {"success": print_success, "info": print_info, "error": print_error}
     for kind, message in notes:
         printer[kind](message)
+
+    # The third batch surface, alongside `download` and `upload`: a queue run
+    # is the one people leave unattended overnight, so it is the one that most
+    # wants "tell me / shut down when the whole thing is finished". `kind` is
+    # "queue" because a single run mixes both directions - the counts are what
+    # a script branches on here, not the direction.
+    run_all_finished_command(
+        cfg.all_finished_command, kind="queue", succeeded=succeeded, failed=failures
+    )
+
     if failures:
         print_error(f"{failures} queue job(s) failed.")
         ctx.exit(1)

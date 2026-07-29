@@ -58,6 +58,7 @@ _OPTIONAL_STR_KEYS = {
     "default_account",
     "smart_proxy_url",
     "run_command",
+    "all_finished_command",
     "upload_log_path",
     "connect_proxy_password",
     "megacrypter_server",
@@ -121,6 +122,15 @@ class Config:
     # Post-transfer hook: run this command (with the transferred path appended
     # as exactly one argument) after every successful download/upload.
     run_command: str | None = None
+
+    # Batch-completion hook: run this command ONCE per `mb download`, `mb
+    # upload` or `mb queue run` invocation, after every item in the run has
+    # been attempted, with `<download|upload|queue> <succeeded> <failed>`
+    # appended as three arguments. One key rather than one per surface (like
+    # `run_command` above, which also covers both directions): a single
+    # invocation is only ever one of them, and the appended kind lets one
+    # script branch.
+    all_finished_command: str | None = None
 
     # Upload log file (one JSON line per upload; useful for batch jobs).
     upload_log_path: str | None = None
