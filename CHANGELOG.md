@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Changed
+- **Stored account credentials must be re-added.** The account vault now records the scrypt cost inside each encrypted credential instead of assuming a constant, which is what makes the cost raisable at all - and it is raised from 2**14 to 2**15. Credentials written by earlier versions are not read: `mb account remove` then `mb account add` restores them in seconds, and opening one reports the old format explicitly rather than claiming a wrong passphrase. The cipher is unchanged (AES-256-GCM), and the KDF parameters read out of the vault file are range-checked, so a hand-edited file cannot force an unbounded scrypt cost.
+
 ### Added
 - Logging in once is enough: the session is stored encrypted under the same passphrase that already unlocks the account vault, so the cloud commands and `mb share` reuse it instead of logging in (and re-prompting for 2FA) every time. A stored session is verified before it is trusted, and an expired one falls back to a normal login. The file is named after a hash of the account, and its contents stay encrypted at rest.
 
