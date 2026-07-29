@@ -584,6 +584,7 @@ ACCOUNT_MENU = Menu(
     [
         ("Add/login account", account_add_wizard),
         ("List stored accounts", cmd("account", "list")),
+        ("Log out of an account", generic("account", "Enter: logout [email-or-label] [--all]")),
         ("Set default account", generic("account", "Enter: default <email-or-label>")),
         ("Show account quota", generic("account", "Enter: info [email-or-label] [options]")),
         (
@@ -670,6 +671,7 @@ SETTINGS_MENU = Menu(
         ("Set ELC API credentials", elc_credentials_wizard),
         ("Add/login MEGA account", account_add_wizard),
         ("List accounts", cmd("account", "list")),
+        ("Log out of an account", generic("account", "Enter: logout [email-or-label] [--all]")),
         ("Set default account", generic("account", "Enter: default <email-or-label>")),
         ("Show config path", cmd("config", "path")),
         ("Reset config", cmd("config", "reset")),
