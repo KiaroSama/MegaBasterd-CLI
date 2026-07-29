@@ -874,7 +874,8 @@
     "THEME",
     "literal",
     "make_console",
-    "markup"
+    "markup",
+    "styled_prompt"
   ],
   "megabasterd_cli.ui.transfer_progress": [
     "TERMINAL_STATUSES",

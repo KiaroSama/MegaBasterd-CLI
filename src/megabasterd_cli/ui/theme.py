@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from rich.console import Console
@@ -121,3 +122,58 @@ class SafeTable(Table):
             *(Text(cell) if type(cell) is str else cell for cell in renderables),
             **kwargs,
         )
+
+
+# ---------------------------------------------------------------------------
+# Prompt styling
+#
+# Lives here, not in the launcher, because BOTH sides render prompts and they
+# appear on one screen: the launcher shells out to the CLI, so a `[default]`
+# styled in one and plain in the other is visible in a single session. One
+# implementation means a new prompt is coloured correctly without its author
+# having to remember anything.
+# ---------------------------------------------------------------------------
+
+_PROMPT_PART = re.compile(r"(\[[^\]]*\]|\{[^}]*\})")
+
+_HINT_STYLES = (
+    ("back", "mb.prompt.back"),
+    ("exit", "mb.prompt.exit"),
+    ("folder", "mb.prompt.folder"),
+)
+
+
+def _append_hints(styled: Text, group: str) -> None:
+    """Colour each `{...}` navigation token by what it does, not by position.
+
+    `back=0` and `quit=exit` used to share one style, so the two hints that
+    behave most differently looked identical. One hue per meaning makes "go
+    back" and "leave entirely" distinguishable at a glance.
+    """
+    styled.append("{", style="mb.prompt.punct")
+    for index, token in enumerate(group[1:-1].split(", ")):
+        if index:
+            styled.append(", ", style="mb.prompt.punct")
+        lowered = token.lower()
+        style = next((s for word, s in _HINT_STYLES if word in lowered), "mb.prompt.other")
+        styled.append(token, style=style)
+    styled.append("}", style="mb.prompt.punct")
+
+
+def styled_prompt(prompt: str) -> Text:
+    """Colour a prompt's bracketed default and braced hints separately.
+
+    Every prompt in the project has the shape `label [default] {hints}: `, so
+    one pass over that shape keeps them all consistent.
+    """
+    styled = Text()
+    for part in _PROMPT_PART.split(prompt):
+        if not part:
+            continue
+        if part.startswith("{"):
+            _append_hints(styled, part)
+        elif part.startswith("["):
+            styled.append(part, style="mb.menu.default")
+        else:
+            styled.append(part, style="mb.prompt.label")
+    return styled

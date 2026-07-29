@@ -31,7 +31,7 @@ from rich.text import Text
 
 from .cli import LINK_MARKERS, _redacted_argv
 from .ui.prompts import ask_password
-from .ui.theme import literal, make_console
+from .ui.theme import literal, make_console, styled_prompt
 from .utils.redaction import REDACTED, SECRET_FIELD_NAMES, redact_text, sanitize
 from .utils.secure_log import append_line
 
@@ -183,52 +183,9 @@ def _classify(answer: str, allow_back: bool, back_token: str) -> None:
         raise _Back()
 
 
-_PROMPT_PART = re.compile(r"(\[[^\]]*\]|\{[^}]*\})")
-
-
-_HINT_STYLES = (
-    ("back", "mb.prompt.back"),
-    ("exit", "mb.prompt.exit"),
-    ("folder", "mb.prompt.folder"),
-)
-
-
-def _append_hints(styled: Text, group: str) -> None:
-    """Colour each `{...}` navigation token by what it does, not by position.
-
-    `back=0` and `quit=exit` used to share one style, so the two hints that
-    behave most differently looked identical. One hue per meaning - matched to
-    FFmWiz - makes "go back" and "leave entirely" distinguishable at a glance.
-    """
-    styled.append("{", style="mb.prompt.punct")
-    for index, token in enumerate(group[1:-1].split(", ")):
-        if index:
-            styled.append(", ", style="mb.prompt.punct")
-        lowered = token.lower()
-        style = next((s for word, s in _HINT_STYLES if word in lowered), "mb.prompt.other")
-        styled.append(token, style=style)
-    styled.append("}", style="mb.prompt.punct")
-
-
-def _styled_prompt(prompt: str) -> Text:
-    """Colour a prompt's bracketed default and braced hints separately.
-
-    Done here rather than at each call site: every prompt in the launcher
-    already has the shape `label [default] {hints}: `, so one pass over that
-    shape keeps them all consistent, and a new prompt is styled correctly
-    without its author having to remember anything.
-    """
-    styled = Text()
-    for part in _PROMPT_PART.split(prompt):
-        if not part:
-            continue
-        if part.startswith("{"):
-            _append_hints(styled, part)
-        elif part.startswith("["):
-            styled.append(part, style="mb.menu.default")
-        else:
-            styled.append(part, style="mb.prompt.label")
-    return styled
+# The prompt styler lives in `ui.theme` so the launcher and the CLI it shells
+# out to render prompts identically; this alias keeps the local name.
+_styled_prompt = styled_prompt
 
 
 def _read_line(prompt: str) -> str:
@@ -338,7 +295,9 @@ def dispatch(args: Sequence[str], return_to_menu: bool = True) -> int:
                 f"Command failed with exit code {code}. Check the Logs directory for details.",
                 "mb.error",
             )
-        ask_text("Press Enter to return to the menu", allow_back=False)
+        # No "press Enter to continue": the outcome line has already been
+        # printed and the menu is redrawn right below it, so the keypress
+        # bought nothing and cost one on every single command.
     return int(code)
 
 
@@ -570,7 +529,6 @@ def generic_wizard(command: str, prompt: str) -> None:
         return
     if not raw.strip():
         _note("No arguments entered.", "mb.warning")
-        ask_text("Press Enter to return to the menu", allow_back=False)
         return
     dispatch([command, *split_args(raw)])
 

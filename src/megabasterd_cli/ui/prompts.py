@@ -6,7 +6,7 @@ from getpass import getpass
 
 from rich.text import Text
 
-from .theme import literal, make_console, markup
+from .theme import literal, make_console, markup, styled_prompt
 
 _console = make_console()
 
@@ -21,22 +21,19 @@ def _line(prefix: str, msg: str | Text) -> Text:
 
 
 def _prompt_text(question: str, suffix: str = "") -> Text:
-    """One prompt shape for the whole CLI: `label [default]: `.
+    """One prompt shape for the whole CLI: `label [default] {hints}: `.
 
-    The launcher renders `label [default] {hints}: ` with the default in its own
-    colour, and these prompts appear in the very same session - the launcher
-    shells out to the CLI, so the two alternate on one screen. Left to Rich's
-    defaults they disagreed twice over: `Confirm.ask` writes `[y/n] (n)`, which
-    inverts the launcher's `(y/n) [Y]`, and `getpass` emits no colour at all.
-    Building the line here keeps every prompt in one convention.
+    Rendered by the SAME styler the launcher uses (`ui.theme.styled_prompt`),
+    because the launcher shells out to the CLI and the two alternate on one
+    screen: anything styled here but not there - or the reverse - is visible in
+    a single session. Left to Rich's defaults they disagreed twice over:
+    `Confirm.ask` writes `[y/n] (n)`, inverting the launcher's `(y/n) [Y]`, and
+    `getpass` emits no colour at all. Passing the whole line through one styler
+    also means `[blank to skip]` and `{back=0, quit=exit}` are coloured for
+    callers that build them, instead of arriving as one flat label.
     """
-    styled = Text()
-    styled.append(question, style="mb.prompt.label")
-    if suffix:
-        styled.append(" ")
-        styled.append(suffix, style="mb.menu.default")
-    styled.append(": ")
-    return styled
+    line = f"{question} {suffix}: " if suffix else f"{question}: "
+    return styled_prompt(line)
 
 
 def _render_prompt(question: str, suffix: str = "") -> None:
