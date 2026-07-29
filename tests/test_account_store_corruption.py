@@ -21,7 +21,10 @@ from megabasterd_cli.accounts.storage import (
     validate_account_document,
 )
 
-GOOD_BLOB = base64.b64encode(b"x" * 40).decode("ascii")
+# Long enough to be a real blob: 4 header bytes + 16 salt + 12 nonce + a
+# 16-byte GCM tag. The old floor of 28 accepted a blob with no ciphertext and
+# no tag at all, which no encryptor can produce.
+GOOD_BLOB = base64.b64encode(b"x" * 48).decode("ascii")
 
 
 def _entry(**overrides) -> dict:

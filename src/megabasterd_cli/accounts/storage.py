@@ -66,40 +66,90 @@ class AccountStore:
 
 
 class CredentialVault:
-    """Wraps AES-GCM encryption of individual passwords with a scrypt-derived key."""
+    """AES-256-GCM per credential, under a scrypt-derived key.
 
-    SCRYPT_N = 2**14
+    The cipher is deliberately NOT the Fernet (AES-128-CBC + HMAC) used by some
+    sibling projects: AES-256-GCM is a single AEAD primitive with twice the key
+    length, so adopting Fernet here would be a downgrade.
+
+    What DID need fixing is that the scrypt cost was a hard-coded constant. A
+    constant can never be raised, because every existing credential was written
+    under the old value and there is nothing in the blob to say so. A blob now
+    CARRIES its own parameters, which is what makes raising the cost possible at
+    all - and the cost is duly raised, n=2**14 -> 2**15.
+
+    One format, one parse path:
+
+        base64(version || log2n || r || p || salt[16] || nonce[12] || ct)
+
+    The leading version byte is what the old layout lacked; it is what lets the
+    NEXT change be made without this problem recurring. The pre-version layout
+    is deliberately not readable - a stored credential is re-addable in seconds,
+    which is not worth a second code path forever - and a blob from it is
+    reported as exactly that rather than as a wrong passphrase.
+    """
+
+    VERSION = 2
+    SCRYPT_N = 2**15
     SCRYPT_R = 8
     SCRYPT_P = 1
     KEY_LEN = 32
 
+    _HEADER_LEN = 4  # version, log2n, r, p
+    _MIN_LEN = _HEADER_LEN + 16 + 12 + 16  # + salt + nonce + a GCM tag
+    # A vault file is user-writable, so its parameters are untrusted input:
+    # `n = 1 << log2n` with an unchecked byte reaches 2**255 and would hang the
+    # process allocating. Same shape as a hostile PBKDF2 iteration count.
+    _MIN_LOG2_N = 10
+    _MAX_LOG2_N = 22
+
     def __init__(self, passphrase: str):
         self._passphrase = passphrase.encode("utf-8")
+        # scrypt is deliberately expensive, and one unlock decrypts a credential
+        # more than once (the add-account guard reads one, then the caller reads
+        # it again). Cache per parameter set, for this instance only.
+        self._keys: dict[tuple[bytes, int, int, int], bytes] = {}
 
-    def _derive(self, salt: bytes) -> bytes:
-        kdf = Scrypt(
-            salt=salt,
-            length=self.KEY_LEN,
-            n=self.SCRYPT_N,
-            r=self.SCRYPT_R,
-            p=self.SCRYPT_P,
-        )
-        return kdf.derive(self._passphrase)
+    def _derive(self, salt: bytes, n: int, r: int, p: int) -> bytes:
+        cached = self._keys.get((salt, n, r, p))
+        if cached is not None:
+            return cached
+        key = Scrypt(salt=salt, length=self.KEY_LEN, n=n, r=r, p=p).derive(self._passphrase)
+        self._keys[(salt, n, r, p)] = key
+        return key
 
     def encrypt(self, plaintext: str) -> str:
-        """Return base64(salt || nonce || ciphertext+tag)."""
         salt = os.urandom(16)
         nonce = os.urandom(12)
-        key = self._derive(salt)
+        n, r, p = self.SCRYPT_N, self.SCRYPT_R, self.SCRYPT_P
+        key = self._derive(salt, n, r, p)
         ct = AESGCM(key).encrypt(nonce, plaintext.encode("utf-8"), None)
-        return base64.b64encode(salt + nonce + ct).decode("ascii")
+        header = bytes([self.VERSION, n.bit_length() - 1, r, p])
+        return base64.b64encode(header + salt + nonce + ct).decode("ascii")
+
+    def _unpack(self, encoded: str) -> tuple[bytes, bytes, bytes, int, int, int]:
+        raw = base64.b64decode(encoded)
+        if len(raw) < self._MIN_LEN:
+            raise ValueError("Encrypted blob too short")
+        version, log2n, r, p = raw[0], raw[1], raw[2], raw[3]
+        if version != self.VERSION:
+            # Most likely a credential written before the format carried its own
+            # parameters. Say so: "wrong passphrase" would send the user looking
+            # for a problem that is not there.
+            raise VaultUnlockError(
+                f"This credential was stored in an older vault format (v{version}). "
+                "Remove the account and add it again."
+            )
+        if not self._MIN_LOG2_N <= log2n <= self._MAX_LOG2_N:
+            raise ValueError(f"Vault KDF cost out of range: 2**{log2n}")
+        if not 1 <= r <= 32 or not 1 <= p <= 16:
+            raise ValueError("Vault KDF parameters out of range")
+        body = raw[self._HEADER_LEN :]
+        return body[:16], body[16:28], body[28:], 1 << log2n, r, p
 
     def decrypt(self, encoded: str) -> str:
-        raw = base64.b64decode(encoded)
-        if len(raw) < 28:
-            raise ValueError("Encrypted blob too short")
-        salt, nonce, ct = raw[:16], raw[16:28], raw[28:]
-        key = self._derive(salt)
+        salt, nonce, ct, n, r, p = self._unpack(encoded)
+        key = self._derive(salt, n, r, p)
         try:
             return AESGCM(key).decrypt(nonce, ct, None).decode("utf-8")
         except (InvalidTag, UnicodeDecodeError) as exc:
@@ -175,7 +225,13 @@ def validate_account_document(data) -> AccountStore:
             raise AccountCorruptionError(
                 f"account {canonical!r} has a non-base64 encrypted password"
             ) from exc
-        _require(len(blob) >= 28, f"account {canonical!r} has a truncated encrypted password")
+        # Length only. A blob written by an older format is NOT corruption - the
+        # file is intact - so it is reported when that one credential is
+        # decrypted, rather than by condemning the whole vault here.
+        _require(
+            len(blob) >= CredentialVault._MIN_LEN,
+            f"account {canonical!r} has a truncated encrypted password",
+        )
 
         label = entry.get("label")
         _require(
