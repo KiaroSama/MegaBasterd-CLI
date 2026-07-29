@@ -39,6 +39,7 @@
     "CredentialVault.SCRYPT_N",
     "CredentialVault.SCRYPT_P",
     "CredentialVault.SCRYPT_R",
+    "CredentialVault.VERSION",
     "CredentialVault.decrypt",
     "CredentialVault.encrypt",
     "VaultUnlockError",
