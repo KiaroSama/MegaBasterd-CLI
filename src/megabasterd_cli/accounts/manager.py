@@ -126,14 +126,6 @@ class AccountManager:
                     f"Refusing to add an account: the stored vault could not be "
                     f"opened with this passphrase. {exc}"
                 ) from exc
-        stale = len(self.store.accounts) - len(readable)
-        if stale:
-            log.warning(
-                "%d stored credential(s) predate the current vault format and can no "
-                "longer be decrypted; add those accounts again to replace them.",
-                stale,
-            )
-
         # A duplicate whose credential is DEAD is the recovery case, not a
         # mistake: re-adding is exactly how you repair it, and refusing sent
         # the user to `account remove` first for no benefit. A readable
@@ -145,6 +137,20 @@ class AccountManager:
                 self.store.accounts.pop(index)
                 label = label or a.label
                 break
+
+        # Counted AFTER the replacement, so it names only what is still stale.
+        # Counting before meant the warning fired for the very account being
+        # repaired: "add those accounts again" about the one add in progress,
+        # telling the user to do the thing they had just done.
+        stale = sum(
+            1 for a in self.store.accounts if not CredentialVault.is_readable_format(a.enc_password)
+        )
+        if stale:
+            log.warning(
+                "%d other stored credential(s) predate the current vault format and can "
+                "no longer be decrypted; add those accounts again to replace them.",
+                stale,
+            )
 
         enc = self._vault.encrypt(password)
         account = Account(email=email, enc_password=enc, label=label)
