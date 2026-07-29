@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 
 import pytest
 
@@ -106,38 +107,21 @@ def test_the_derived_key_is_cached_per_parameter_set():
     assert len(set(seen)) == 1, "and share one parameter set, so scrypt runs once"
 
 
-def test_adding_an_account_to_an_older_vault_says_so_not_wrong_passphrase(tmp_path):
-    """The add path must not flatten the vault's reason into "wrong passphrase".
+def test_reading_a_stale_credential_still_names_the_format_not_the_passphrase(tmp_path):
+    """Whoever asks for the password of a stale account gets the real reason.
 
-    `add_account` verifies the passphrase against a stored credential before
-    writing new ciphertext, which is right - but it replaced whatever the vault
-    said with one generic message. Someone whose credentials predate the
-    current format was therefore told their passphrase was wrong and retyped it
-    forever: NO passphrase opens an older-format blob. The vault's own answer
-    already names the fix, so it has to survive the wrapping.
+    `add_account` no longer refuses over one of these - see
+    `test_an_unreadable_credential_does_not_block_adding_a_new_one` - but the
+    read path must still say "older format", never "wrong passphrase", or the
+    user is sent hunting for a problem that is not there.
     """
-    import json
-
     from megabasterd_cli.accounts.manager import AccountManager
 
-    path = tmp_path / "accounts.json"
-    path.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "default_email": None,
-                "accounts": [
-                    {"email": "old@example.com", "enc_password": _legacy_blob(PASSPHRASE, SECRET)}
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
+    path = _vault_file(tmp_path, ("old@example.com", _legacy_blob(PASSPHRASE, SECRET)))
     manager = AccountManager(path)
     manager.unlock(PASSPHRASE)
     with pytest.raises(VaultUnlockError, match="older vault format"):
-        manager.add_account("new@example.com", "pw")
+        manager.get_password("old@example.com")
 
 
 def test_a_genuinely_wrong_passphrase_is_still_reported_as_one(tmp_path):
@@ -153,3 +137,106 @@ def test_a_genuinely_wrong_passphrase_is_still_reported_as_one(tmp_path):
     reader.unlock("not-the-passphrase")
     with pytest.raises(VaultUnlockError, match="Wrong vault passphrase"):
         reader.add_account("b@example.com", "pw")
+
+
+# ---------------------------------------------------------------------------
+# Recovering a vault whose credentials predate the format
+# ---------------------------------------------------------------------------
+
+
+def _vault_file(tmp_path, *entries):
+    import json
+
+    path = tmp_path / "accounts.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "default_email": entries[0][0] if entries else None,
+                "accounts": [{"email": e, "enc_password": b} for e, b in entries],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_the_old_format_is_not_reported_with_an_invented_version_number():
+    """Byte 0 of a pre-v2 blob is a random SALT byte, not a version.
+
+    Printing it as `v85`/`v56` - a different number every time, from the same
+    file - reads like a real format generation and sends the reader looking for
+    one that never existed.
+    """
+    with pytest.raises(VaultUnlockError) as excinfo:
+        CredentialVault(PASSPHRASE).decrypt(_legacy_blob(PASSPHRASE, SECRET))
+    assert "older vault format" in str(excinfo.value)
+    assert not re.search(r"\(v\d+\)", str(excinfo.value)), str(excinfo.value)
+
+
+def test_an_unreadable_credential_does_not_block_adding_a_new_one(tmp_path):
+    """The guard exists to stop the vault splitting across two passphrases.
+
+    A credential no passphrase can open is not evidence about the passphrase -
+    there is nothing to be consistent WITH. Refusing on that basis leaves the
+    vault unrecoverable through the normal path: the user cannot add anything
+    until they have removed every stale entry one confirmation at a time.
+    """
+    from megabasterd_cli.accounts.manager import AccountManager
+
+    path = _vault_file(tmp_path, ("old@example.com", _legacy_blob(PASSPHRASE, SECRET)))
+    manager = AccountManager(path)
+    manager.unlock(PASSPHRASE)
+
+    manager.add_account("new@example.com", "pw")
+    assert manager.get_password("new@example.com") == "pw"
+
+
+def test_re_adding_the_account_you_can_no_longer_decrypt_replaces_it(tmp_path):
+    """The exact recovery path: same email, dead credential.
+
+    The duplicate check refused, so the advice "remove the account and add it
+    again" was the ONLY way through - two commands and a confirmation prompt to
+    repair something the second command already knows how to repair. Replacing
+    is safe precisely because the stored credential is provably unusable.
+    """
+    from megabasterd_cli.accounts.manager import AccountManager
+
+    path = _vault_file(tmp_path, ("me@example.com", _legacy_blob(PASSPHRASE, SECRET)))
+    manager = AccountManager(path)
+    manager.unlock(PASSPHRASE)
+
+    manager.add_account("me@example.com", "new-password")
+
+    assert len(manager.list_accounts()) == 1, "it must replace, not duplicate"
+    assert manager.get_password("me@example.com") == "new-password"
+
+
+def test_a_readable_duplicate_is_still_refused(tmp_path):
+    """Replacement is for dead credentials only, never a working one."""
+    from megabasterd_cli.accounts.manager import AccountManager
+
+    path = tmp_path / "accounts.json"
+    manager = AccountManager(path)
+    manager.unlock(PASSPHRASE)
+    manager.add_account("me@example.com", "pw")
+
+    with pytest.raises(ValueError, match="already exists"):
+        manager.add_account("me@example.com", "other")
+
+
+def test_a_readable_credential_still_guards_the_passphrase(tmp_path):
+    """A stale entry must not disable the guard for the readable ones."""
+    from megabasterd_cli.accounts.manager import AccountManager
+
+    writer = CredentialVault(PASSPHRASE)
+    path = _vault_file(
+        tmp_path,
+        ("old@example.com", _legacy_blob(PASSPHRASE, SECRET)),
+        ("good@example.com", writer.encrypt(SECRET)),
+    )
+    manager = AccountManager(path)
+    manager.unlock("not-the-passphrase")
+
+    with pytest.raises(VaultUnlockError, match="Wrong vault passphrase"):
+        manager.add_account("new@example.com", "pw")

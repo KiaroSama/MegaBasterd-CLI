@@ -42,6 +42,8 @@
     "CredentialVault.VERSION",
     "CredentialVault.decrypt",
     "CredentialVault.encrypt",
+    "CredentialVault.is_readable_format",
+    "VaultFormatError",
     "VaultUnlockError",
     "validate_account_document"
   ],

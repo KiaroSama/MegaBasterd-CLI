@@ -127,18 +127,35 @@ class CredentialVault:
         header = bytes([self.VERSION, n.bit_length() - 1, r, p])
         return base64.b64encode(header + salt + nonce + ct).decode("ascii")
 
+    @classmethod
+    def is_readable_format(cls, encoded: str) -> bool:
+        """True when this blob is one the current code could decrypt.
+
+        Header-only, so it costs nothing: callers need to tell "no passphrase
+        can open this" from "this passphrase is wrong" WITHOUT paying scrypt
+        per stored credential to find out.
+        """
+        try:
+            raw = base64.b64decode(encoded)
+        except Exception:  # noqa: BLE001 - any decode failure means unreadable
+            return False
+        return len(raw) >= cls._MIN_LEN and raw[0] == cls.VERSION
+
     def _unpack(self, encoded: str) -> tuple[bytes, bytes, bytes, int, int, int]:
         raw = base64.b64decode(encoded)
         if len(raw) < self._MIN_LEN:
             raise ValueError("Encrypted blob too short")
         version, log2n, r, p = raw[0], raw[1], raw[2], raw[3]
         if version != self.VERSION:
-            # Most likely a credential written before the format carried its own
-            # parameters. Say so: "wrong passphrase" would send the user looking
-            # for a problem that is not there.
-            raise VaultUnlockError(
-                f"This credential was stored in an older vault format (v{version}). "
-                "Remove the account and add it again."
+            # A credential written before the format carried its own parameters.
+            # Say so: "wrong passphrase" would send the user looking for a
+            # problem that is not there. Do NOT quote `version` as a generation
+            # number - in a pre-v2 blob byte 0 is a random SALT byte, so the
+            # same file reports a different "v" every run and the reader goes
+            # hunting for a format that never existed.
+            raise VaultFormatError(
+                "This credential was stored in an older vault format. "
+                "Adding the account again replaces it."
             )
         if not self._MIN_LOG2_N <= log2n <= self._MAX_LOG2_N:
             raise ValueError(f"Vault KDF cost out of range: 2**{log2n}")
@@ -156,6 +173,16 @@ class CredentialVault:
             raise VaultUnlockError(
                 "Wrong vault passphrase (or the credential is corrupt)."
             ) from exc
+
+
+class VaultFormatError(VaultUnlockError):
+    """The blob predates the current vault format, so no passphrase opens it.
+
+    A distinct type because the two failures need opposite handling: a wrong
+    passphrase means "try again", while this means "the stored bytes are dead
+    and retyping cannot help". Callers that treated both as a bad passphrase
+    left the vault unrecoverable through the normal path.
+    """
 
 
 class AccountCorruptionError(Exception):

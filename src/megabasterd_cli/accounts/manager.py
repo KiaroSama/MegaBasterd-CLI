@@ -107,24 +107,44 @@ class AccountManager:
         # with no single one that decrypts them all. `unlock()` cannot tell a
         # right passphrase from a wrong one, so verify it against a real
         # credential before the first mutation that writes new ciphertext.
-        if self.store.accounts:
+        #
+        # Only a READABLE credential can answer that question. One written
+        # before the current vault format opens for nobody, so treating it as
+        # evidence about the passphrase blocked every add and left the vault
+        # unrecoverable through the normal path - the user had to remove each
+        # stale entry, one confirmation at a time, before adding anything.
+        readable = [
+            a for a in self.store.accounts if CredentialVault.is_readable_format(a.enc_password)
+        ]
+        if readable:
             try:
-                self._vault.decrypt(self.store.accounts[0].enc_password)
+                self._vault.decrypt(readable[0].enc_password)
             except VaultUnlockError as exc:
-                # Keep the REASON the vault gave. Flattening every failure into
-                # "passphrase does not match" sent people hunting for a wrong
-                # passphrase when the real answer was that the credential
-                # predates the current vault format - which says exactly what
-                # to do about it, and no amount of retyping the passphrase
-                # would ever have worked.
+                # Keep the REASON the vault gave rather than flattening every
+                # failure into one generic message.
                 raise VaultUnlockError(
                     f"Refusing to add an account: the stored vault could not be "
                     f"opened with this passphrase. {exc}"
                 ) from exc
-        # Check for duplicates
-        for a in self.store.accounts:
+        stale = len(self.store.accounts) - len(readable)
+        if stale:
+            log.warning(
+                "%d stored credential(s) predate the current vault format and can no "
+                "longer be decrypted; add those accounts again to replace them.",
+                stale,
+            )
+
+        # A duplicate whose credential is DEAD is the recovery case, not a
+        # mistake: re-adding is exactly how you repair it, and refusing sent
+        # the user to `account remove` first for no benefit. A readable
+        # duplicate is still refused - that would overwrite working credentials.
+        for index, a in enumerate(self.store.accounts):
             if a.email.lower() == email.lower():
-                raise ValueError(f"Account already exists: {email}")
+                if CredentialVault.is_readable_format(a.enc_password):
+                    raise ValueError(f"Account already exists: {email}")
+                self.store.accounts.pop(index)
+                label = label or a.label
+                break
 
         enc = self._vault.encrypt(password)
         account = Account(email=email, enc_password=enc, label=label)
