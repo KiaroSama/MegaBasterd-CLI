@@ -11,8 +11,8 @@ from typing import Any
 
 from .crypto import (
     a32_to_bytes,
-    aes_cbc_decrypt,
     aes_cbc_decrypt_a32,
+    aes_key_wrap_decrypt,
     b64_url_decode,
     b64_url_encode,
     bytes_to_a32,
@@ -118,7 +118,13 @@ class AuthOperations(NodeOperations):
             else:
                 encrypted_rsa_priv = b64_url_decode(_expect_field(result, "privk", str, "login"))
                 csid_encrypted = b64_url_decode(_expect_field(result, "csid", str, "login"))
-                rsa_priv = aes_cbc_decrypt(encrypted_rsa_priv, master_key)
+                # Key material is wrapped BLOCK BY BLOCK with a zero IV, not as
+                # one chained CBC stream. Chained decryption returns only the
+                # first 16 bytes intact, so the four length-prefixed MPIs stop
+                # parsing and every real login failed with "Malformed RSA
+                # private key". The master key above is a single block, where
+                # both forms agree - which is why this only broke here.
+                rsa_priv = aes_key_wrap_decrypt(encrypted_rsa_priv, master_key)
                 sid = self._decode_session_id(csid_encrypted, rsa_priv)
         except MegaError:
             raise  # already typed and actionable
@@ -160,7 +166,12 @@ class AuthOperations(NodeOperations):
         p, q, d, _u = parts
         n = p * q
         decrypted = pow(int.from_bytes(csid_encrypted, "big"), d, n)
-        decrypted_bytes = decrypted.to_bytes((n.bit_length() + 7) // 8, "big")
+        # Minimal-width, NOT padded to the modulus. The plaintext is always
+        # smaller than n, so padding to the modulus width prepends zero bytes
+        # and shifts the session id: the first 43 bytes would then be padding
+        # plus a truncated sid. MEGA's reference client renders the integer as
+        # bare hex ("%x"), which drops leading zeros - this is the same thing.
+        decrypted_bytes = decrypted.to_bytes((decrypted.bit_length() + 7) // 8, "big")
         if len(decrypted_bytes) < 43:
             raise AuthError(message="Malformed encrypted session ID in login response")
         return b64_url_encode(decrypted_bytes[:43])
