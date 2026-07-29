@@ -58,6 +58,7 @@
     "account_default",
     "account_info",
     "account_list",
+    "account_logout",
     "account_refresh_all",
     "account_remove",
     "require_vault_passphrase"
@@ -561,7 +562,9 @@
     "SessionPersistence",
     "SessionPersistence.load_session",
     "SessionPersistence.save_session",
-    "SessionPersistence.session"
+    "SessionPersistence.session",
+    "forget_session",
+    "session_path"
   ],
   "megabasterd_cli.core.shares": [
     "ShareOperations",

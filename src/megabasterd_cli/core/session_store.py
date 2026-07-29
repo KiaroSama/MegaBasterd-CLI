@@ -17,6 +17,43 @@ from .responses import _expect_field
 log = logging.getLogger(__name__)
 
 
+def session_path(account_id: str) -> Path:
+    """The cache file for one account, under the user's data dir.
+
+    Lives here rather than in the command that happened to need it first, so
+    the command that WRITES the cache and the command that clears it cannot
+    disagree about the name - the account id would then keep a session nobody
+    could reach, still valid server-side.
+    """
+    from hashlib import sha256
+
+    from ..config import session_dir
+
+    # The id can be an email or a label; hash it so the filename never carries
+    # the address around on disk.
+    return session_dir() / f"{sha256(account_id.lower().encode('utf-8')).hexdigest()[:32]}.session"
+
+
+def forget_session(account_id: str) -> bool:
+    """Delete the cached session for `account_id`. True if one was there.
+
+    Local only - this does not tell MEGA anything. Invalidating the session
+    server-side is `MegaClient.logout()`, and both are needed: dropping the
+    file alone leaves a token that stays valid until MEGA expires it, while
+    calling logout alone leaves a dead file the next run has to probe and
+    discard.
+    """
+    path = session_path(account_id)
+    try:
+        path.unlink()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        log.warning("Could not remove the cached session for %s: %s", account_id, exc)
+        return False
+
+
 def _atomic_write_private(path: Path, data: bytes) -> None:
     """Replace `path` with `data` in one step, owner-only from creation.
 

@@ -62,7 +62,7 @@ class _Client:
 
 @pytest.fixture()
 def data_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(cloud_cmd, "session_dir", lambda: tmp_path / "sessions")
+    monkeypatch.setattr("megabasterd_cli.config.session_dir", lambda: tmp_path / "sessions")
     return tmp_path
 
 
@@ -134,5 +134,5 @@ def test_storing_a_session_never_breaks_the_command(data_dir, monkeypatch):
 
     saver = _Client(_Api())
     saver.session = _session()
-    monkeypatch.setattr(cloud_cmd, "session_dir", boom)
+    monkeypatch.setattr("megabasterd_cli.config.session_dir", boom)
     cloud_cmd._remember_session(saver, ACCOUNT, PASSPHRASE)  # must not raise

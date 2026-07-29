@@ -18,6 +18,7 @@ from ..ui.prompts import (
     print_error,
     print_info,
     print_success,
+    print_warn,
 )
 from ..ui.tables import render_accounts
 from ..utils.redaction import redact_text
@@ -155,10 +156,91 @@ def account_remove(email_or_label: str) -> None:
     try:
         if not confirm(f"Really remove {email_or_label}?", default=False):
             return
+        account = mgr.get_account(email_or_label)
         mgr.remove_account(email_or_label)
+        # Drop the cached session too. Leaving it behind kept a token that
+        # MEGA still honours until it expires, for an account the user has
+        # just been told was removed - and no command can reach it any more to
+        # log it out.
+        from ..core.session_store import forget_session
+
+        for key in {email_or_label, account.email, account.label or account.email}:
+            forget_session(key)
         print_success(f"Removed: {email_or_label}")
     except AccountNotFound:
         print_error(f"Account not found: {email_or_label}")
+
+
+@account.command("logout", short_help="End a stored MEGA session.")
+@click.argument("email_or_label", required=False)
+@click.option("--all", "all_accounts", is_flag=True, help="Log out every stored account.")
+@click.option("--vault-passphrase", default=None, help="Vault passphrase (prompted if omitted).")
+@click.pass_context
+def account_logout(
+    ctx: click.Context,
+    email_or_label: str | None,
+    all_accounts: bool,
+    vault_passphrase: str | None,
+) -> None:
+    """Invalidate the session MEGA is holding and drop the local cache.
+
+    Logging in caches an encrypted session so later commands do not have to
+    re-authenticate (and re-prompt for 2FA). That session stays valid until
+    something ends it, and nothing did: there was no way to close it short of
+    waiting for MEGA to expire it.
+
+    Both halves are needed. Deleting the file alone leaves a token MEGA still
+    honours; calling logout alone leaves a dead file the next run has to probe
+    and discard.
+    """
+    from ..core.session_store import forget_session, session_path
+
+    cfg = ctx.obj["config"]
+    mgr = AccountManager(accounts_file())
+    if all_accounts:
+        targets = [a.email for a in mgr.list_accounts()]
+    elif email_or_label:
+        targets = [email_or_label]
+    else:
+        from ..accounts.manager import resolve_account_id
+
+        target = resolve_account_id(mgr, cfg.default_account)
+        if not target:
+            print_error("No account specified and no default set.")
+            ctx.exit(1)
+        targets = [target]
+
+    cached = [t for t in targets if session_path(t).is_file()]
+    if not cached:
+        print_info("No stored session to end.")
+        return
+
+    passphrase = vault_passphrase or ask_password("Vault passphrase")
+    ended = 0
+    for target in cached:
+        client = MegaClient(api=api_for(cfg))
+        try:
+            session = client.load_session(session_path(target), passphrase)
+            if session is None:
+                # Unreadable under this passphrase: the token cannot be used
+                # to log itself out, so the file is all we can clear. Say so
+                # rather than reporting a logout that did not happen.
+                forget_session(target)
+                print_warn(f"{target}: cached session could not be read; file removed only.")
+                continue
+            client.session = session
+            client.api.set_session(session.sid)
+            client.logout()  # `{"a":"sml"}`, then releases the transport
+            forget_session(target)
+            ended += 1
+        except MegaError as exc:
+            # The server-side call is best effort; the local file is not.
+            forget_session(target)
+            print_warn(f"{target}: {redact_text(str(exc))}; cached session removed.")
+        finally:
+            client.api.close()
+    if ended:
+        print_success(f"Logged out {ended} account(s).")
 
 
 @account.command("default", short_help="Set the default account.")

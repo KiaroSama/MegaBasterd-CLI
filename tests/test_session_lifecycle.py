@@ -253,11 +253,19 @@ def test_no_command_module_relies_on_logout_plus_a_forgotten_close():
     ["ls_cmd", "mkdir_cmd", "rm_cmd", "mv_cmd", "rename_cmd", "search_cmd", "import_cmd"],
 )
 def test_every_cloud_command_releases_in_a_finally(name):
-    """The cloud commands all share `_client()`; none may skip the release."""
+    """The cloud commands all share `_client()`; none may skip the release.
+
+    The invariant is that the transport is released on every path, not which
+    method does it. It must be `close()` here and NOT `logout()`: these
+    commands cache the session for reuse, and `logout()` would invalidate the
+    very session they just stored - see `tests/test_session_logout.py`.
+    """
     import inspect
 
     from megabasterd_cli.commands import cloud_cmd
 
     command = getattr(cloud_cmd, name)
     source = inspect.getsource(command.callback)
-    assert "finally" in source and "logout()" in source, f"{name} can leak its session"
+    assert "finally" in source, f"{name} can leak its session"
+    assert "client.close()" in source, f"{name} does not release the transport"
+    assert "logout()" not in source, f"{name} kills the session it cached for reuse"
