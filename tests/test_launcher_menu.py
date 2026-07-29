@@ -196,8 +196,22 @@ def test_wizard_back_on_the_first_step_abandons(monkeypatch):
     assert lm.run_wizard("", STEPS) is None
 
 
-def test_wizard_blank_required_answer_abandons(monkeypatch):
-    _answers(monkeypatch, "")
+def test_wizard_blank_required_answer_re_asks_instead_of_abandoning(monkeypatch):
+    """A blank required field costs you that field, not the whole wizard.
+
+    It used to `return None`, which discarded every earlier answer and dropped
+    the user back at the menu - several steps back from one mis-keyed Enter.
+    `0` is the only way backwards, and it moves exactly one step.
+    """
+    # blank -> re-asked, then a real value, then the three defaulted steps.
+    _answers(monkeypatch, "", "value", "", "", "")
+    values = lm.run_wizard("", STEPS)
+    assert values is not None, "a blank required answer must not abandon the wizard"
+    assert values["src"] == "value"
+
+
+def test_only_the_back_token_abandons_a_wizard_from_its_first_step(monkeypatch):
+    _answers(monkeypatch, "0")
     assert lm.run_wizard("", STEPS) is None
 
 
@@ -321,13 +335,25 @@ def _render(build) -> str:
     On Windows Rich defaults to `legacy_windows=True` and paints via the Win32
     console API, which strips every escape on the way to a pipe - a capture
     without this looks uncoloured no matter what the styles say.
+
+    `no_color` has to be forced too. Rich reads the NO_COLOR environment
+    variable regardless of `force_terminal` and `color_system`, and when it is
+    set it drops every colour while KEEPING bold - so these assertions failed in
+    any shell that exports it (and passed in CI, which does not). The subject
+    here is whether our own styles are applied, not whether the surrounding
+    terminal wants colour.
     """
     from rich.console import Console
 
     from megabasterd_cli.ui.theme import THEME
 
     console = Console(
-        theme=THEME, force_terminal=True, color_system="truecolor", legacy_windows=False, width=88
+        theme=THEME,
+        force_terminal=True,
+        color_system="truecolor",
+        legacy_windows=False,
+        no_color=False,
+        width=88,
     )
     original, lm.console = lm.console, console
     try:
