@@ -165,22 +165,21 @@ class CredentialVault:
         raw = base64.b64decode(encoded)
         if len(raw) < self._MIN_LEN:
             raise ValueError("Encrypted blob too short")
-        version, log2n, r, p = raw[0], raw[1], raw[2], raw[3]
-        if version != self.VERSION:
-            # A credential written before the format carried its own parameters.
-            # Say so: "wrong passphrase" would send the user looking for a
-            # problem that is not there. Do NOT quote `version` as a generation
-            # number - in a pre-v2 blob byte 0 is a random SALT byte, so the
-            # same file reports a different "v" every run and the reader goes
-            # hunting for a format that never existed.
+        if not self._header_is_plausible(raw):
+            # ONE condition, because the two cases it covers are not
+            # distinguishable from the bytes: a credential written before the
+            # format carried its own parameters (byte 0 is then a random SALT
+            # byte, which is why no version number is quoted - the same file
+            # would report a different one every run), and a hand-edited file
+            # whose parameters are out of range. Both mean "this is not a blob
+            # this code wrote", and both must be refused BEFORE `_derive`, or
+            # `1 << 223` hangs the process allocating.
             raise VaultFormatError(
-                "This credential was stored in an older vault format. "
-                "Adding the account again replaces it."
+                "This credential was not written by the current vault format "
+                "(unknown version, or KDF parameters out of range). Adding the "
+                "account again replaces it."
             )
-        if not self._MIN_LOG2_N <= log2n <= self._MAX_LOG2_N:
-            raise ValueError(f"Vault KDF cost out of range: 2**{log2n}")
-        if not 1 <= r <= 32 or not 1 <= p <= 16:
-            raise ValueError("Vault KDF parameters out of range")
+        log2n, r, p = raw[1], raw[2], raw[3]
         body = raw[self._HEADER_LEN :]
         return body[:16], body[16:28], body[28:], 1 << log2n, r, p
 

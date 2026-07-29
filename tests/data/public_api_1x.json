@@ -700,6 +700,7 @@
     "run_menu",
     "run_wizard",
     "split_args",
+    "sub",
     "upload_wizard"
   ],
   "megabasterd_cli.proxy.connect_proxy": [
