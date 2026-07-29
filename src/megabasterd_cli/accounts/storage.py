@@ -128,6 +128,26 @@ class CredentialVault:
         return base64.b64encode(header + salt + nonce + ct).decode("ascii")
 
     @classmethod
+    def _header_is_plausible(cls, raw: bytes) -> bool:
+        """Check ALL FOUR header bytes, not just the version.
+
+        A pre-v2 blob begins with a random SALT, so a version-byte-only test
+        misfires once every 256 credentials: the next three salt bytes are then
+        read as scrypt parameters and the caller gets a bare
+        `ValueError: Vault KDF cost out of range: 2**214` instead of the "older
+        format" message. Requiring the whole header to be in range takes that
+        from 1-in-256 to negligible, and every caller still handles the
+        leftover case rather than trusting this.
+        """
+        version, log2n, r, p = raw[0], raw[1], raw[2], raw[3]
+        return (
+            version == cls.VERSION
+            and cls._MIN_LOG2_N <= log2n <= cls._MAX_LOG2_N
+            and 1 <= r <= 32
+            and 1 <= p <= 16
+        )
+
+    @classmethod
     def is_readable_format(cls, encoded: str) -> bool:
         """True when this blob is one the current code could decrypt.
 
@@ -139,7 +159,7 @@ class CredentialVault:
             raw = base64.b64decode(encoded)
         except Exception:  # noqa: BLE001 - any decode failure means unreadable
             return False
-        return len(raw) >= cls._MIN_LEN and raw[0] == cls.VERSION
+        return len(raw) >= cls._MIN_LEN and cls._header_is_plausible(raw)
 
     def _unpack(self, encoded: str) -> tuple[bytes, bytes, bytes, int, int, int]:
         raw = base64.b64decode(encoded)

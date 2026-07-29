@@ -7,7 +7,14 @@ import logging
 import threading
 from pathlib import Path
 
-from .storage import Account, AccountStorage, AccountStore, CredentialVault, VaultUnlockError
+from .storage import (
+    Account,
+    AccountStorage,
+    AccountStore,
+    CredentialVault,
+    VaultFormatError,
+    VaultUnlockError,
+)
 
 log = logging.getLogger(__name__)
 
@@ -116,16 +123,29 @@ class AccountManager:
         readable = [
             a for a in self.store.accounts if CredentialVault.is_readable_format(a.enc_password)
         ]
-        if readable:
+        for candidate in readable:
             try:
-                self._vault.decrypt(readable[0].enc_password)
+                self._vault.decrypt(candidate.enc_password)
+            except VaultFormatError:
+                # The header looked plausible but the body is not ours after
+                # all. `is_readable_format` is a cheap heuristic over four
+                # bytes, so it cannot be the last word - try the next readable
+                # credential instead of blaming the passphrase.
+                continue
+            except ValueError:
+                # Same case, reached through the untrusted-parameter guard: a
+                # salt that collides on the whole header. A raw ValueError out
+                # of `add_account` is a traceback, not an answer.
+                continue
             except VaultUnlockError as exc:
-                # Keep the REASON the vault gave rather than flattening every
-                # failure into one generic message.
+                # A credential we really can read did not open: that IS about
+                # the passphrase. Keep the reason the vault gave rather than
+                # flattening every failure into one generic message.
                 raise VaultUnlockError(
                     f"Refusing to add an account: the stored vault could not be "
                     f"opened with this passphrase. {exc}"
                 ) from exc
+            break
         # A duplicate whose credential is DEAD is the recovery case, not a
         # mistake: re-adding is exactly how you repair it, and refusing sent
         # the user to `account remove` first for no benefit. A readable

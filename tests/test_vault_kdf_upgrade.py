@@ -282,3 +282,60 @@ def test_a_readable_credential_still_guards_the_passphrase(tmp_path):
 
     with pytest.raises(VaultUnlockError, match="Wrong vault passphrase"):
         manager.add_account("new@example.com", "pw")
+
+
+def _legacy_blob_with_salt_prefix(prefix: bytes, passphrase: str, plaintext: str) -> str:
+    """A pre-v2 blob whose random salt happens to start with `prefix`."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+
+    salt = prefix + os.urandom(16 - len(prefix))
+    nonce = os.urandom(12)
+    key = Scrypt(salt=salt, length=32, n=2**14, r=8, p=1).derive(passphrase.encode("utf-8"))
+    ct = AESGCM(key).encrypt(nonce, plaintext.encode("utf-8"), None)
+    return base64.b64encode(salt + nonce + ct).decode("ascii")
+
+
+def test_a_legacy_salt_that_starts_like_a_version_byte_is_not_called_readable():
+    """One byte is not enough to tell the formats apart - it is 1 in 256.
+
+    A pre-v2 blob starts with a random SALT. When its first byte happens to be
+    the current version number, a version-byte-only check calls it readable,
+    the next three salt bytes get read as scrypt parameters, and the caller
+    gets a bare `ValueError: Vault KDF cost out of range: 2**214` instead of
+    the "older format" message. CI caught this as a flake at exactly the
+    expected rate; it is a real defect for anyone whose stored salt starts
+    with that byte.
+    """
+    blob = _legacy_blob_with_salt_prefix(bytes([CredentialVault.VERSION]), PASSPHRASE, SECRET)
+    assert base64.b64decode(blob)[0] == CredentialVault.VERSION, "fixture must collide"
+    assert not CredentialVault.is_readable_format(blob)
+
+
+def test_such_a_blob_reports_the_format_rather_than_raising_valueerror(tmp_path):
+    from megabasterd_cli.accounts.manager import AccountManager
+
+    blob = _legacy_blob_with_salt_prefix(bytes([CredentialVault.VERSION]), PASSPHRASE, SECRET)
+    manager = AccountManager(_vault_file(tmp_path, ("old@example.com", blob)))
+    manager.unlock(PASSPHRASE)
+
+    # The add must succeed - a credential nobody can read is not evidence about
+    # the passphrase - and must not surface a raw ValueError on the way.
+    manager.add_account("new@example.com", "pw")
+    assert manager.get_password("new@example.com") == "pw"
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        (2, 9, 8, 1),  # log2n below the floor
+        (2, 23, 8, 1),  # log2n above the ceiling
+        (2, 15, 0, 1),  # r must be >= 1
+        (2, 15, 8, 17),  # p above the ceiling
+    ],
+)
+def test_an_implausible_header_is_not_called_readable(header):
+    """The classifier checks the WHOLE header, so a salt has to collide on all
+    four bytes to be mistaken for a real one."""
+    body = bytes(header) + b"\x00" * 44
+    assert not CredentialVault.is_readable_format(base64.b64encode(body).decode("ascii"))
