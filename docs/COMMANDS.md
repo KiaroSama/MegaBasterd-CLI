@@ -224,8 +224,12 @@ for 2FA. The session stays valid until you end it.
 the local cache. Both halves matter — removing the file alone would leave a
 token MEGA still honours, and invalidating alone would leave a dead file the
 next command has to probe and discard. `--all` does every stored account.
-`account remove` clears the cached session too, so removing an account never
-leaves a live token behind.
+
+**`logout` and `remove` are different.** `logout` ends the session and *keeps*
+the stored credential, so signing in again needs only the vault passphrase —
+the account stays in `account list`. `remove` deletes the credential, and
+clears the cached session with it so removal never leaves a live token behind.
+If you want the account gone from this machine, that is `remove`.
 
 ## Queue Commands
 
