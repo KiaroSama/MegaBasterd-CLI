@@ -392,6 +392,13 @@ def test_back_and_exit_hints_are_different_colours():
     assert "\x1b[0m{" in out and "}" in out, out
 
 
-def test_a_prompt_default_is_green_brackets_included():
+def test_a_prompt_default_is_green_but_its_brackets_are_not():
+    """Brackets are punctuation, exactly like the braces above.
+
+    They used to be swallowed into the green span, so `[1]` lit up three
+    characters when only one of them carries information - and the two shapes
+    on the same line disagreed, since `{`/`}` were already left plain.
+    """
     out = _render(lambda c: c.print(lm._styled_prompt("Output directory [./Out] {quit=exit}: ")))
-    assert "\x1b[92m[./Out]\x1b[0m" in out, out
+    assert "\x1b[92m./Out\x1b[0m" in out, out
+    assert "\x1b[0m[" in out and "m]" in out, out
