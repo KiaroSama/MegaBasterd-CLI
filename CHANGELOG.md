@@ -2,7 +2,12 @@
 
 ## Unreleased
 
+### Added
+- Logging in once is enough: the session is stored encrypted under the same passphrase that already unlocks the account vault, so the cloud commands and `mb share` reuse it instead of logging in (and re-prompting for 2FA) every time. A stored session is verified before it is trusted, and an expired one falls back to a normal login. The file is named after a hash of the account, and its contents stay encrypted at rest.
+
 ### Fixed
+- Prompts follow one convention everywhere. The launcher rendered `(y/n) [Y]` while the CLI used Rich's `[y/n] (n)` and an uncoloured password prompt, which was visible in a single session because the launcher runs the CLI. Confirmations, text prompts and password prompts now share the launcher's shape and colours.
+- Leaving a required launcher field blank no longer abandons the whole wizard and discards the earlier answers; it re-asks that one field. `0` remains the only way backwards, and it always moves exactly one step.
 - Account login works again. Every login that went through the RSA session path failed with "Malformed RSA private key in login response": the account's private key is wrapped block by block with a zero IV, but it was being unwrapped as one chained CBC stream, so only its first 16 bytes survived and the four length-prefixed integers no longer parsed. The same path also rendered the decrypted session id at the full modulus width, which prepended padding bytes and truncated the id; it is now derived the way MEGA's own client derives it.
 
 ### Security (deep audit rounds)
