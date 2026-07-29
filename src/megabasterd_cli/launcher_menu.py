@@ -610,8 +610,16 @@ ACCOUNT_MENU = Menu(
         ("Add/login account", account_add_wizard),
         ("List stored accounts", cmd("account", "list")),
         (
-            "Log out of an account",
+            # Named for the difference that matters: this ends the SESSION and
+            # keeps the stored credential, so logging in again needs only the
+            # vault passphrase. Reading it as "remove me from this machine" and
+            # finding the account still listed is exactly what happened.
+            "Log out (end session, keep account)",
             sub("account", "logout", "Account email/label [blank = default; --all for every one]"),
+        ),
+        (
+            "Remove account (delete stored credential)",
+            sub("account", "remove", "Account email/label"),
         ),
         (
             "Set default account",
@@ -621,6 +629,7 @@ ACCOUNT_MENU = Menu(
             "Show account quota",
             sub("account", "info", "Account email/label [blank = default]"),
         ),
+        ("Refresh every account's quota", cmd("account", "refresh-all")),
         (
             "List cloud files",
             generic("ls", "Enter remote path/options [blank path is root; type . for root]"),
@@ -706,8 +715,16 @@ SETTINGS_MENU = Menu(
         ("Add/login MEGA account", account_add_wizard),
         ("List accounts", cmd("account", "list")),
         (
-            "Log out of an account",
+            # Named for the difference that matters: this ends the SESSION and
+            # keeps the stored credential, so logging in again needs only the
+            # vault passphrase. Reading it as "remove me from this machine" and
+            # finding the account still listed is exactly what happened.
+            "Log out (end session, keep account)",
             sub("account", "logout", "Account email/label [blank = default; --all for every one]"),
+        ),
+        (
+            "Remove account (delete stored credential)",
+            sub("account", "remove", "Account email/label"),
         ),
         (
             "Set default account",

@@ -212,7 +212,14 @@ def account_logout(
 
     cached = [t for t in targets if session_path(t).is_file()]
     if not cached:
-        print_info("No stored session to end.")
+        # Say what was NOT done, and name the command that does it. "No stored
+        # session to end." alone reads as "nothing happened, and I do not know
+        # why" - someone expecting the account to disappear then checks the
+        # list, finds it there, and concludes logout is broken.
+        print_info(
+            "No stored session to end. The account and its stored credential are "
+            "untouched; `mb account remove` deletes those."
+        )
         return
 
     passphrase = vault_passphrase or ask_password("Vault passphrase")

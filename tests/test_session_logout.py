@@ -255,3 +255,36 @@ def test_the_menu_entry_supplies_the_subcommand_itself(monkeypatch, typed, expec
     lm.sub("account", "logout", "prompt")()
 
     assert calls == [expected]
+
+
+def test_every_account_subcommand_is_reachable_from_the_menu(monkeypatch):
+    """A CLI subcommand with no menu entry does not exist for menu users.
+
+    This has now bitten three times in a row: `logout` was added to the CLI
+    only, and fixing that exposed `remove` and `refresh-all` missing too - so
+    the only way to delete an account was a command line the menu never
+    mentions, and `logout` got used for it instead.
+
+    Driven through the actions rather than read off the source, so an entry
+    that merely mentions a word in its label cannot satisfy it.
+    """
+    from megabasterd_cli import launcher_menu as lm
+    from megabasterd_cli.commands.account_cmd import account
+
+    dispatched: list[list[str]] = []
+    monkeypatch.setattr(lm, "dispatch", lambda args, **kw: dispatched.append(list(args)))
+    monkeypatch.setattr(lm, "ask_text", lambda *a, **kw: "someone@example.invalid")
+    monkeypatch.setattr(lm, "ask_password", lambda *a, **kw: "pw")
+    monkeypatch.setattr(lm, "ask_yes_no", lambda *a, **kw: True, raising=False)
+
+    import contextlib
+
+    for _label, action in lm.ACCOUNT_MENU.entries:
+        # Only the argv matters; a wizard that trips over a stubbed prompt has
+        # already told us whether it dispatches.
+        with contextlib.suppress(Exception):
+            action()
+
+    reached = {argv[1] for argv in dispatched if argv and argv[0] == "account" and len(argv) > 1}
+    missing = sorted(set(account.commands) - reached)
+    assert not missing, f"no menu entry runs `mb account {missing}`"
