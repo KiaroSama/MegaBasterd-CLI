@@ -207,6 +207,7 @@ Trash commands:
 .\Run.ps1 account list
 .\Run.ps1 account add EMAIL [--label NAME] [--default] [--verify/--no-verify]
 .\Run.ps1 account remove EMAIL_OR_LABEL
+.\Run.ps1 account logout [EMAIL_OR_LABEL] [--all]
 .\Run.ps1 account default EMAIL_OR_LABEL
 .\Run.ps1 account info [EMAIL_OR_LABEL]
 .\Run.ps1 account refresh-all
@@ -214,6 +215,17 @@ Trash commands:
 
 Account passwords are stored in the encrypted vault. The vault passphrase is
 prompted interactively unless `--vault-passphrase` is provided.
+
+Logging in caches the session, encrypted under the same vault passphrase, so
+later commands do not re-authenticate — which also means they do not re-prompt
+for 2FA. The session stays valid until you end it.
+
+`account logout` ends it: it tells MEGA to invalidate the session and deletes
+the local cache. Both halves matter — removing the file alone would leave a
+token MEGA still honours, and invalidating alone would leave a dead file the
+next command has to probe and discard. `--all` does every stored account.
+`account remove` clears the cached session too, so removing an account never
+leaves a live token behind.
 
 ## Queue Commands
 

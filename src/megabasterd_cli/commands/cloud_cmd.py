@@ -29,12 +29,15 @@ _console = make_console()
 
 
 def _session_path(account_id: str):
-    """One encrypted session file per account, under the user's data dir."""
-    from hashlib import sha256
+    """One name for the cache file, owned by `core.session_store`.
 
-    # The account id can be an email or a label; hash it so the filename never
-    # carries the address around on disk.
-    return session_dir() / f"{sha256(account_id.lower().encode('utf-8')).hexdigest()[:32]}.session"
+    Deliberately not a second copy of the hashing: `account logout` and
+    `account remove` clear the same file, and a divergent name would leave a
+    session nobody can reach but MEGA still honours.
+    """
+    from ..core.session_store import session_path
+
+    return session_path(account_id)
 
 
 def _restore_session(client: MegaClient, account_id: str, passphrase: str) -> bool:
@@ -221,7 +224,7 @@ def ls_cmd(
             root = client.find_root()
             _render_nodes(nodes, parent_filter=root)
     finally:
-        client.logout()
+        client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +266,7 @@ def mkdir_cmd(
     except MegaError as exc:
         print_error(f"mkdir failed: {exc}")
     finally:
-        client.logout()
+        client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +308,7 @@ def rm_cmd(
     except MegaError as exc:
         print_error(f"rm failed: {exc}")
     finally:
-        client.logout()
+        client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +351,7 @@ def mv_cmd(
     except MegaError as exc:
         print_error(f"mv failed: {exc}")
     finally:
-        client.logout()
+        client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +389,7 @@ def rename_cmd(
     except MegaError as exc:
         print_error(f"rename failed: {exc}")
     finally:
-        client.logout()
+        client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -418,7 +421,7 @@ def search_cmd(
         matches = client.search(pattern, regex=regex)
         _render_nodes(matches)
     finally:
-        client.logout()
+        client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -454,7 +457,7 @@ def trash_list(
             return
         _render_nodes(client.list_files(), parent_filter=trash)
     finally:
-        client.logout()
+        client.close()
 
 
 @trash_cmd.command("empty", short_help="Permanently delete every trashed item.")
@@ -481,7 +484,7 @@ def trash_empty(
         client.empty_trash()
         print_success("Trash emptied.")
     finally:
-        client.logout()
+        client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -531,4 +534,4 @@ def import_cmd(
     except MegaError as exc:
         print_error(f"Import failed: {exc}")
     finally:
-        client.logout()
+        client.close()
