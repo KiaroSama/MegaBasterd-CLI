@@ -212,6 +212,48 @@ def test_re_adding_the_account_you_can_no_longer_decrypt_replaces_it(tmp_path):
     assert manager.get_password("me@example.com") == "new-password"
 
 
+def test_the_account_being_repaired_is_not_named_in_the_stale_warning(tmp_path, caplog):
+    """Reported from a real repair, and the warning is the whole output.
+
+    The count was taken BEFORE the replacement, so repairing the only stale
+    credential still printed "add those accounts again to replace them" - about
+    the very add in progress. The user reads that as "it did not work" and does
+    it a second time.
+    """
+    import logging
+
+    from megabasterd_cli.accounts.manager import AccountManager
+
+    path = _vault_file(tmp_path, ("me@example.com", _legacy_blob(PASSPHRASE, SECRET)))
+    manager = AccountManager(path)
+    manager.unlock(PASSPHRASE)
+
+    with caplog.at_level(logging.WARNING):
+        manager.add_account("me@example.com", "new-password")
+
+    assert "predate the current vault format" not in caplog.text, caplog.text
+
+
+def test_a_stale_credential_left_behind_is_still_warned_about(tmp_path, caplog):
+    """The warning must survive for the case it exists for."""
+    import logging
+
+    from megabasterd_cli.accounts.manager import AccountManager
+
+    path = _vault_file(
+        tmp_path,
+        ("me@example.com", _legacy_blob(PASSPHRASE, SECRET)),
+        ("other@example.com", _legacy_blob(PASSPHRASE, SECRET)),
+    )
+    manager = AccountManager(path)
+    manager.unlock(PASSPHRASE)
+
+    with caplog.at_level(logging.WARNING):
+        manager.add_account("me@example.com", "new-password")
+
+    assert "1 other stored credential(s) predate" in caplog.text, caplog.text
+
+
 def test_a_readable_duplicate_is_still_refused(tmp_path):
     """Replacement is for dead credentials only, never a working one."""
     from megabasterd_cli.accounts.manager import AccountManager
