@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import click
+
 from ..config import Config
 from ..core.api import MegaAPIClient
 from ..proxy.runtime import effective_pool
@@ -38,4 +40,34 @@ def api_for(
         proxy_pool=effective_pool(cfg) if proxy_pool is _FROM_CONFIG else proxy_pool,
         force_proxy=cfg.force_smart_proxy,
         user_agent=user_agent,
+    )
+
+
+# --------------------------------------------------------------------------
+# Shared credential options
+# --------------------------------------------------------------------------
+#
+# `--vault-passphrase` was declared 17 times and `--mfa-code` 16, and the help
+# text had already drifted into eleven variants between them - including twelve
+# commands that documented `--vault-passphrase` with NO help at all, so
+# `mb ls --help` listed a flag it never explained. One definition each, with an
+# override for the genuinely different wording (`queue run --run`, where the
+# passphrase is for queued uploads rather than this command's own account).
+
+
+def vault_passphrase_option(help: str | None = None):
+    """`--vault-passphrase`, worded the same way everywhere by default."""
+    return click.option(
+        "--vault-passphrase",
+        default=None,
+        help=help or "Vault passphrase used to decrypt stored credentials.",
+    )
+
+
+def mfa_code_option(help: str | None = None):
+    """`--mfa-code`, worded the same way everywhere by default."""
+    return click.option(
+        "--mfa-code",
+        default=None,
+        help=help or "2FA code if your account requires it.",
     )
