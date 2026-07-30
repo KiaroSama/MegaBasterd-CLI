@@ -11,6 +11,7 @@ from ..accounts.storage import VaultUnlockError
 from ..config import accounts_file
 from ..core.client import MegaClient
 from ..core.errors import MegaError
+from ..core.session_store import remember_session, restore_session
 from ..ui.prompts import (
     ask_mfa_code,
     ask_password,
@@ -67,19 +68,24 @@ def require_vault_passphrase(vault_passphrase: str | None, *, machine: bool = Fa
     return ask_password("Vault passphrase")
 
 
-def _open_manager(vault_passphrase: str | None, *, require_accounts: bool = True) -> AccountManager:
+def _open_manager(
+    vault_passphrase: str | None, *, require_accounts: bool = True
+) -> tuple[AccountManager, str]:
     """Unlock the vault, refusing before the prompt when it cannot succeed.
 
     Mirrors the guard `queue_cmd._manager` already had: an empty vault makes
     every caller but `account add` fail anyway, so asking for a passphrase
-    first only adds a hang.
+    first only adds a hang - which is why the passphrase is resolved HERE and
+    handed back rather than by the caller. The session cache is keyed on it,
+    so a caller that needs it must not re-prompt or reorder those two steps.
     """
     mgr = AccountManager(accounts_file())
     if require_accounts and not mgr.list_accounts():
         print_error("No accounts found. Use `mb account add` first.")
         click.get_current_context().exit(1)
-    mgr.unlock(require_vault_passphrase(vault_passphrase))
-    return mgr
+    passphrase = require_vault_passphrase(vault_passphrase)
+    mgr.unlock(passphrase)
+    return mgr, passphrase
 
 
 @account.command("list", short_help="List stored accounts.")
@@ -140,8 +146,7 @@ def account_add(
             raise
 
     # `add` is the one command that must work on an EMPTY vault.
-    passphrase = require_vault_passphrase(vault_passphrase)
-    mgr = _open_manager(passphrase, require_accounts=False)
+    mgr, passphrase = _open_manager(vault_passphrase, require_accounts=False)
     try:
         mgr.add_account(email, password, label=label, make_default=make_default)
         print_success(f"Account added: {email}")
@@ -293,7 +298,7 @@ def account_info(
     mfa_code: str | None,
 ) -> None:
     cfg = ctx.obj["config"]
-    mgr = _open_manager(vault_passphrase)
+    mgr, passphrase = _open_manager(vault_passphrase)
     email = email_or_label or mgr.store.default_email
     if not email:
         print_error("No account specified.")
@@ -310,16 +315,20 @@ def account_info(
 
     client = MegaClient(api=api_for(cfg))
     try:
-        client.login(acc.email, password, mfa_code=mfa_code, mfa_prompt=ask_mfa_code)
+        # Reuse the cached session: asking for a 2FA code just to read a quota
+        # is the sort of thing that made every command feel like a fresh login.
+        if not restore_session(client, acc.email, passphrase):
+            client.login(acc.email, password, mfa_code=mfa_code, mfa_prompt=ask_mfa_code)
+            remember_session(client, acc.email, passphrase)
         quota = client.get_quota()
     except MegaError as e:
         print_error(f"Could not fetch quota: {redact_text(str(e))}")
         return
     finally:
-        # logout() invalidates the session; close() releases the HTTP session
-        # itself. Without the close, every refresh leaked a connection pool.
-        client.logout()
-        client.api.close()
+        # `close()`, not `logout()`: `logout()` sends `{"a":"sml"}` and
+        # invalidates the cached session, so the next command re-authenticates
+        # and re-prompts for 2FA. Ending it on purpose is `mb account logout`.
+        client.close()
 
     used = quota.get("cstrg", 0)
     total = quota.get("mstrg", 0)
@@ -338,7 +347,7 @@ def account_refresh_all(
 ) -> None:
     """Login to every stored account in turn and refresh its cached quota."""
     cfg = ctx.obj["config"]
-    mgr = _open_manager(vault_passphrase)
+    mgr, passphrase = _open_manager(vault_passphrase)
     for acc in mgr.list_accounts():
         try:
             password = mgr.get_password(acc.email)
@@ -348,15 +357,20 @@ def account_refresh_all(
 
         client = MegaClient(api=api_for(cfg))
         try:
-            client.login(acc.email, password, mfa_code=mfa_code, mfa_prompt=ask_mfa_code)
+            # Per account, and this command exists to touch every one of them -
+            # a fresh login each time meant one 2FA prompt per stored account.
+            if not restore_session(client, acc.email, passphrase):
+                client.login(acc.email, password, mfa_code=mfa_code, mfa_prompt=ask_mfa_code)
+                remember_session(client, acc.email, passphrase)
             quota = client.get_quota()
             mgr.update_quota(acc.email, quota.get("cstrg", 0), quota.get("mstrg", 0))
             print_success(f"{acc.email}: refreshed")
         except MegaError as e:
             print_error(f"{acc.email}: {redact_text(str(e))}")
         finally:
-            # One HTTP session per account was leaked here before the close().
-            client.logout()
-            client.api.close()
+            # Per account, so this was invalidating every cached session in the
+            # vault in one command. `close()` releases the transport and leaves
+            # the sessions alone.
+            client.close()
 
     render_accounts(mgr.list_accounts(), mgr.store.default_email)

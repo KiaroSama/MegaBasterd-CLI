@@ -216,6 +216,7 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
     from ..core.client import MegaClient
     from ..core.downloader import MegaDownloader
     from ..core.errors import MegaError
+    from ..core.session_store import remember_session, restore_session
     from ..core.uploader import MegaUploader
     from ..ui.prompts import ask_mfa_code, ask_password
     from ..ui.transfer_progress import TransferProgress, redact_link
@@ -265,8 +266,12 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
     mgr: AccountManager | None = None
     client_cache: dict[str, MegaClient] = {}
 
+    # Hoisted out of `_manager`: the session cache is keyed on it, so
+    # `_client_for` needs the same value rather than prompting a second time.
+    passphrase: str | None = None
+
     def _manager() -> AccountManager | None:
-        nonlocal mgr
+        nonlocal mgr, passphrase
         if mgr is None:
             candidate = AccountManager(accounts_file())
             if not candidate.list_accounts():
@@ -293,12 +298,19 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
         upload_api = api_for(cfg, proxy_pool=proxy_pool, user_agent=cfg.user_agent)
         upload_client = MegaClient(api=upload_api)
         try:
+            # A queue run is the unattended one; making it re-authenticate (and
+            # re-prompt 2FA) per account defeats the point of leaving it going.
+            if passphrase and restore_session(upload_client, acc.email, passphrase):
+                client_cache[account_id] = upload_client
+                return upload_client
             upload_client.login(
                 acc.email,
                 password,
                 mfa_code=mfa_code,
                 mfa_prompt=ask_mfa_code,
             )
+            if passphrase:
+                remember_session(upload_client, acc.email, passphrase)
         except MegaError as exc:
             print_error(f"Login failed for {acc.email}: {redact_text(str(exc))}")
             # MF8: close the API/HTTP session on the failed-login path before
@@ -534,9 +546,11 @@ def queue_run(ctx: click.Context, vault_passphrase: str | None, mfa_code: str | 
         heartbeat.join(timeout=2.0)
         api.close()
         for c in client_cache.values():
+            # `close()`, not `logout()`: a queue run is the longest-lived
+            # command there is, and ending its sessions meant the next one
+            # re-authenticated from scratch.
             with contextlib.suppress(Exception):
-                c.logout()
-                c.api.close()
+                c.close()
 
     from ..ui.prompts import print_info
 
