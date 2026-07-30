@@ -120,26 +120,40 @@ def account_add(
             ctx.exit(1)
         password = ask_password(f"Password for {email}")
 
+    verified: MegaClient | None = None
     if verify:
         print_info("Verifying credentials...")
         client = MegaClient(api=api_for(cfg))
         try:
             client.login(email, password, mfa_code=mfa_code, mfa_prompt=ask_mfa_code)
+            verified = client
         except MegaError as e:
             print_error(f"Login verification failed: {redact_text(str(e))}")
+            # `logout()` used to sit inside the try after `login()`, so a failed
+            # verification - or a KeyboardInterrupt at the 2FA prompt - never
+            # released the session it had just opened.
+            client.logout()
             if not confirmed("Add account anyway?"):
                 return
-        finally:
-            # `logout()` used to sit inside the try after `login()`, so a
-            # failed verification - or a KeyboardInterrupt at the 2FA prompt -
-            # never released the session it had just opened.
+        except BaseException:
             client.logout()
+            raise
 
     # `add` is the one command that must work on an EMPTY vault.
-    mgr = _open_manager(vault_passphrase, require_accounts=False)
+    passphrase = require_vault_passphrase(vault_passphrase)
+    mgr = _open_manager(passphrase, require_accounts=False)
     try:
         mgr.add_account(email, password, label=label, make_default=make_default)
         print_success(f"Account added: {email}")
+        # Keep the session this command just authenticated. Verification is the
+        # one moment the user has PROVEN they hold the account - answering a 2FA
+        # challenge to do it - and that session was being thrown away, so the
+        # very next command asked for another code. Saved after the credential
+        # lands, because the cache is keyed on the vault passphrase.
+        if verified is not None:
+            from ..core.session_store import remember_session
+
+            remember_session(verified, email, passphrase)
     except VaultUnlockError as e:
         # A wrong passphrase would encrypt this account under a key the others
         # do not share; refusing keeps the vault openable by one passphrase.
@@ -147,6 +161,12 @@ def account_add(
         ctx.exit(1)
     except ValueError as e:
         print_error(str(e))
+    finally:
+        if verified is not None:
+            # `close()`, not `logout()`: the session is cached for reuse now, so
+            # ending it server-side would make the cache dead on arrival - the
+            # same mistake the cloud commands were making.
+            verified.close()
 
 
 @account.command("remove", short_help="Remove an account.")

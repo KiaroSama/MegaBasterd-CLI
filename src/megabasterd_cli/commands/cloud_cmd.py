@@ -8,10 +8,11 @@ from collections.abc import Callable
 import click
 
 from ..accounts.manager import AccountManager, AccountNotFound
-from ..config import accounts_file, session_dir
+from ..config import accounts_file
 from ..core.client import MegaClient, MegaNode
 from ..core.errors import MegaError
 from ..core.links import LinkType, parse_link
+from ..core.session_store import remember_session, restore_session
 from ..ui.prompts import (
     ask_mfa_code,
     ask_password,
@@ -40,44 +41,12 @@ def _session_path(account_id: str):
     return session_path(account_id)
 
 
-def _restore_session(client: MegaClient, account_id: str, passphrase: str) -> bool:
-    """Reuse a stored session instead of logging in again.
-
-    The passphrase is the one already given to unlock the account vault, so
-    reusing a session costs the user no extra prompt - and a new machine, or a
-    changed passphrase, simply falls through to a normal login.
-
-    A stored session can be stale (MEGA expired it, or the user logged out
-    elsewhere), so it is PROVEN before it is trusted: one cheap authenticated
-    call. A dead session must never be handed to a command as if it worked.
-    """
-    path = _session_path(account_id)
-    if not path.is_file():
-        return False
-    session = client.load_session(path, passphrase)
-    if session is None:
-        return False
-    client.session = session
-    client.api.set_session(session.sid)
-    try:
-        client.api.request({"a": "ug"})
-    except Exception:  # noqa: BLE001 - any failure means "log in properly"
-        log.debug("Stored session for %s is no longer valid; logging in again", account_id)
-        client.session = None
-        client.invalidate_cache()
-        return False
-    log.debug("Reused the stored session for %s", account_id)
-    return True
-
-
-def _remember_session(client: MegaClient, account_id: str, passphrase: str) -> None:
-    """Persist the session encrypted with the vault passphrase; never fatal."""
-    try:
-        session_dir().mkdir(parents=True, exist_ok=True)
-        client.save_session(_session_path(account_id), passphrase)
-    except (OSError, MegaError) as exc:
-        # Losing the cache is an inconvenience, not a failed command.
-        log.debug("Could not store the session for %s: %s", account_id, exc)
+# Thin aliases: the implementations moved to `core.session_store` so `upload`
+# and `account add` share them. Skipping the cache in `upload`'s own login is
+# why 2FA was demanded on every command. The names stay because the tests
+# exercise the behaviour through this module.
+_restore_session = restore_session
+_remember_session = remember_session
 
 
 def login_client(

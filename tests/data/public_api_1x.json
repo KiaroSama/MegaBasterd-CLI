@@ -564,6 +564,8 @@
     "SessionPersistence.save_session",
     "SessionPersistence.session",
     "forget_session",
+    "remember_session",
+    "restore_session",
     "session_path"
   ],
   "megabasterd_cli.core.shares": [
