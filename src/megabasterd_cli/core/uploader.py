@@ -510,9 +510,27 @@ class MegaUploader:
             self.client.session.master_key,
         )
 
+        # The token arrives ALREADY encoded: the upload endpoint returns it as
+        # an ASCII string in the final chunk's response body, and MEGA expects
+        # it back verbatim. Passing it through `b64_url_encode` like the two
+        # fields below encoded it a second time, so `{"a":"p"}` was handed a
+        # handle nobody had ever issued and answered ENOENT (-9) - after every
+        # byte had transferred. Attributes and the wrapped key are raw
+        # ciphertext and genuinely do need encoding here; the token is the one
+        # that does not.
+        try:
+            token = completion_token.decode("ascii")
+        except UnicodeDecodeError as exc:
+            # Guessing an encoding would send a handle nobody can explain, and
+            # the caller would clear the resume state for a node that was never
+            # created.
+            raise TransferError(
+                message="Upload endpoint returned a non-ASCII completion token"
+            ) from exc
+
         result = self.api.complete_upload(
             target_handle=target,
-            upload_token=b64_url_encode(completion_token),
+            upload_token=token,
             encrypted_attrs=b64_url_encode(encrypted_attrs),
             wrapped_key=b64_url_encode(wrapped_key),
         )

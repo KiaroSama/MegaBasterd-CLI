@@ -84,6 +84,13 @@ def restore_session(client, account_id: str, passphrase: str) -> bool:
         log.debug("Cached session for %s is no longer valid; logging in again", account_id)
         client.session = None
         client.invalidate_cache()
+        # Also take the dead sid off the TRANSPORT. Clearing only `client.session`
+        # left it attached to the api, so the login that follows carried it and
+        # came back ESID (-15) - a stale cache turned into a hard login failure
+        # instead of the silent fallback this function exists to provide.
+        with contextlib.suppress(AttributeError):
+            client.api.clear_session()
+        forget_session(account_id)
         return False
     log.debug("Reused the cached session for %s", account_id)
     return True
