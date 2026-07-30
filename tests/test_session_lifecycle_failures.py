@@ -148,7 +148,9 @@ def _run_account_add(monkeypatch, tmp_path, login_effect):
     from megabasterd_cli.core.client import MegaClient
 
     monkeypatch.setattr(MegaClient, "login", login_effect)
-    monkeypatch.setattr(module, "confirm", lambda *a, **kw: False)
+    # `account add` declines through `confirmed()`, which also reports the
+    # decline; patch the name the code actually calls.
+    monkeypatch.setattr(module, "confirmed", lambda *a, **kw: False)
     monkeypatch.setattr(module, "ask_password", lambda *a, **kw: "pw")
 
     return CliRunner().invoke(

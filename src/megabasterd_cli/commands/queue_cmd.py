@@ -23,7 +23,7 @@ from ..queue.manager import (
     QueueManager,
     QueueOwnershipError,
 )
-from ..ui.prompts import confirm, print_error, print_success
+from ..ui.prompts import confirmed, print_error, print_success
 from ..ui.tables import render_queue
 
 
@@ -172,7 +172,7 @@ def queue_retry(ctx: click.Context, item_id: str) -> None:
 @click.pass_context
 def queue_clear(ctx: click.Context) -> None:
     q = _queue(ctx)
-    if not confirm("Clear completed and canceled items?", default=True):
+    if not confirmed("Clear completed and canceled items?", default=True):
         return
     n = _guard(ctx, q.clear_done)
     print_success(f"Removed {n} items.")
@@ -186,7 +186,7 @@ def queue_reset(ctx: click.Context) -> None:
     The corrupt original was already backed up as `queue.json.corrupt.*`.
     """
     q = QueueManager(data_dir() / "queue.json")
-    if not confirm("Discard the current queue and start empty?", default=False):
+    if not confirmed("Discard the current queue and start empty?"):
         return
     _guard(ctx, q.reset)
     print_success("Queue reset to empty.")

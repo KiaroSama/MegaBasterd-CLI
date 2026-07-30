@@ -14,7 +14,7 @@ from ..core.errors import MegaError
 from ..ui.prompts import (
     ask_mfa_code,
     ask_password,
-    confirm,
+    confirmed,
     print_error,
     print_info,
     print_success,
@@ -127,7 +127,7 @@ def account_add(
             client.login(email, password, mfa_code=mfa_code, mfa_prompt=ask_mfa_code)
         except MegaError as e:
             print_error(f"Login verification failed: {redact_text(str(e))}")
-            if not confirm("Add account anyway?", default=False):
+            if not confirmed("Add account anyway?"):
                 return
         finally:
             # `logout()` used to sit inside the try after `login()`, so a
@@ -154,7 +154,7 @@ def account_add(
 def account_remove(email_or_label: str) -> None:
     mgr = AccountManager(accounts_file())
     try:
-        if not confirm(f"Really remove {email_or_label}?", default=False):
+        if not confirmed(f"Really remove {email_or_label}?"):
             return
         account = mgr.get_account(email_or_label)
         mgr.remove_account(email_or_label)
