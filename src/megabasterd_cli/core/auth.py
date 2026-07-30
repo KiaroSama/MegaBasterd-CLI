@@ -111,7 +111,26 @@ class AuthOperations(NodeOperations):
                         code=-26,
                         message="Account requires 2FA; supply mfa_code or mfa_prompt",
                     ) from exc
-                result = self.api.login_with_mfa(email, password_hash, code)
+                try:
+                    result = self.api.login_with_mfa(email, password_hash, code)
+                except MegaError as mfa_exc:
+                    # MEGA answers a rejected code with the generic -5, whose
+                    # table entry is "Transfer failed" - meaningless during a
+                    # login, and actively misleading: nothing was transferring.
+                    # At this point exactly one thing was submitted, so name it.
+                    if mfa_exc.code in (-5, -9, -26):
+                        raise AuthError(
+                            code=mfa_exc.code,
+                            # Phrased to avoid "2FA code was <word>": the
+                            # redactor scrubs that shape on purpose, because a
+                            # real code there must never reach a log - so this
+                            # wording came out as "The 2FA code was <redacted>."
+                            message=(
+                                "MEGA rejected that 2FA code. Codes expire every 30 seconds - "
+                                "take the current one from your authenticator app and retry."
+                            ),
+                        ) from mfa_exc
+                    raise
             else:
                 raise
 

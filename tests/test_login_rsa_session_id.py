@@ -141,3 +141,60 @@ def test_a_privk_wrapped_the_wrong_way_is_reported_not_silently_accepted(rsa_key
     client = MegaClient(api=_StubApi(reply))
     with pytest.raises(AuthError, match="RSA private key|malformed key material"):
         client.login(EMAIL, PASSWORD)
+
+
+# ---------------------------------------------------------------------------
+# a rejected 2FA code
+# ---------------------------------------------------------------------------
+
+
+def test_a_rejected_2fa_code_says_so_instead_of_transfer_failed():
+    """MEGA answers a bad code with the generic -5, "Transfer failed".
+
+    Seen live in the launcher: type the code a second too late and the CLI
+    reports a transfer failure during a login, while nothing was transferring.
+    At that point exactly one thing had been submitted, so it can be named.
+    """
+    from megabasterd_cli.core.errors import AuthError, MegaError
+
+    client = MegaClient(api=_StubApi({}))
+
+    def us(payload, **kwargs):
+        if payload.get("a") == "us0":
+            return {"v": 1}
+        raise MegaError(code=-26, message="2FA required")
+
+    def submit_mfa(email, password_hash, mfa_code):
+        # What MEGA really answers for a wrong or expired code.
+        raise MegaError(code=-5, message="Transfer failed")
+
+    client.api.request = us  # type: ignore[method-assign]
+    client.api.login_with_mfa = submit_mfa  # type: ignore[method-assign]
+
+    with pytest.raises(AuthError) as excinfo:
+        client.login("user@example.invalid", PASSWORD, mfa_code="000000")
+
+    text = str(excinfo.value)
+    assert "rejected that 2FA code" in text, text
+    assert "expire every 30 seconds" in text, text
+    assert "Transfer failed" not in text
+
+
+def test_that_message_survives_redaction():
+    """The redactor scrubs `2FA code was <anything>` on purpose.
+
+    An earlier wording of this message read "The 2FA code was rejected", which
+    the redactor - correctly - turned into "was <redacted>". A user-facing
+    message must not name a secret in the shape the scrubber looks for.
+    """
+    from megabasterd_cli.utils.redaction import redact_text
+
+    message = (
+        "MEGA rejected that 2FA code. Codes expire every 30 seconds - "
+        "take the current one from your authenticator app and retry."
+    )
+    assert redact_text(message) == message
+
+    # And the shape it protects still works.
+    assert "123456" not in redact_text("2fa code was 123456")
+    assert "123456" not in redact_text("MFA code 123456")

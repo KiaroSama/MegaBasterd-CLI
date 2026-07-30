@@ -439,12 +439,12 @@ def upload(
                     _run_one(job)
     finally:
         for client in clients.values():
-            try:
-                client.logout()
-            except Exception:  # noqa: BLE001
-                log.debug("Logout failed", exc_info=True)
-            finally:
-                client.api.close()
+            # `close()`, not `logout()`. `logout()` sends `{"a":"sml"}`, which
+            # invalidated the session this command had just cached - so the very
+            # next run found a dead token, exactly the mistake the cloud
+            # commands were making. Releasing the transport is all that is owed
+            # here; ending the session is `mb account logout`.
+            client.close()
 
     printer = {"success": print_success, "info": print_info, "error": print_error}
     for kind, message in notes:
