@@ -16,6 +16,7 @@ from ..config import accounts_file
 from ..core.api import MegaAPIClient
 from ..core.client import MegaClient
 from ..core.errors import MegaError, QuotaError
+from ..core.session_store import remember_session, restore_session
 from ..core.uploader import MegaUploader, walk_upload_entries
 from ..ui.machine_output import MachineOutput, error_code_for
 from ..ui.prompts import (
@@ -163,7 +164,11 @@ def upload(
     # `--json` has already redirected stdout and silenced human output, so a
     # getpass prompt here is invisible - and on Windows it never sees EOF from
     # a redirected stdin, so it blocks forever instead of failing.
-    mgr.unlock(require_vault_passphrase(vault_passphrase, machine=json_output))
+    # Kept as a local because the session cache is keyed on it: the passphrase
+    # the user already typed to open the vault is also what encrypts the cached
+    # session, so reuse costs no extra prompt.
+    passphrase = require_vault_passphrase(vault_passphrase, machine=json_output)
+    mgr.unlock(passphrase)
 
     # Build the flat job list early so auto-account can size-match per file.
     # Each job is (path, size); --keep-structure directories are one job
@@ -207,8 +212,15 @@ def upload(
     def _login_client(email: str, password: str) -> MegaClient | None:
         api = _new_api()
         client = MegaClient(api=api)
+        # Reuse the cached session first. This path used to log in
+        # unconditionally, so `upload` demanded a fresh 2FA code every single
+        # run - including immediately after an `account add` whose 2FA had just
+        # been answered.
+        if restore_session(client, email, passphrase):
+            return client
         try:
             client.login(email, password, mfa_code=mfa_code, mfa_prompt=ask_mfa_code)
+            remember_session(client, email, passphrase)
             return client
         except MegaError as exc:
             print_error(f"Login failed for {email}: {redact_text(str(exc))}")

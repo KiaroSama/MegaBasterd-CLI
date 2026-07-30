@@ -54,6 +54,57 @@ def forget_session(account_id: str) -> bool:
         return False
 
 
+def restore_session(client, account_id: str, passphrase: str) -> bool:
+    """Reuse a cached session instead of logging in again. True when reused.
+
+    The passphrase is the one already given to unlock the account vault, so
+    reuse costs no extra prompt - and a new machine, or a changed passphrase,
+    just falls through to a normal login.
+
+    A cached session can be stale (MEGA expired it, or it was ended elsewhere),
+    so it is PROVEN with one cheap authenticated call before being trusted. A
+    dead session must never be handed to a command as though it worked.
+
+    Here rather than in one command module because all three login paths need
+    it: the cloud commands, `upload`, and `account add`. `upload` having its own
+    login that skipped the cache is why 2FA was demanded on every single
+    command even right after a successful, 2FA-answered `account add`.
+    """
+    path = session_path(account_id)
+    if not path.is_file():
+        return False
+    session = client.load_session(path, passphrase)
+    if session is None:
+        return False
+    client.session = session
+    client.api.set_session(session.sid)
+    try:
+        client.api.request({"a": "ug"})
+    except Exception:  # noqa: BLE001 - any failure means "log in properly"
+        log.debug("Cached session for %s is no longer valid; logging in again", account_id)
+        client.session = None
+        client.invalidate_cache()
+        return False
+    log.debug("Reused the cached session for %s", account_id)
+    return True
+
+
+def remember_session(client, account_id: str, passphrase: str) -> None:
+    """Persist the session encrypted with the vault passphrase; never fatal.
+
+    Losing the cache costs one extra login, so it must not turn a completed
+    transfer into a failure.
+    """
+    from ..config import session_dir
+    from .errors import MegaError
+
+    try:
+        session_dir().mkdir(parents=True, exist_ok=True)
+        client.save_session(session_path(account_id), passphrase)
+    except (OSError, MegaError) as exc:
+        log.debug("Could not store the session for %s: %s", account_id, exc)
+
+
 def _atomic_write_private(path: Path, data: bytes) -> None:
     """Replace `path` with `data` in one step, owner-only from creation.
 
