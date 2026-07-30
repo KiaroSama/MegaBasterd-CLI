@@ -14,7 +14,7 @@ import click
 
 from ..proxy.runtime import _load_persisted_pool, _pool_path
 from ..queue.storage import atomic_write_text
-from ..ui.prompts import confirm, print_error, print_info, print_success, print_warn
+from ..ui.prompts import confirmed, print_error, print_info, print_success, print_warn
 from ..ui.theme import SafeTable, make_console
 from ..utils.filelock import FileLock
 from ..utils.redaction import REDACTED, redact_text
@@ -143,7 +143,7 @@ def proxy_remove(url: str) -> None:
 
 @proxy_cmd.command("clear", short_help="Remove all proxies.")
 def proxy_clear() -> None:
-    if not confirm("Clear the entire proxy pool?", default=False):
+    if not confirmed("Clear the entire proxy pool?"):
         return
     with pool_transaction() as pool:
         for entry in list(pool.list()):

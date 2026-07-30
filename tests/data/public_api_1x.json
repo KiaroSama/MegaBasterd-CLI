@@ -867,6 +867,7 @@
     "ask_mfa_code",
     "ask_password",
     "confirm",
+    "confirmed",
     "print_error",
     "print_info",
     "print_panel",

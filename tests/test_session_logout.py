@@ -174,7 +174,7 @@ def test_logout_with_a_wrong_passphrase_removes_the_file_and_says_it_could_not_r
 
 
 def test_removing_an_account_also_drops_its_cached_session(stored_account, monkeypatch):
-    monkeypatch.setattr("megabasterd_cli.commands.account_cmd.confirm", lambda *a, **kw: True)
+    monkeypatch.setattr("megabasterd_cli.commands.account_cmd.confirmed", lambda *a, **kw: True)
 
     result = CliRunner().invoke(cli, ["-q", "account", "remove", EMAIL])
 
