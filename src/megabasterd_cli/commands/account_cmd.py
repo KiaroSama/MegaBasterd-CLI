@@ -147,31 +147,44 @@ def account_add(
 
     # `add` is the one command that must work on an EMPTY vault.
     mgr, passphrase = _open_manager(vault_passphrase, require_accounts=False)
+    stored = False
     try:
-        mgr.add_account(email, password, label=label, make_default=make_default)
-        print_success(f"Account added: {email}")
-        # Keep the session this command just authenticated. Verification is the
-        # one moment the user has PROVEN they hold the account - answering a 2FA
-        # challenge to do it - and that session was being thrown away, so the
-        # very next command asked for another code. Saved after the credential
-        # lands, because the cache is keyed on the vault passphrase.
+        try:
+            mgr.add_account(email, password, label=label, make_default=make_default)
+            print_success(f"Account added: {email}")
+            stored = True
+        except VaultUnlockError as e:
+            # A wrong passphrase would encrypt this account under a key the
+            # others do not share; refusing keeps the vault openable by one
+            # passphrase. Nothing is cached under a passphrase we just refused.
+            print_error(str(e))
+            ctx.exit(1)
+        except ValueError as e:
+            # Duplicate, or an invalid field. The vault is untouched.
+            print_error(str(e))
+
+        # Cache the session whether or not a NEW row was written. Verification
+        # is the one moment the user has proven they hold the account, spending
+        # a 2FA code to do it - and this used to sit after `add_account`, so
+        # re-running `account add` for an account that already existed threw
+        # that session away and the code was spent for nothing. The passphrase
+        # is known to open the vault by now, which is what the cache is keyed
+        # on, so storing it is correct in both cases.
         if verified is not None:
             from ..core.session_store import remember_session
 
             remember_session(verified, email, passphrase)
-    except VaultUnlockError as e:
-        # A wrong passphrase would encrypt this account under a key the others
-        # do not share; refusing keeps the vault openable by one passphrase.
-        print_error(str(e))
-        ctx.exit(1)
-    except ValueError as e:
-        print_error(str(e))
     finally:
         if verified is not None:
             # `close()`, not `logout()`: the session is cached for reuse now, so
             # ending it server-side would make the cache dead on arrival - the
             # same mistake the cloud commands were making.
             verified.close()
+
+    if not stored:
+        # `print_error` then falling through reported "Command completed
+        # successfully" in the launcher for a command that changed nothing.
+        ctx.exit(1)
 
 
 @account.command("remove", short_help="Remove an account.")
