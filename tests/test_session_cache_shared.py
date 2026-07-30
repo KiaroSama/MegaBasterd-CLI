@@ -222,3 +222,38 @@ def test_every_module_that_logs_in_also_consults_the_cache(module_name):
     source = inspect.getsource(importlib.import_module(f"megabasterd_cli.commands.{module_name}"))
     assert "restore_session" in source, f"{module_name} logs in without checking the cache"
     assert "remember_session" in source, f"{module_name} logs in without storing the result"
+
+
+def test_re_adding_an_existing_account_still_caches_the_session(monkeypatch):
+    """The 2FA code must not be spent for nothing.
+
+    Reported live: the user answered a 2FA challenge, verification succeeded,
+    and then `add_account` raised "Account already exists" - so the
+    `remember_session` call that sat after it never ran and the proven session
+    was discarded. Caching is correct either way: the login happened, and the
+    passphrase is known to open the vault by the time we get here.
+    """
+    from megabasterd_cli.accounts.manager import AccountManager
+
+    mgr = AccountManager(accounts_file())
+    mgr.unlock(PASSPHRASE)
+    mgr.add_account(EMAIL, "pw", make_default=True)
+    assert not session_path(EMAIL).is_file()
+
+    result = _add(monkeypatch)
+
+    assert "already exists" in result.output, result.output
+    assert session_path(EMAIL).is_file(), "the verified session was thrown away"
+
+
+def test_a_duplicate_add_exits_non_zero(monkeypatch):
+    """`print_error` then falling through reported success in the launcher."""
+    from megabasterd_cli.accounts.manager import AccountManager
+
+    mgr = AccountManager(accounts_file())
+    mgr.unlock(PASSPHRASE)
+    mgr.add_account(EMAIL, "pw", make_default=True)
+
+    result = _add(monkeypatch)
+
+    assert result.exit_code != 0, result.output
