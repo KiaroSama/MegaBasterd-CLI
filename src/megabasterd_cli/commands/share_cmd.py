@@ -65,4 +65,6 @@ def share_cmd(
     except MegaError as exc:
         print_error(f"share failed: {exc}")
     finally:
-        client.logout()
+        # `login_client` cached this session moments ago; `logout()` would
+        # invalidate it server-side and make that cache dead on arrival.
+        client.close()

@@ -176,3 +176,49 @@ def test_the_stored_account_is_still_written(monkeypatch):
 
     mgr = AccountManager(accounts_file())
     assert [a.email for a in mgr.list_accounts()] == [EMAIL]
+
+
+# ---------------------------------------------------------------------------
+# no command may end a session it did not create
+# ---------------------------------------------------------------------------
+
+# `account add` on a FAILED verify, and `account logout` itself. Those two are
+# the only legitimate `logout()` calls: nothing is cached in the first case, and
+# ending the session is the whole job in the second.
+_LOGOUT_ALLOWED = {"account_cmd"}
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    ["cloud_cmd", "upload_cmd", "queue_cmd", "share_cmd", "download_cmd", "stream_cmd"],
+)
+def test_no_command_module_ends_a_session_it_did_not_create(module_name):
+    """`logout()` sends `{"a":"sml"}` - it invalidates the CACHED session.
+
+    Six modules had it in their teardown, so whichever command ran last left
+    the next one to re-authenticate and re-prompt for 2FA. Releasing the
+    transport is `close()`; ending the session is `mb account logout`.
+    """
+    import importlib
+
+    try:
+        module = importlib.import_module(f"megabasterd_cli.commands.{module_name}")
+    except ModuleNotFoundError:
+        pytest.skip(f"{module_name} does not exist")
+    source = inspect.getsource(module)
+    assert ".logout()" not in source, f"{module_name} invalidates a cached session; use close()"
+
+
+@pytest.mark.parametrize("module_name", ["cloud_cmd", "upload_cmd", "queue_cmd", "account_cmd"])
+def test_every_module_that_logs_in_also_consults_the_cache(module_name):
+    """A login path that skips the cache re-prompts 2FA on every run.
+
+    Four modules log in. Two of them (upload, queue) had their own login that
+    never touched the cache, and `account info`/`refresh-all` logged in fresh
+    per account - so `refresh-all` asked for one code per stored account.
+    """
+    import importlib
+
+    source = inspect.getsource(importlib.import_module(f"megabasterd_cli.commands.{module_name}"))
+    assert "restore_session" in source, f"{module_name} logs in without checking the cache"
+    assert "remember_session" in source, f"{module_name} logs in without storing the result"
