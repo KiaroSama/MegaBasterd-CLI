@@ -64,7 +64,9 @@
     "require_vault_passphrase"
   ],
   "megabasterd_cli.commands.api_support": [
-    "api_for"
+    "api_for",
+    "mfa_code_option",
+    "vault_passphrase_option"
   ],
   "megabasterd_cli.commands.cloud_cmd": [
     "import_cmd",

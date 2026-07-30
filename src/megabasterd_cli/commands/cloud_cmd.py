@@ -23,7 +23,7 @@ from ..ui.prompts import (
 )
 from ..ui.theme import SafeTable, make_console
 from ..utils.helpers import format_bytes
-from .api_support import api_for
+from .api_support import api_for, mfa_code_option, vault_passphrase_option
 
 log = logging.getLogger(__name__)
 _console = make_console()
@@ -126,6 +126,17 @@ def _client(
     return client
 
 
+# ponytail: the seven commands below repeat one skeleton - `_client()`, `try`,
+# `except MegaError`, `finally: client.close()` - about 120 lines of it. A
+# context manager would collapse that, and it is worth doing. Deliberately NOT
+# done now: that teardown is exactly where this project's worst session bug
+# lived (`logout()` invalidating the session the command had just cached), the
+# guarantee is currently pinned per-command by
+# `test_every_cloud_command_releases_in_a_finally`, and the live upload ->
+# share -> download round trip that proved the fix was measured against this
+# shape. Rewrite it as its own change, with that test moved to assert the
+# manager is used, and re-run the live round trip afterwards.
+#
 # ---------------------------------------------------------------------------
 # `mb ls`
 # ---------------------------------------------------------------------------
@@ -160,8 +171,8 @@ def _render_nodes(nodes: list[MegaNode], parent_filter: str | None = None) -> No
 @click.command("ls", short_help="List files in your MEGA cloud.")
 @click.argument("path", required=False, default="")
 @click.option("-a", "--account", default=None)
-@click.option("--vault-passphrase", default=None)
-@click.option("--mfa-code", default=None, help="2FA code if your account requires it.")
+@vault_passphrase_option()
+@mfa_code_option()
 @click.option("--all", "show_all", is_flag=True, help="Show the entire tree.")
 @click.pass_context
 def ls_cmd(
@@ -205,8 +216,8 @@ def ls_cmd(
 @click.argument("name")
 @click.option("--parent", default=None, help="Parent folder handle or path.")
 @click.option("-a", "--account", default=None)
-@click.option("--vault-passphrase", default=None)
-@click.option("--mfa-code", default=None, help="2FA code if your account requires it.")
+@vault_passphrase_option()
+@mfa_code_option()
 @click.pass_context
 def mkdir_cmd(
     ctx: click.Context,
@@ -246,8 +257,8 @@ def mkdir_cmd(
 @click.command("rm", short_help="Delete a file or folder (moves to trash).")
 @click.argument("target")
 @click.option("-a", "--account", default=None)
-@click.option("--vault-passphrase", default=None)
-@click.option("--mfa-code", default=None, help="2FA code if your account requires it.")
+@vault_passphrase_option()
+@mfa_code_option()
 @click.option("--yes", is_flag=True, help="Skip confirmation.")
 @click.pass_context
 def rm_cmd(
@@ -289,8 +300,8 @@ def rm_cmd(
 @click.argument("source")
 @click.argument("destination")
 @click.option("-a", "--account", default=None)
-@click.option("--vault-passphrase", default=None)
-@click.option("--mfa-code", default=None, help="2FA code if your account requires it.")
+@vault_passphrase_option()
+@mfa_code_option()
 @click.pass_context
 def mv_cmd(
     ctx: click.Context,
@@ -332,8 +343,8 @@ def mv_cmd(
 @click.argument("target")
 @click.argument("new_name")
 @click.option("-a", "--account", default=None)
-@click.option("--vault-passphrase", default=None)
-@click.option("--mfa-code", default=None, help="2FA code if your account requires it.")
+@vault_passphrase_option()
+@mfa_code_option()
 @click.pass_context
 def rename_cmd(
     ctx: click.Context,
@@ -370,8 +381,8 @@ def rename_cmd(
 @click.argument("pattern")
 @click.option("--regex", is_flag=True, help="Treat pattern as a regex.")
 @click.option("-a", "--account", default=None)
-@click.option("--vault-passphrase", default=None)
-@click.option("--mfa-code", default=None, help="2FA code if your account requires it.")
+@vault_passphrase_option()
+@mfa_code_option()
 @click.pass_context
 def search_cmd(
     ctx: click.Context,
@@ -405,8 +416,8 @@ def trash_cmd() -> None:
 
 @trash_cmd.command("list", short_help="List files in trash.")
 @click.option("-a", "--account", default=None)
-@click.option("--vault-passphrase", default=None)
-@click.option("--mfa-code", default=None, help="2FA code if your account requires it.")
+@vault_passphrase_option()
+@mfa_code_option()
 @click.pass_context
 def trash_list(
     ctx: click.Context,
@@ -431,8 +442,8 @@ def trash_list(
 
 @trash_cmd.command("empty", short_help="Permanently delete every trashed item.")
 @click.option("-a", "--account", default=None)
-@click.option("--vault-passphrase", default=None)
-@click.option("--mfa-code", default=None, help="2FA code if your account requires it.")
+@vault_passphrase_option()
+@mfa_code_option()
 @click.option("--yes", is_flag=True)
 @click.pass_context
 def trash_empty(
@@ -465,8 +476,8 @@ def trash_empty(
 @click.argument("share_url")
 @click.option("--target", default=None, help="Destination folder handle or path (default: root).")
 @click.option("-a", "--account", default=None)
-@click.option("--vault-passphrase", default=None)
-@click.option("--mfa-code", default=None, help="2FA code if your account requires it.")
+@vault_passphrase_option()
+@mfa_code_option()
 @click.pass_context
 def import_cmd(
     ctx: click.Context,

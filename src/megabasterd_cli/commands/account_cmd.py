@@ -23,7 +23,7 @@ from ..ui.prompts import (
 )
 from ..ui.tables import render_accounts
 from ..utils.redaction import redact_text
-from .api_support import api_for
+from .api_support import api_for, mfa_code_option, vault_passphrase_option
 
 
 @click.group("account", short_help="Manage MEGA accounts.")
@@ -99,11 +99,9 @@ def account_list() -> None:
 @click.option("--password", "password", default=None, help="Account password (prompt if omitted).")
 @click.option("--label", default=None, help="Friendly label.")
 @click.option("--default", "make_default", is_flag=True, help="Make this the default account.")
-@click.option(
-    "--vault-passphrase", default=None, help="Vault passphrase for credential encryption."
-)
+@vault_passphrase_option()
 @click.option("--verify/--no-verify", default=True, help="Verify by logging in once.")
-@click.option("--mfa-code", default=None, help="2FA code if the account requires it.")
+@mfa_code_option()
 @click.pass_context
 def account_add(
     ctx: click.Context,
@@ -230,7 +228,7 @@ def account_remove(email_or_label: str) -> None:
 @account.command("logout", short_help="End a stored MEGA session.")
 @click.argument("email_or_label", required=False)
 @click.option("--all", "all_accounts", is_flag=True, help="Log out every stored account.")
-@click.option("--vault-passphrase", default=None, help="Vault passphrase (prompted if omitted).")
+@vault_passphrase_option()
 @click.pass_context
 def account_logout(
     ctx: click.Context,
@@ -319,8 +317,8 @@ def account_default(email_or_label: str) -> None:
 
 @account.command("info", short_help="Show quota for an account.")
 @click.argument("email_or_label", required=False)
-@click.option("--vault-passphrase", default=None)
-@click.option("--mfa-code", default=None)
+@vault_passphrase_option()
+@mfa_code_option()
 @click.pass_context
 def account_info(
     ctx: click.Context,
@@ -368,8 +366,8 @@ def account_info(
 
 
 @account.command("refresh-all", short_help="Update quota for every stored account.")
-@click.option("--vault-passphrase", default=None)
-@click.option("--mfa-code", default=None)
+@vault_passphrase_option()
+@mfa_code_option()
 @click.pass_context
 def account_refresh_all(
     ctx: click.Context,

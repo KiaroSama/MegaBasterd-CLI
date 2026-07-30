@@ -32,7 +32,7 @@ from ..utils.hooks import run_all_finished_command
 from ..utils.redaction import redact_text
 from ..utils.speed import make_limiter
 from .account_cmd import require_vault_passphrase
-from .api_support import api_for
+from .api_support import api_for, mfa_code_option
 
 log = logging.getLogger(__name__)
 
@@ -96,7 +96,7 @@ log = logging.getLogger(__name__)
     default=None,
     help="Passphrase used to decrypt stored credentials.",
 )
-@click.option("--mfa-code", default=None, help="2FA code if your account requires it.")
+@mfa_code_option()
 @click.option(
     "-P",
     "--parallel",

@@ -6,6 +6,7 @@ import click
 
 from ..core.errors import MegaError
 from ..ui.prompts import ask_password, print_error, print_success
+from .api_support import mfa_code_option, vault_passphrase_option
 from .cloud_cmd import login_client
 
 
@@ -22,8 +23,8 @@ from .cloud_cmd import login_client
     help="Remove the public link instead of creating one.",
 )
 @click.option("-a", "--account", default=None)
-@click.option("--vault-passphrase", default=None)
-@click.option("--mfa-code", default=None, help="2FA code if your account requires it.")
+@vault_passphrase_option()
+@mfa_code_option()
 @click.pass_context
 def share_cmd(
     ctx: click.Context,
