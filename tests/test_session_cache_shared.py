@@ -242,12 +242,17 @@ def test_re_adding_an_existing_account_still_caches_the_session(monkeypatch):
 
     result = _add(monkeypatch)
 
-    assert "already exists" in result.output, result.output
+    assert "already stored" in result.output, result.output
     assert session_path(EMAIL).is_file(), "the verified session was thrown away"
 
 
-def test_a_duplicate_add_exits_non_zero(monkeypatch):
-    """`print_error` then falling through reported success in the launcher."""
+def test_a_verified_duplicate_reports_the_sign_in_not_a_red_error(monkeypatch):
+    """Re-running the login is how you refresh an expired session.
+
+    Reporting `ERR Account already exists` and exit 1 described the one thing
+    that did NOT happen: the login succeeded and the session was cached.
+    Nothing was added, which is worth saying, but not as a failure.
+    """
     from megabasterd_cli.accounts.manager import AccountManager
 
     mgr = AccountManager(accounts_file())
@@ -256,4 +261,34 @@ def test_a_duplicate_add_exits_non_zero(monkeypatch):
 
     result = _add(monkeypatch)
 
+    assert result.exit_code == 0, result.output
+    assert "already stored" in result.output, result.output
+    assert "session refreshed" in result.output, result.output
+    assert session_path(EMAIL).is_file()
+
+
+def test_an_unverified_duplicate_is_still_an_error(monkeypatch):
+    """With --no-verify there is no login, so genuinely nothing happened."""
+    from megabasterd_cli.accounts.manager import AccountManager
+
+    mgr = AccountManager(accounts_file())
+    mgr.unlock(PASSPHRASE)
+    mgr.add_account(EMAIL, "pw", make_default=True)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "-q",
+            "account",
+            "add",
+            EMAIL,
+            "--password",
+            "pw",
+            "--vault-passphrase",
+            PASSPHRASE,
+            "--no-verify",
+        ],
+    )
+
     assert result.exit_code != 0, result.output
+    assert "already exists" in result.output, result.output

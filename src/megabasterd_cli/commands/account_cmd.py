@@ -148,6 +148,7 @@ def account_add(
     # `add` is the one command that must work on an EMPTY vault.
     mgr, passphrase = _open_manager(vault_passphrase, require_accounts=False)
     stored = False
+    duplicate = False
     try:
         try:
             mgr.add_account(email, password, label=label, make_default=make_default)
@@ -160,8 +161,10 @@ def account_add(
             print_error(str(e))
             ctx.exit(1)
         except ValueError as e:
-            # Duplicate, or an invalid field. The vault is untouched.
-            print_error(str(e))
+            # Duplicate, or an invalid field. The vault is untouched either way.
+            duplicate = "already exists" in str(e)
+            if not duplicate:
+                print_error(str(e))
 
         # Cache the session whether or not a NEW row was written. Verification
         # is the one moment the user has proven they hold the account, spending
@@ -181,10 +184,25 @@ def account_add(
             # same mistake the cloud commands were making.
             verified.close()
 
-    if not stored:
-        # `print_error` then falling through reported "Command completed
-        # successfully" in the launcher for a command that changed nothing.
-        ctx.exit(1)
+    if stored:
+        return
+    if duplicate and verified is not None:
+        # Re-running the login for an account already in the vault is the
+        # normal way to refresh an expired session, so reporting a red
+        # "Account already exists" and exit 1 described the one thing that did
+        # NOT happen. Nothing was added, but the login succeeded and the
+        # session is cached - which is what the user came here for.
+        print_success(f"Signed in: {email} (already stored; session refreshed)")
+        return
+    if duplicate:
+        # No verification, so genuinely nothing happened.
+        print_error(
+            f"Account already exists: {email}. Drop --no-verify to sign in and "
+            "refresh its session."
+        )
+    # `print_error` then falling through reported "Command completed
+    # successfully" in the launcher for a command that changed nothing.
+    ctx.exit(1)
 
 
 @account.command("remove", short_help="Remove an account.")
