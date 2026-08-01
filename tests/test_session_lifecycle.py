@@ -248,24 +248,102 @@ def test_no_command_module_relies_on_logout_plus_a_forgotten_close():
     assert "close" in source, "logout() must release the HTTP session"
 
 
-@pytest.mark.parametrize(
-    "name",
-    ["ls_cmd", "mkdir_cmd", "rm_cmd", "mv_cmd", "rename_cmd", "search_cmd", "import_cmd"],
-)
-def test_every_cloud_command_releases_in_a_finally(name):
-    """The cloud commands all share `_client()`; none may skip the release.
+CLOUD_COMMANDS = [
+    "ls_cmd",
+    "mkdir_cmd",
+    "rm_cmd",
+    "mv_cmd",
+    "rename_cmd",
+    "search_cmd",
+    "import_cmd",
+]
 
-    The invariant is that the transport is released on every path, not which
-    method does it. It must be `close()` here and NOT `logout()`: these
-    commands cache the session for reuse, and `logout()` would invalidate the
-    very session they just stored - see `tests/test_session_logout.py`.
+
+@pytest.mark.parametrize("name", CLOUD_COMMANDS)
+def test_every_cloud_command_goes_through_the_shared_manager(name):
+    """The release is guaranteed in ONE place now, not repeated in nine.
+
+    This used to inspect each command for its own `try`/`finally`/`close()`.
+    Nine copies of a rule is nine chances for the tenth command to be written
+    without it - the same drift that put `logout()` in six teardowns and
+    invalidated the session each command had just cached. `cloud_client` owns
+    the release; a command that does not use it is not covered by it.
+
+    Still asserted per command, because "the manager exists" proves nothing
+    about whether a given command reaches it.
     """
     import inspect
 
     from megabasterd_cli.commands import cloud_cmd
 
-    command = getattr(cloud_cmd, name)
-    source = inspect.getsource(command.callback)
-    assert "finally" in source, f"{name} can leak its session"
-    assert "client.close()" in source, f"{name} does not release the transport"
+    source = inspect.getsource(getattr(cloud_cmd, name).callback)
+    assert "_cloud_client(" in source, f"{name} logs in without the shared manager"
+    assert (
+        "client.close()" not in source
+    ), f"{name} releases the transport itself; that belongs to cloud_client now"
     assert "logout()" not in source, f"{name} kills the session it cached for reuse"
+
+
+def test_the_manager_releases_the_transport_on_the_happy_path(monkeypatch):
+    """The guarantee itself, exercised rather than grepped for."""
+    from megabasterd_cli.commands import cloud_cmd
+
+    client = _RecordingClient()
+    monkeypatch.setattr(cloud_cmd, "_client", lambda *a, **k: client)
+    with cloud_cmd._cloud_client(None, None, None) as handed:
+        assert handed is client
+    assert client.closed and not client.logged_out
+
+
+def test_the_manager_releases_the_transport_when_the_body_raises(monkeypatch):
+    """A command that blows up mid-way must not leak its session either."""
+    from megabasterd_cli.commands import cloud_cmd
+
+    client = _RecordingClient()
+    monkeypatch.setattr(cloud_cmd, "_client", lambda *a, **k: client)
+    with pytest.raises(ZeroDivisionError), cloud_cmd._cloud_client(None, None, None):
+        raise ZeroDivisionError("boom")
+    assert client.closed
+
+
+def test_a_failed_login_hands_over_none_and_closes_nothing(monkeypatch):
+    """Login failure must stay exit 0 with a printed error, as before - and
+    there is no client to release, so the manager must not try."""
+    from megabasterd_cli.commands import cloud_cmd
+    from megabasterd_cli.core.errors import MegaError
+
+    def boom(*_a, **_k):
+        raise MegaError(message="bad credentials")
+
+    monkeypatch.setattr(cloud_cmd, "_client", boom)
+    seen = []
+    monkeypatch.setattr(cloud_cmd, "print_error", seen.append)
+
+    with cloud_cmd._cloud_client(None, None, None) as handed:
+        assert handed is None
+
+    assert seen and "Login failed" in seen[0]
+
+
+def test_the_manager_never_ends_the_session_server_side():
+    """`close()` releases the socket; `logout()` sends {"a":"sml"} and would
+    invalidate the cached session - the round-33 bug, in one place now."""
+    import inspect
+
+    from megabasterd_cli.commands import cloud_cmd
+
+    source = inspect.getsource(cloud_cmd._cloud_client)
+    assert ".close()" in source
+    assert ".logout()" not in source
+
+
+class _RecordingClient:
+    def __init__(self):
+        self.closed = False
+        self.logged_out = False
+
+    def close(self):
+        self.closed = True
+
+    def logout(self):  # pragma: no cover - must never be called
+        self.logged_out = True

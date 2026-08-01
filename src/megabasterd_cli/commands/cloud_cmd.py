@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 
 import click
 
@@ -126,17 +127,42 @@ def _client(
     return client
 
 
-# ponytail: the seven commands below repeat one skeleton - `_client()`, `try`,
-# `except MegaError`, `finally: client.close()` - about 120 lines of it. A
-# context manager would collapse that, and it is worth doing. Deliberately NOT
-# done now: that teardown is exactly where this project's worst session bug
-# lived (`logout()` invalidating the session the command had just cached), the
-# guarantee is currently pinned per-command by
-# `test_every_cloud_command_releases_in_a_finally`, and the live upload ->
-# share -> download round trip that proved the fix was measured against this
-# shape. Rewrite it as its own change, with that test moved to assert the
-# manager is used, and re-run the live round trip afterwards.
-#
+@contextmanager
+def _cloud_client(
+    ctx: click.Context,
+    vault_passphrase: str | None,
+    account: str | None,
+    mfa_code: str | None = None,
+) -> Iterator[MegaClient | None]:
+    """Log in, hand the client over, and release the transport on every path.
+
+    Every command below used to carry its own copy of this: a `try` around
+    `_client()`, a `print_error` on `MegaError`, then a second `try` whose
+    `finally` called `client.close()`. Nine copies of one rule is nine chances
+    for the tenth command to be written without it - which is exactly the drift
+    that once put `logout()` in six teardowns and had each command invalidate
+    the session it had just cached.
+
+    `close()`, never `logout()`. `close()` releases the HTTP transport;
+    `logout()` sends `{"a":"sml"}` and ends the session server-side, which is
+    what `mb account logout` is for. Getting that wrong here cost the user a 2FA
+    prompt on every single command.
+
+    Yields None when the login fails, having already reported it - the callers
+    exit 0 on that path and always did.
+    """
+    try:
+        client = _client(ctx, vault_passphrase, account, mfa_code)
+    except MegaError as exc:
+        print_error(f"Login failed: {exc}")
+        yield None
+        return
+    try:
+        yield client
+    finally:
+        client.close()
+
+
 # ---------------------------------------------------------------------------
 # `mb ls`
 # ---------------------------------------------------------------------------
@@ -184,13 +210,9 @@ def ls_cmd(
     show_all: bool,
 ) -> None:
     """List your remote files. PATH is a slash-separated path under the root."""
-    try:
-        client = _client(ctx, vault_passphrase, account, mfa_code)
-    except MegaError as exc:
-        print_error(f"Login failed: {exc}")
-        return
-
-    try:
+    with _cloud_client(ctx, vault_passphrase, account, mfa_code) as client:
+        if client is None:
+            return
         nodes = client.list_files()
         if show_all:
             _render_nodes(nodes)
@@ -203,8 +225,6 @@ def ls_cmd(
         else:
             root = client.find_root()
             _render_nodes(nodes, parent_filter=root)
-    finally:
-        client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -228,25 +248,21 @@ def mkdir_cmd(
     mfa_code: str | None,
 ) -> None:
     """Create a folder called NAME (under --parent if given, else under root)."""
-    try:
-        client = _client(ctx, vault_passphrase, account, mfa_code)
-    except MegaError as exc:
-        print_error(f"Login failed: {exc}")
-        return
-    try:
-        parent_handle = None
-        if parent:
-            node = client.find_node(handle=parent) or client.find_node(path=parent)
-            if not node or not node.is_folder:
-                print_error(f"Parent not found: {parent}")
-                return
-            parent_handle = node.handle
-        handle = client.mkdir(name, parent_handle=parent_handle)
-        print_success(f"Created folder {name!r} (handle {handle})")
-    except MegaError as exc:
-        print_error(f"mkdir failed: {exc}")
-    finally:
-        client.close()
+    with _cloud_client(ctx, vault_passphrase, account, mfa_code) as client:
+        if client is None:
+            return
+        try:
+            parent_handle = None
+            if parent:
+                node = client.find_node(handle=parent) or client.find_node(path=parent)
+                if not node or not node.is_folder:
+                    print_error(f"Parent not found: {parent}")
+                    return
+                parent_handle = node.handle
+            handle = client.mkdir(name, parent_handle=parent_handle)
+            print_success(f"Created folder {name!r} (handle {handle})")
+        except MegaError as exc:
+            print_error(f"mkdir failed: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -270,25 +286,21 @@ def rm_cmd(
     yes: bool,
 ) -> None:
     """Move a node into the trash by handle or path."""
-    try:
-        client = _client(ctx, vault_passphrase, account, mfa_code)
-    except MegaError as exc:
-        print_error(f"Login failed: {exc}")
-        return
-    try:
-        node = client.find_node(handle=target) or client.find_node(path=target)
-        if not node:
-            print_error(f"Not found: {target}")
+    with _cloud_client(ctx, vault_passphrase, account, mfa_code) as client:
+        if client is None:
             return
-        label = node.name or node.handle
-        if not yes and not confirm(f"Move {label!r} to trash?", default=False):
-            return
-        client.delete(node.handle)
-        print_success(f"Deleted {label}")
-    except MegaError as exc:
-        print_error(f"rm failed: {exc}")
-    finally:
-        client.close()
+        try:
+            node = client.find_node(handle=target) or client.find_node(path=target)
+            if not node:
+                print_error(f"Not found: {target}")
+                return
+            label = node.name or node.handle
+            if not yes and not confirm(f"Move {label!r} to trash?", default=False):
+                return
+            client.delete(node.handle)
+            print_success(f"Deleted {label}")
+        except MegaError as exc:
+            print_error(f"rm failed: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -312,26 +324,22 @@ def mv_cmd(
     mfa_code: str | None,
 ) -> None:
     """Move SOURCE node to DESTINATION folder (handles or paths)."""
-    try:
-        client = _client(ctx, vault_passphrase, account, mfa_code)
-    except MegaError as exc:
-        print_error(f"Login failed: {exc}")
-        return
-    try:
-        src = client.find_node(handle=source) or client.find_node(path=source)
-        dst = client.find_node(handle=destination) or client.find_node(path=destination)
-        if not src or not dst:
-            print_error("Source or destination not found.")
+    with _cloud_client(ctx, vault_passphrase, account, mfa_code) as client:
+        if client is None:
             return
-        if not dst.is_folder:
-            print_error("Destination must be a folder.")
-            return
-        client.move(src.handle, dst.handle)
-        print_success(f"Moved {src.name or src.handle} -> {dst.name or dst.handle}")
-    except MegaError as exc:
-        print_error(f"mv failed: {exc}")
-    finally:
-        client.close()
+        try:
+            src = client.find_node(handle=source) or client.find_node(path=source)
+            dst = client.find_node(handle=destination) or client.find_node(path=destination)
+            if not src or not dst:
+                print_error("Source or destination not found.")
+                return
+            if not dst.is_folder:
+                print_error("Destination must be a folder.")
+                return
+            client.move(src.handle, dst.handle)
+            print_success(f"Moved {src.name or src.handle} -> {dst.name or dst.handle}")
+        except MegaError as exc:
+            print_error(f"mv failed: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -354,22 +362,18 @@ def rename_cmd(
     vault_passphrase: str | None,
     mfa_code: str | None,
 ) -> None:
-    try:
-        client = _client(ctx, vault_passphrase, account, mfa_code)
-    except MegaError as exc:
-        print_error(f"Login failed: {exc}")
-        return
-    try:
-        node = client.find_node(handle=target) or client.find_node(path=target)
-        if not node:
-            print_error(f"Not found: {target}")
+    with _cloud_client(ctx, vault_passphrase, account, mfa_code) as client:
+        if client is None:
             return
-        client.rename(node.handle, new_name)
-        print_success(f"Renamed {node.name!r} -> {new_name!r}")
-    except MegaError as exc:
-        print_error(f"rename failed: {exc}")
-    finally:
-        client.close()
+        try:
+            node = client.find_node(handle=target) or client.find_node(path=target)
+            if not node:
+                print_error(f"Not found: {target}")
+                return
+            client.rename(node.handle, new_name)
+            print_success(f"Renamed {node.name!r} -> {new_name!r}")
+        except MegaError as exc:
+            print_error(f"rename failed: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -392,16 +396,11 @@ def search_cmd(
     vault_passphrase: str | None,
     mfa_code: str | None,
 ) -> None:
-    try:
-        client = _client(ctx, vault_passphrase, account, mfa_code)
-    except MegaError as exc:
-        print_error(f"Login failed: {exc}")
-        return
-    try:
+    with _cloud_client(ctx, vault_passphrase, account, mfa_code) as client:
+        if client is None:
+            return
         matches = client.search(pattern, regex=regex)
         _render_nodes(matches)
-    finally:
-        client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -425,19 +424,14 @@ def trash_list(
     vault_passphrase: str | None,
     mfa_code: str | None,
 ) -> None:
-    try:
-        client = _client(ctx, vault_passphrase, account, mfa_code)
-    except MegaError as exc:
-        print_error(f"Login failed: {exc}")
-        return
-    try:
+    with _cloud_client(ctx, vault_passphrase, account, mfa_code) as client:
+        if client is None:
+            return
         trash = client.find_trash()
         if not trash:
             print_info("No trash node.")
             return
         _render_nodes(client.list_files(), parent_filter=trash)
-    finally:
-        client.close()
 
 
 @trash_cmd.command("empty", short_help="Permanently delete every trashed item.")
@@ -453,18 +447,13 @@ def trash_empty(
     mfa_code: str | None,
     yes: bool,
 ) -> None:
-    try:
-        client = _client(ctx, vault_passphrase, account, mfa_code)
-    except MegaError as exc:
-        print_error(f"Login failed: {exc}")
-        return
-    try:
+    with _cloud_client(ctx, vault_passphrase, account, mfa_code) as client:
+        if client is None:
+            return
         if not yes and not confirm("Permanently empty the trash?", default=False):
             return
         client.empty_trash()
         print_success("Trash emptied.")
-    finally:
-        client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -496,22 +485,18 @@ def import_cmd(
     if parsed.type not in (LinkType.FOLDER, LinkType.FOLDER_IN_FOLDER):
         print_error("Only folder shares can be imported.")
         return
-    try:
-        client = _client(ctx, vault_passphrase, account, mfa_code)
-    except MegaError as exc:
-        print_error(f"Login failed: {exc}")
-        return
-    try:
-        target_parent = None
-        if target:
-            node = client.find_node(handle=target) or client.find_node(path=target)
-            if not node or not node.is_folder:
-                print_error(f"Target folder not found: {target}")
-                return
-            target_parent = node.handle
-        handles = client.import_public_share(share_url, target_parent=target_parent)
-        print_success(f"Imported {len(handles)} node(s).")
-    except MegaError as exc:
-        print_error(f"Import failed: {exc}")
-    finally:
-        client.close()
+    with _cloud_client(ctx, vault_passphrase, account, mfa_code) as client:
+        if client is None:
+            return
+        try:
+            target_parent = None
+            if target:
+                node = client.find_node(handle=target) or client.find_node(path=target)
+                if not node or not node.is_folder:
+                    print_error(f"Target folder not found: {target}")
+                    return
+                target_parent = node.handle
+            handles = client.import_public_share(share_url, target_parent=target_parent)
+            print_success(f"Imported {len(handles)} node(s).")
+        except MegaError as exc:
+            print_error(f"Import failed: {exc}")
