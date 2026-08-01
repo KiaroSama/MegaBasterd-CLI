@@ -8,6 +8,7 @@ import logging
 import os
 from pathlib import Path
 
+import requests
 from cryptography.exceptions import InvalidTag
 
 from .auth import MegaSession
@@ -80,17 +81,33 @@ def restore_session(client, account_id: str, passphrase: str) -> bool:
     client.api.set_session(session.sid)
     try:
         client.api.request({"a": "ug"})
-    except Exception:  # noqa: BLE001 - any failure means "log in properly"
-        log.debug("Cached session for %s is no longer valid; logging in again", account_id)
+    except Exception as exc:  # noqa: BLE001 - any failure means "log in properly"
+        # "MEGA said no" and "MEGA never answered" are different answers, and
+        # only the first is evidence about the session. A transport fault means
+        # the probe never got a verdict, so DELETING the cache on it threw away
+        # a session that was still valid server-side - and the next command
+        # demanded a fresh 2FA code. That is the reported complaint arriving
+        # through the one path the earlier fix did not cover. `_send_retrying`
+        # has already retried five times by now, so the network really is
+        # unusable and the login below cannot succeed either; keeping the file
+        # costs nothing and restores reuse once the connection returns.
+        unproven = isinstance(exc, requests.RequestException)
+        log.debug(
+            "Cached session for %s could not be %s; logging in again",
+            account_id,
+            "reached" if unproven else "confirmed",
+        )
         client.session = None
         client.invalidate_cache()
-        # Also take the dead sid off the TRANSPORT. Clearing only `client.session`
-        # left it attached to the api, so the login that follows carried it and
-        # came back ESID (-15) - a stale cache turned into a hard login failure
-        # instead of the silent fallback this function exists to provide.
+        # Either way, take the sid off the TRANSPORT. Clearing only
+        # `client.session` left it attached to the api, so the login that
+        # followed carried it and came back ESID (-15) - a stale cache turned
+        # into a hard login failure instead of the silent fallback this
+        # function exists to provide. Unproven is not trusted.
         with contextlib.suppress(AttributeError):
             client.api.clear_session()
-        forget_session(account_id)
+        if not unproven:
+            forget_session(account_id)
         return False
     log.debug("Reused the cached session for %s", account_id)
     return True
