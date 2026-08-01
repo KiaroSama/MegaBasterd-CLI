@@ -609,6 +609,23 @@ class StreamingServer(ThreadingHTTPServer):
         handler_timeout: float = DEFAULT_HANDLER_TIMEOUT,
         header_timeout: float = DEFAULT_HEADER_TIMEOUT,
     ):
+        # BEFORE the bind, so a refusal never leaves a listening socket behind.
+        # This rule used to live only in `stream_cmd`, which generated a token
+        # for a non-loopback host - while the server accepted `auth_token=None`
+        # on any address and `_check_auth` waved every request through. Any
+        # other caller therefore got an unauthenticated public server handing
+        # out decrypted MEGA content, and the comment below promising a token
+        # was "Required for non-loopback binds" was simply not true. A rule that
+        # lives in one caller is a rule its siblings drift away from; this is
+        # the fifth time in this codebase. `.strip()` because `_check_auth`
+        # treats any falsy token as "no authentication at all", so a blank
+        # string would pass a truthiness check and disable the guard.
+        if not is_loopback_host(host) and not (auth_token or "").strip():
+            raise ValueError(
+                f"Refusing to serve {host!r} without an access token: a non-loopback "
+                "bind is reachable from the network and every request would be "
+                "unauthenticated. Pass auth_token=..., or bind to localhost."
+            )
         # Must be set before super().__init__(): that is where the socket is
         # created. AF_INET was hardcoded, so an IPv6 bind could never work.
         self.address_family = address_family_for_host(host)
@@ -636,7 +653,8 @@ class StreamingServer(ThreadingHTTPServer):
         # enforced on the CDN path too (it used to pass proxies=None).
         self.selector = selector if selector is not None else ProxySelector()
         # When set, every request (GET/HEAD, including Range) must present this
-        # token. Required for non-loopback binds; None means no authentication.
+        # token. None means no authentication - which the guard at the top of
+        # this constructor allows only for a loopback bind.
         self.auth_token = auth_token
         # Bearer header is always accepted; query-string tokens only when this
         # is explicitly enabled (they leak into logs/history).

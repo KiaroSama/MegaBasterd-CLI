@@ -15,25 +15,36 @@ authenticated call before it is trusted.
 from __future__ import annotations
 
 import pytest
+import requests
 
 from megabasterd_cli.commands import cloud_cmd
 from megabasterd_cli.core.auth import MegaSession
+from megabasterd_cli.core.errors import AuthError
+from megabasterd_cli.core.session_store import session_path
 
 PASSPHRASE = "vault-passphrase"
 ACCOUNT = "user@example.com"
 
 
 class _Api:
-    def __init__(self, alive: bool = True):
+    def __init__(self, alive: bool = True, raises: BaseException | None = None):
         self.alive = alive
+        self.raises = raises
         self.session_set_to: str | None = None
+        self.session_cleared = False
         self.requests: list[dict] = []
 
     def set_session(self, sid):
         self.session_set_to = sid
 
+    def clear_session(self):
+        self.session_set_to = None
+        self.session_cleared = True
+
     def request(self, payload, extra_params=None):
         self.requests.append(payload)
+        if self.raises is not None:
+            raise self.raises
         if not self.alive:
             raise RuntimeError("session expired")
         return {"u": "handle"}
@@ -136,3 +147,72 @@ def test_storing_a_session_never_breaks_the_command(data_dir, monkeypatch):
     saver.session = _session()
     monkeypatch.setattr("megabasterd_cli.config.session_dir", boom)
     cloud_cmd._remember_session(saver, ACCOUNT, PASSPHRASE)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# "MEGA said no" and "MEGA never answered" are different answers
+# ---------------------------------------------------------------------------
+#
+# The probe used to run under a bare `except Exception`, so BOTH outcomes
+# deleted the cache file. A dropped Wi-Fi connection, a dead proxy or a MEGA
+# blip therefore destroyed a session that was still perfectly valid server-side
+# - and the next command demanded a fresh 2FA code. That is the complaint this
+# whole session started from, arriving through the one path the fix missed.
+#
+# `_send_retrying` already retries a transport fault five times before giving
+# up, so by the time one of these reaches us the network really is unusable and
+# the login that follows cannot succeed either. Keeping the file costs nothing
+# and saves the reuse once the connection returns.
+
+
+@pytest.mark.parametrize(
+    "transport_error",
+    [
+        requests.ConnectionError("connection reset"),
+        requests.Timeout("read timed out"),
+        requests.exceptions.SSLError("handshake failed"),
+        requests.exceptions.ProxyError("proxy refused"),
+    ],
+    ids=["connection", "timeout", "ssl", "proxy"],
+)
+def test_a_transport_failure_keeps_the_cached_session(data_dir, transport_error):
+    """MEGA never answered, so the session's validity is UNKNOWN - keep it."""
+    saver = _Client(_Api())
+    saver.session = _session()
+    cloud_cmd._remember_session(saver, ACCOUNT, PASSPHRASE)
+    cached = session_path(ACCOUNT)
+    assert cached.is_file()
+
+    fresh = _Client(_Api(raises=transport_error))
+    assert cloud_cmd._restore_session(fresh, ACCOUNT, PASSPHRASE) is False
+    assert cached.is_file(), "a network fault deleted a session MEGA never rejected"
+
+
+def test_a_transport_failure_still_takes_the_sid_off_the_transport(data_dir):
+    """Unproven is not trusted: the login that follows must not carry the sid.
+
+    Leaving it attached is exactly what turned a stale cache into ESID (-15) on
+    the login instead of the silent fallback this function exists to provide.
+    """
+    saver = _Client(_Api())
+    saver.session = _session()
+    cloud_cmd._remember_session(saver, ACCOUNT, PASSPHRASE)
+
+    fresh = _Client(_Api(raises=requests.ConnectionError("down")))
+    assert cloud_cmd._restore_session(fresh, ACCOUNT, PASSPHRASE) is False
+    assert fresh.session is None
+    assert fresh.api.session_cleared
+    assert fresh.api.session_set_to is None
+
+
+def test_a_rejection_by_mega_still_deletes_the_cache(data_dir):
+    """The counterpart: an answer from MEGA is evidence, and it is acted on."""
+    saver = _Client(_Api())
+    saver.session = _session()
+    cloud_cmd._remember_session(saver, ACCOUNT, PASSPHRASE)
+    cached = session_path(ACCOUNT)
+    assert cached.is_file()
+
+    fresh = _Client(_Api(raises=AuthError(code=-15)))
+    assert cloud_cmd._restore_session(fresh, ACCOUNT, PASSPHRASE) is False
+    assert not cached.is_file(), "a session MEGA rejected must not be tried again"
