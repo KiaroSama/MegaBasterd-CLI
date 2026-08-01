@@ -417,10 +417,6 @@ def _std_b64_decode(data: str) -> bytes:
     return base64.b64decode(data)
 
 
-def _std_b64_encode(data: bytes) -> str:
-    return base64.b64encode(data).decode("ascii")
-
-
 def _aes_cbc_nopadding_decrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
     from Crypto.Cipher import AES
 

@@ -145,8 +145,8 @@ def test_recorded_calls_expose_the_payload_not_just_the_name():
 @pytest.mark.parametrize("node_type", [FILE, FOLDER])
 def test_every_node_field_survives_json(node_type):
     """MEGA speaks JSON; a bytes value anywhere would fail at the transport."""
-    from .fake_mega import json_roundtrip
+    import json
 
     api = FakeMegaAPI().with_default_tree()
     api.add_node("thing", node_type, api.root)
-    assert json_roundtrip(api.nodes) == api.nodes
+    assert json.loads(json.dumps(api.nodes)) == api.nodes

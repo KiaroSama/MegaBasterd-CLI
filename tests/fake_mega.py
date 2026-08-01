@@ -25,7 +25,6 @@ Not a mock framework. Add only what a test needs to observe.
 
 from __future__ import annotations
 
-import json
 import os
 
 from megabasterd_cli.core.auth import MegaSession
@@ -131,9 +130,6 @@ class FakeMegaAPI:
 
     def close(self):
         self.closed = True
-
-    def clone(self):
-        return self
 
     def request(self, payload, extra_params=None):
         self.calls.append(("request", {"payload": payload}))
@@ -336,8 +332,3 @@ def attrs_of(blob_b64: str, key: bytes) -> dict | None:
     from megabasterd_cli.core.crypto import b64_url_decode, decrypt_attributes
 
     return decrypt_attributes(b64_url_decode(blob_b64), key)
-
-
-def json_roundtrip(value):
-    """Prove a payload is JSON-serializable - the wire carries JSON, not bytes."""
-    return json.loads(json.dumps(value))
