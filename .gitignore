@@ -147,6 +147,8 @@ desktop.ini
 /CLAUDE.md
 /AGENTS.md
 /graphify-out/
+/plans/
+/advisor-plans/
 
 # Private, local-only AI handoff document (never publish)
 explain-AI.md
