@@ -22,7 +22,7 @@ from ..ui.prompts import (
     print_info,
     print_success,
 )
-from ..ui.theme import SafeTable, make_console
+from ..ui.theme import SafeTable, literal, make_console
 from ..utils.helpers import format_bytes
 from .api_support import api_for, mfa_code_option, vault_passphrase_option
 
@@ -168,12 +168,32 @@ def _cloud_client(
 # ---------------------------------------------------------------------------
 
 
-def _render_nodes(nodes: list[MegaNode], parent_filter: str | None = None) -> None:
-    """Render a list of nodes as a Rich table."""
+def _render_nodes(
+    nodes: list[MegaNode],
+    parent_filter: str | None = None,
+    empty_message: str = "No items",
+) -> None:
+    """Render a list of nodes as a Rich table, or say why there is nothing.
+
+    `empty_message` exists because one line - "No items" - was printed for five
+    different situations: an empty account, an empty Cloud Drive, an empty
+    folder the user named, a search that matched nothing, and an empty trash.
+    Nothing in the output distinguished them, and none of them from a listing
+    that had quietly returned nothing. Each caller now says which is which.
+    """
     if parent_filter:
         nodes = [n for n in nodes if n.parent == parent_filter]
+    # Drop the system nodes HERE rather than skipping them inside the render
+    # loop. Doing it there meant an account holding only root/inbox/trash got
+    # past `if not nodes`, built a table, skipped every row and printed a bare
+    # header - which is what `mb ls --all` showed on an empty account.
+    nodes = [n for n in nodes if not (n.is_root or n.is_trash or n.is_inbox)]
     if not nodes:
-        _console.print("[mb.dim]No items[/mb.dim]")
+        # `literal()`, not markup: the message can carry a folder name or a
+        # search pattern, and `theme.py` draws the line that a plain `str` is
+        # untrusted. An f-string into markup would let a name restyle the line
+        # or abort the render outright on an unbalanced tag.
+        _console.print(literal(empty_message), style="mb.dim")
         return
 
     table = SafeTable(
@@ -186,8 +206,6 @@ def _render_nodes(nodes: list[MegaNode], parent_filter: str | None = None) -> No
     table.add_column("Name")
     table.add_column("Size", justify="right", style="mb.value")
     for n in sorted(nodes, key=lambda x: (x.node_type != 1, (x.name or ""))):
-        if n.is_root or n.is_trash or n.is_inbox:
-            continue
         kind = "DIR" if n.is_folder else "FILE"
         size = format_bytes(n.size) if n.is_file else "-"
         table.add_row(n.handle, kind, n.name or "?", size)
@@ -215,16 +233,24 @@ def ls_cmd(
             return
         nodes = client.list_files()
         if show_all:
-            _render_nodes(nodes)
+            _render_nodes(nodes, empty_message="Your MEGA account is empty.")
         elif path:
             node = client.find_node(path=path)
             if not node or not node.is_folder:
                 print_error(f"Folder not found: {path}")
                 return
-            _render_nodes(nodes, parent_filter=node.handle)
+            _render_nodes(
+                nodes,
+                parent_filter=node.handle,
+                empty_message=f"Folder {path!r} is empty.",
+            )
         else:
             root = client.find_root()
-            _render_nodes(nodes, parent_filter=root)
+            _render_nodes(
+                nodes,
+                parent_filter=root,
+                empty_message="Your Cloud Drive is empty.",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -400,7 +426,7 @@ def search_cmd(
         if client is None:
             return
         matches = client.search(pattern, regex=regex)
-        _render_nodes(matches)
+        _render_nodes(matches, empty_message=f"Nothing matched {pattern!r}.")
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +457,11 @@ def trash_list(
         if not trash:
             print_info("No trash node.")
             return
-        _render_nodes(client.list_files(), parent_filter=trash)
+        _render_nodes(
+            client.list_files(),
+            parent_filter=trash,
+            empty_message="The trash is empty.",
+        )
 
 
 @trash_cmd.command("empty", short_help="Permanently delete every trashed item.")
