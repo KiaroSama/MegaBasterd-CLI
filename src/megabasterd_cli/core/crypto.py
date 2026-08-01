@@ -51,8 +51,14 @@ def b64_url_decode(data: str) -> bytes:
 
 
 def b64_url_encode(data: bytes) -> str:
-    """Encode bytes to MEGA's URL-safe base64 (no padding)."""
-    return base64.b64encode(data).decode("ascii").replace("+", "-").replace("/", "_").rstrip("=")
+    """Encode bytes to MEGA's URL-safe base64 (no padding).
+
+    `urlsafe_b64encode` IS the `+`->`-` / `/`->`_` substitution this used to
+    hand-roll, so there is one fewer place to get the alphabet wrong. The
+    decoder opposite is deliberately NOT symmetric: it translates first and
+    then gates on the alphabet, which `urlsafe_b64decode` cannot express.
+    """
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
 
 
 # ---------------------------------------------------------------------------

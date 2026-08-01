@@ -12,6 +12,7 @@ reverse - so there is no import cycle.
 
 from __future__ import annotations
 
+import base64
 import re
 from typing import Any
 from urllib.parse import urlparse
@@ -40,7 +41,6 @@ from .links import (
     _aes_cbc_nopadding_decrypt,
     _aes_cbc_pkcs7_decrypt,
     _std_b64_decode,
-    _std_b64_encode,
     parse_link,
 )
 
@@ -466,7 +466,7 @@ def _decrypt_megacrypter_password_info(body: dict, password: str | None) -> tupl
         path_bytes = _decrypt_megacrypter_field(path_value, info_key, iv)
         if path_bytes is not None:
             decrypted["path"] = path_bytes.decode("utf-8", errors="replace")
-    return decrypted, _std_b64_encode(info_key)
+    return decrypted, base64.b64encode(info_key).decode("ascii")
 
 
 def get_megacrypter_info(
