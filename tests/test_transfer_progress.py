@@ -235,3 +235,82 @@ def test_canceled_and_skipped_render_labels():
     skipped = view._stats_text(0, 10, 0.0, width=100, include_elapsed=False, status="skipped")
     assert "Canceled" in canceled.plain
     assert "Skipped" in skipped.plain
+
+
+# ---------------------------------------------------------------------------
+# A finished row has nothing to count down to
+# ---------------------------------------------------------------------------
+#
+# ETA answers "how much longer". Once a row is done, failed or cancelled there
+# is no countdown left, but the column was still printed - and it repeated the
+# word the state column had just used:
+#
+#     100.0% | 103.03 MB / 103.03 MB | Done | ETA Done | Elapsed 00:15
+#                                      ^^^^   ^^^^^^^^
+#
+# `eta` was assigned the state label and then appended unconditionally, so the
+# line carried a heading with nothing behind it and spent terminal width doing
+# it. The state column keeps the word; the ETA column goes away.
+
+
+def _stats(status: str, *, completed: int = 0, total: int | None = 10, elapsed: bool = True) -> str:
+    view = MultiFileProgressView(title="t")
+    return view._stats_text(
+        completed, total, 0.0, width=120, include_elapsed=elapsed, status=status
+    ).plain
+
+
+def test_an_active_row_still_shows_the_eta_column():
+    """The guard must not remove ETA from the rows that need it."""
+    rendered = _stats("active")
+    assert "ETA " in rendered
+
+
+@pytest.mark.parametrize("status", ["complete", "downloaded", "resumed"])
+def test_a_completed_row_drops_the_eta_column_and_keeps_done(status):
+    rendered = _stats(status)
+    assert "ETA" not in rendered
+    assert "Done" in rendered
+
+
+def test_completion_inferred_from_the_counts_also_drops_eta():
+    """`completed >= total` marks a row done even when status says otherwise."""
+    rendered = _stats("active", completed=10, total=10)
+    assert "ETA" not in rendered
+    assert "Done" in rendered
+
+
+@pytest.mark.parametrize("status", ["failed", "error"])
+def test_a_failed_row_drops_the_eta_column_and_keeps_failed(status):
+    rendered = _stats(status)
+    assert "ETA" not in rendered
+    assert "Failed" in rendered
+
+
+@pytest.mark.parametrize("status,label", [("canceled", "Canceled"), ("skipped", "Skipped")])
+def test_a_stopped_row_drops_the_eta_column_and_keeps_its_label(status, label):
+    rendered = _stats(status)
+    assert "ETA" not in rendered
+    assert label in rendered
+
+
+@pytest.mark.parametrize("status", ["complete", "failed", "canceled", "skipped"])
+def test_elapsed_survives_in_every_terminal_state(status):
+    """Dropping ETA must not take the Elapsed column with it."""
+    assert "Elapsed" in _stats(status)
+
+
+@pytest.mark.parametrize("status", ["complete", "failed", "canceled", "skipped"])
+def test_dropping_eta_leaves_no_dangling_separator(status):
+    """The ' | ' before ETA belonged to it and had to go too, or the line reads
+    `Done |  | Elapsed`."""
+    rendered = _stats(status)
+    assert " |  | " not in rendered
+    assert not rendered.rstrip().endswith("|")
+
+
+def test_the_bar_percent_and_bytes_are_untouched_by_the_change():
+    """Everything left of the state column keeps rendering as before."""
+    rendered = _stats("complete", completed=10, total=10)
+    assert "100.0%" in rendered
+    assert "10.00 B / 10.00 B" in rendered
