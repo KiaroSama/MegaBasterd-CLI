@@ -134,6 +134,20 @@ def test_the_scalars_are_machine_values_too(listing):
     assert payload["type"] == "Folder share"
 
 
+def test_the_file_count_and_the_file_list_do_not_collide(listing):
+    """`files` is the ARRAY; the count is `file_count`.
+
+    Both once mapped to `files` and the array was assigned second, so the
+    count disappeared without a word - a consumer asking for it got a list.
+    Caught while documenting the shape, not by the tests above, which is why
+    this one names both keys explicitly.
+    """
+    payload = _payload(_run(URL, "--json"))
+    assert isinstance(payload["files"], list)
+    assert payload["file_count"] == 2
+    assert len(payload["files"]) == payload["file_count"]
+
+
 # ---------------------------------------------------------------------------
 # the contract that makes it usable
 # ---------------------------------------------------------------------------

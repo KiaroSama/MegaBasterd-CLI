@@ -156,12 +156,32 @@ one is generated and shown once on the console (never written to logs).
 ### `info`
 
 ```powershell
-.\Run.ps1 info URL [--password TEXT] [--elc-user TEXT] [--elc-api-key TEXT]
+.\Run.ps1 info URL [--json] [--password TEXT] [--elc-user TEXT] [--elc-api-key TEXT]
 ```
 
 Shows public link metadata without downloading or logging into an account: type,
 name, size, node count, and container details where available. No MFA code is
 needed because this command uses public-link APIs.
+
+| Option | Purpose |
+| --- | --- |
+| `--json` | Print the answer as one JSON object on stdout instead of a table. |
+| `--password TEXT` | Password for protected links. |
+| `--elc-user TEXT` | ELC account user for `mega://elc` links. |
+| `--elc-api-key TEXT` | ELC API key for `mega://elc` links. |
+
+With `--json`, a folder share also carries a `files` array — one entry per file
+with `path`, `size` and `handle`:
+
+```json
+{"type": "Folder share", "public_id": "ID", "file_count": 2, "total_size": 108037402,
+ "files": [{"path": "Season 1/clip.mkv", "size": 1024, "handle": "fileBBBB"}]}
+```
+
+`size` is a byte count, never a formatted string, and `path` is exactly what
+`download --include` matches and what a download writes — so a selection made
+from this listing can be passed straight back as a filter. Nothing is
+downloaded and nothing is created on disk.
 
 ### `share`
 
