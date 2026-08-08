@@ -423,7 +423,8 @@
     "MegaFolderDownloader",
     "MegaFolderDownloader.download_file_in_folder",
     "MegaFolderDownloader.download_folder",
-    "MegaFolderDownloader.download_node_in_folder"
+    "MegaFolderDownloader.download_node_in_folder",
+    "MegaFolderDownloader.plan_file_jobs"
   ],
   "megabasterd_cli.core.hashcash": [
     "BUF_SIZE",
