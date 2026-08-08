@@ -259,7 +259,12 @@ def ask_choice(count: int, allow_back: bool = True) -> str:
         return "1"
     if allow_back and trimmed == "0":
         raise _Back()
-    if not trimmed.isdigit() or not 1 <= int(trimmed) <= count:
+    # `isdecimal()`, not `isdigit()`: `isdigit()` is True for superscripts and
+    # other digit forms `int()` refuses, and when it was True the first operand
+    # went False, so Python evaluated `int(trimmed)` and raised - a traceback
+    # out of a prompt that already had a rejection path one line down. Decimal
+    # digits from any script still pass, and the caller re-parses with `int()`.
+    if not trimmed.isdecimal() or not 1 <= int(trimmed) <= count:
         _note("Invalid selection.", "mb.warning")
         return ""
     return trimmed

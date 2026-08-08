@@ -137,7 +137,14 @@ def _parse_body(response) -> Any:
     """
     headers = getattr(response, "headers", None) or {}
     declared = str(headers.get("Content-Length") or "")
-    if declared.isdigit() and int(declared) > MAX_RESPONSE_BYTES:
+    # `isdecimal()`, not `isdigit()`: the latter is True for superscripts and
+    # other Unicode digit forms that `int()` refuses, so it would let a header
+    # through and then raise ValueError out of the very guard meant to bound
+    # the read. This header comes from the network. A value that is not a plain
+    # decimal now simply fails the check, and `_read_bounded` still caps the
+    # body that actually lands in memory - the declared size was only ever the
+    # cheap first look.
+    if declared.isdecimal() and int(declared) > MAX_RESPONSE_BYTES:
         raise MegaError(
             message=f"MEGA API response too large ({declared} bytes); refusing to parse it"
         )
