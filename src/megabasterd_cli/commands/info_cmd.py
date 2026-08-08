@@ -106,10 +106,18 @@ class _Fields:
     def add_row(self, key: str, value: str, raw: Any = None) -> None:
         self.rows.append((key, value, value if raw is None else raw))
 
+    # The "Files" row is a COUNT and the listing below is an ARRAY. Both would
+    # land on `files`, and the array is assigned second, so the count vanished
+    # silently - a consumer reading it got a list where it expected a number.
+    # The count takes the distinct name; the array keeps `files`, which is what
+    # a caller reaches for.
+    _JSON_KEYS = {"files": "file_count"}
+
     def as_json(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            key.lower().replace(" ", "_"): raw for key, _display, raw in self.rows
-        }
+        payload: dict[str, Any] = {}
+        for key, _display, raw in self.rows:
+            name = key.lower().replace(" ", "_")
+            payload[self._JSON_KEYS.get(name, name)] = raw
         if self.files is not None:
             payload["files"] = self.files
         return payload
