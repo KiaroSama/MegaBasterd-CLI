@@ -306,8 +306,15 @@ class MegaFolderDownloader:
             raise TransferError(message=f"{len(failures)} folder file(s) failed: {sample}{more}")
         return results
 
-    def _decrypt_folder_nodes(self, raw_nodes: list[dict], folder_key: bytes) -> list[FolderNode]:
-        """Decrypt the per-node attributes/keys using the folder share key."""
+    @staticmethod
+    def _decrypt_folder_nodes(raw_nodes: list[dict], folder_key: bytes) -> list[FolderNode]:
+        """Decrypt the per-node attributes/keys using the folder share key.
+
+        Static because it never used `self`, and `mb info --json` needs it
+        without building a downloader (which would want a transport it has no
+        use for). The existing `self._decrypt_folder_nodes(...)` call sites
+        are unaffected.
+        """
         decrypted: list[FolderNode] = []
         for raw in raw_nodes:
             raw_key = raw.get("k", "")
@@ -365,25 +372,41 @@ class MegaFolderDownloader:
         return nodes[0].handle if nodes else ""
 
     @classmethod
-    def _build_file_jobs(
+    def plan_file_jobs(
         cls, nodes: list[FolderNode], output_dir: Path, root_handle: str
     ) -> list[tuple[FolderNode, Path]]:
-        """Create local folders and file destinations for a folder subtree."""
-        path_for_handle = cls._build_directory_paths(nodes, output_dir, root_handle)
-        for path in path_for_handle.values():
-            path.mkdir(parents=True, exist_ok=True)
+        """Work out each file's destination WITHOUT touching the disk.
 
+        Split out of `_build_file_jobs` so a read-only caller - `mb info
+        --json`, which must not create anything - can report the very paths a
+        download would write, and `--include` patterns are matched against
+        those same strings. Two implementations would drift, and the drift
+        would be invisible: the listing would look right while selecting from
+        it silently matched nothing.
+        """
+        path_for_handle = cls._build_directory_paths(nodes, output_dir, root_handle)
         file_jobs: list[tuple[FolderNode, Path]] = []
         for node in nodes:
             if not node.is_file:
                 continue
             parent_path = path_for_handle.get(node.parent, output_dir)
-            parent_path.mkdir(parents=True, exist_ok=True)
             destination = parent_path / sanitize_filename(node.name)
             # Defense in depth: never write outside the chosen output root,
             # even if a symlink/reparse point inside it points elsewhere.
             ensure_within_directory(output_dir, destination)
             file_jobs.append((node, destination))
+        return file_jobs
+
+    @classmethod
+    def _build_file_jobs(
+        cls, nodes: list[FolderNode], output_dir: Path, root_handle: str
+    ) -> list[tuple[FolderNode, Path]]:
+        """`plan_file_jobs`, plus the directories a download needs to exist."""
+        file_jobs = cls.plan_file_jobs(nodes, output_dir, root_handle)
+        for path in cls._build_directory_paths(nodes, output_dir, root_handle).values():
+            path.mkdir(parents=True, exist_ok=True)
+        for _node, destination in file_jobs:
+            destination.parent.mkdir(parents=True, exist_ok=True)
         return file_jobs
 
     @classmethod
