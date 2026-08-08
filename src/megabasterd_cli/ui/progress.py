@@ -253,21 +253,28 @@ class MultiFileProgressView:
         failed = status in {"failed", "error"}
         stopped = status in {"canceled", "skipped"}
         if done:
-            eta = speed_label = "Done"
+            speed_label = "Done"
         elif failed:
-            eta = speed_label = "Failed"
+            speed_label = "Failed"
         elif stopped:
-            eta = speed_label = status.capitalize()
+            speed_label = status.capitalize()
         else:
-            eta = format_eta(remaining / speed) if total and speed and speed > 1 else "--:--"
             speed_label = _format_speed(speed)
+        # ETA answers "how much longer", so a row that has finished, failed or
+        # been cancelled has no countdown left to show. It used to be assigned
+        # the state label and printed anyway, which put the same word in two
+        # adjacent columns - "Done | ETA Done" - a heading with nothing behind
+        # it, paid for in terminal width. None here means the whole section is
+        # skipped below, separator included.
+        eta = (
+            None
+            if done or failed or stopped
+            else format_eta(remaining / speed) if total and speed and speed > 1 else "--:--"
+        )
         speed_style = (
             "bold green"
             if done
             else "bold red" if failed else "yellow" if stopped else "bold #39ff6a"
-        )
-        eta_style = (
-            "bold green" if done else "bold red" if failed else "yellow" if stopped else "#ff8a1f"
         )
         text = Text()
         text.append_text(_rich_bar(percent, bar_width, status))
@@ -278,9 +285,12 @@ class MultiFileProgressView:
         )
         text.append(" | ", style="white")
         text.append(speed_label, style=speed_style)
-        text.append(" | ", style="white")
-        text.append("ETA ", style="#ffd04a")
-        text.append(eta, style=eta_style)
+        if eta is not None:
+            # The separator belongs to this section: leaving it behind renders
+            # "Done |  | Elapsed".
+            text.append(" | ", style="white")
+            text.append("ETA ", style="#ffd04a")
+            text.append(eta, style="#ff8a1f")
         if include_elapsed:
             # Wall-clock operation time from one monotonic clock owned by the
             # view; frozen exactly at terminal state by close().
