@@ -89,11 +89,24 @@ def _interactive_file_picker(output_dir: Path):
             click.echo(f"  {index:3d}. {format_bytes(size):>12}  {relative}")
         click.echo(f"Total: {format_bytes(total_size)}")
         while True:
-            answer = click.prompt(
-                "Files to download (e.g. 1,3-5 | all | none)",
-                default="all",
-                show_default=True,
-            )
+            try:
+                answer = click.prompt(
+                    "Files to download (e.g. 1,3-5 | all | none)",
+                    default="all",
+                    show_default=True,
+                )
+            except (click.Abort, EOFError) as exc:
+                # End of input is an answer: there is nobody left to ask. The
+                # prompt already offers "none", and taking it is a documented
+                # clean skip, so EOF goes there. It used to escape as
+                # `click.Abort` - whose message is the EMPTY STRING - past the
+                # command's `except SelectionCancelled` / `except MegaError`
+                # and into the catch-all, which reported "Unexpected error"
+                # plus a raw traceback. Reached most easily by answering
+                # something invalid first: the retry re-prompts a stdin that
+                # is already exhausted.
+                click.echo("No answer (end of input); treating as 'none'.")
+                raise SelectionCancelled() from exc
             try:
                 chosen = parse_selection_tokens(answer, len(file_jobs))
             except ValueError as exc:
