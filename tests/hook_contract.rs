@@ -121,7 +121,7 @@ fn command_diagnostics_keep_the_executable_and_count_without_arguments_or_paths(
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/hook-diagnostics");
     std::fs::create_dir_all(&root).unwrap();
-    let scratch = tempfile::tempdir_in(root).unwrap();
+    let scratch = private_tempfile::tempdir_in(root).unwrap();
     for quiet in [false, true] {
         let logs = scratch
             .path()
@@ -228,7 +228,7 @@ fn batch_command_child_records_literal_arguments_once() {
 fn batch_outcomes_are_three_literal_arguments_to_one_owned_native_command() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/hook-contract");
     std::fs::create_dir_all(&root).unwrap();
-    let scratch = tempfile::tempdir_in(&root).unwrap();
+    let scratch = private_tempfile::tempdir_in(&root).unwrap();
     let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
     let executable = std::env::current_exe().unwrap().canonicalize().unwrap();
     let relative = executable.strip_prefix(&cwd).unwrap().to_str().unwrap();
@@ -282,3 +282,6 @@ fn empty_batches_and_unconfigured_commands_do_nothing_even_after_cancellation() 
         130
     );
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

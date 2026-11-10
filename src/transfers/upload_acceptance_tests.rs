@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 fn late_final_response_never_replaces_the_first_valid_durable_completion_token() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/upload-acceptance");
     std::fs::create_dir_all(&root).unwrap();
-    let scratch = tempfile::tempdir_in(root).unwrap();
+    let scratch = crate::test_support::tempdir_in(root).unwrap();
     let source = scratch.path().join("source.bin");
     std::fs::write(&source, [7; 131089]).unwrap();
     let path = scratch.path().join("private state/receipt.json");

@@ -106,7 +106,7 @@ fn repeated_command_contexts_warn_once_per_ignored_key_but_repeat_invalid_value_
 
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/config-warnings");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let root = scratch.path().join("runtime with spaces");
     let temporary = scratch.path().join("private temporary");
     let cwd = scratch.path().join("unrelated working directory");
@@ -177,3 +177,6 @@ fn repeated_command_contexts_warn_once_per_ignored_key_but_repeat_invalid_value_
         assert!(!stdout.contains(secret) && !stderr.contains(secret));
     }
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

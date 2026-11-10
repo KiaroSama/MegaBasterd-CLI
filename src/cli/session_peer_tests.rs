@@ -36,7 +36,7 @@ fn corrupt_or_future_session_reads_are_refused_without_requests_or_saved_byte_ch
 
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/session-reuse");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(&base).unwrap();
+    let scratch = crate::test_support::tempdir_in(&base).unwrap();
     let path = scratch.path().join("private/session.json");
     let store = Store::new(&path);
     let sessions = Sessions::new(&path);
@@ -86,7 +86,7 @@ fn uncertain_session_probe_preserves_bytes_clears_sid_and_prevents_fresh_authent
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/session-reuse");
     fs::create_dir_all(&base).unwrap();
     for malformed in [false, true] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let paths = Context::test_context(scratch.path()).paths;
         let vault = Vault::new(PASS);
         let accounts = crate::storage::accounts::Accounts::new(paths.accounts());
@@ -171,7 +171,7 @@ fn actual_connection_timeout_tls_and_proxy_failures_preserve_cache_and_clear_unp
 
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/session-reuse");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(&base).unwrap();
+    let scratch = crate::test_support::tempdir_in(&base).unwrap();
     let paths = Context::test_context(scratch.path()).paths;
     let vault = Vault::new(PASS);
     let accounts = crate::storage::accounts::Accounts::new(paths.accounts());
@@ -327,7 +327,7 @@ fn shared_account_session_reuses_valid_cache_and_logs_in_only_for_missing_expire
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/session-reuse");
     fs::create_dir_all(&base).unwrap();
     for mode in ["valid", "missing", "expired", "wrong-vault"] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let paths = Context::test_context(scratch.path()).paths;
         let vault = Vault::new(PASS);
         let accounts = crate::storage::accounts::Accounts::new(paths.accounts());

@@ -134,7 +134,7 @@ fn four_independent_processes_hold_distinct_destinations_and_preserve_each_owner
         return;
     }
     fs::create_dir_all(base()).unwrap();
-    let scratch = tempfile::tempdir_in(base()).unwrap();
+    let scratch = private_tempfile::tempdir_in(base()).unwrap();
     let root = scratch.path().canonicalize().unwrap();
     fs::create_dir(root.join("output with spaces")).unwrap();
     // Four owners are the exact source invariant, not an auto-sized worker pool.
@@ -208,3 +208,6 @@ fn four_independent_processes_hold_distinct_destinations_and_preserve_each_owner
         contents
     );
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

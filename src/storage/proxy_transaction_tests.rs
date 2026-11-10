@@ -15,10 +15,10 @@ use serde_json::{Value, json};
 use super::{ProxyStore, Store};
 use crate::error::Error;
 
-fn fixture() -> tempfile::TempDir {
+fn fixture() -> crate::test_support::TempDir {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/proxy-transactions");
     fs::create_dir_all(&base).unwrap();
-    tempfile::tempdir_in(base).unwrap()
+    crate::test_support::tempdir_in(base).unwrap()
 }
 
 const PROCESS_TEST: &str = "storage::proxies::transaction_tests::overlapping_proxy_processes_refuse_contention_then_reload_before_retry";

@@ -25,7 +25,7 @@ fn two_post_quota_refreshes_keep_independent_sequences_and_cached_auth_even_when
     for (quota_code, refresh_refused) in [(-17, false), (-24, true)] {
         let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/auto-account-quota");
         std::fs::create_dir_all(&base).unwrap();
-        let scratch = tempfile::tempdir_in(base).unwrap();
+        let scratch = crate::test_support::tempdir_in(base).unwrap();
         seed_accounts(
             scratch.path(),
             &[(A, "session-a", 128), (B, "session-b", 64)],

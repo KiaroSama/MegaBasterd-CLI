@@ -93,7 +93,7 @@ fn discovered_account_paths_begin_empty_and_real_credentials_land_only_in_the_is
         return;
     }
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let runtime = scratch.path().join("runtime with spaces");
     fs::create_dir(&runtime).unwrap();
     let user = scratch.path().join("isolated user");
@@ -148,3 +148,6 @@ fn discovered_account_paths_begin_empty_and_real_credentials_land_only_in_the_is
     );
     assert!(user.join("native-v2/Data/accounts.json").is_file());
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

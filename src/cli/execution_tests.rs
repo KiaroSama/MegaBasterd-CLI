@@ -23,7 +23,7 @@ fn direct_dispatch_preserves_the_returned_status_and_finalizes_the_same_log_once
         ("io", 1),
         ("canceled", 130),
     ] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let mut context = Context::test_context(scratch.path());
         let stdout = Capture::default();
         let stderr = Capture::default();

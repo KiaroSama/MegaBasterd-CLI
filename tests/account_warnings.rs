@@ -145,7 +145,7 @@ fn default_conflict_warns_once_after_empty_defaults_and_explicit_overrides_witho
     }
 
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let root = scratch.path().join("runtime with spaces");
     let temporary = scratch.path().join("private temporary");
     let cwd = scratch.path().join("unrelated working directory");
@@ -201,3 +201,6 @@ fn default_conflict_warns_once_after_empty_defaults_and_explicit_overrides_witho
     );
     assert!(result.stderr.is_empty());
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

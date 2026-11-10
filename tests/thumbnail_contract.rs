@@ -10,7 +10,7 @@ use std::{fs, path::Path};
 #[test]
 fn synthetic_source_image_dimensions_rgb_jpeg_and_no_upscale_are_preserved() -> Result<()> {
     let data: Value = serde_json::from_str(include_str!("fixtures/local_file_services.json"))?;
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempfile::tempdir()?;
     let control = Control::new();
     for case in data["images"]
         .as_array()
@@ -53,7 +53,7 @@ fn synthetic_source_image_dimensions_rgb_jpeg_and_no_upscale_are_preserved() -> 
 
 #[test]
 fn publication_requires_overwrite_and_refuses_input_aliases() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempfile::tempdir()?;
     let data: Value = serde_json::from_str(include_str!("fixtures/local_file_services.json"))?;
     let source = directory.path().join("input.png");
     fs::write(
@@ -84,7 +84,7 @@ fn publication_requires_overwrite_and_refuses_input_aliases() -> Result<()> {
 
 #[test]
 fn unsupported_corrupt_and_missing_ffmpeg_are_errors_not_fake_thumbnail_success() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempfile::tempdir()?;
     let control = Control::new();
     for name in ["unknown.txt", "corrupt.png"] {
         let source = directory.path().join(name);
@@ -106,7 +106,7 @@ fn unsupported_corrupt_and_missing_ffmpeg_are_errors_not_fake_thumbnail_success(
 
 #[test]
 fn decoder_bounds_refuse_extreme_dimensions_before_large_allocation() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempfile::tempdir()?;
     let source = directory.path().join("huge.bmp");
     let mut header = vec![0u8; 54];
     header[..2].copy_from_slice(b"BM");
@@ -124,7 +124,7 @@ fn decoder_bounds_refuse_extreme_dimensions_before_large_allocation() -> Result<
 
 #[test]
 fn pre_canceled_generator_does_not_publish_any_output() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempfile::tempdir()?;
     let control = Control::new();
     control.cancel();
     let source = directory.path().join("input.png");
@@ -145,3 +145,6 @@ fn no_staging(directory: &Path) -> Result<()> {
     }
     Ok(())
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

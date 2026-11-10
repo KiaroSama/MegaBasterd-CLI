@@ -12,7 +12,7 @@ fn a_policy_send_boundary_refusal_is_returned_after_one_call_without_mutating_sa
     for transient_first in [false, true] {
         let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/download-retry");
         std::fs::create_dir_all(&base).unwrap();
-        let scratch = tempfile::tempdir_in(base).unwrap();
+        let scratch = crate::test_support::tempdir_in(base).unwrap();
         let destination = scratch.path().join("unused");
         let mut file = File::create(&destination).unwrap();
         file.write_all(&[0x5a; 4096]).unwrap();

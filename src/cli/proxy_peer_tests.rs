@@ -28,7 +28,7 @@ fn command(words: &[&str]) -> super::args::Command {
 fn parsed_proxy_list_and_remove_preserve_hosts_but_never_credentials_or_secrets_in_logs() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/proxy-cli");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let stdout = Capture::default();
     let stderr = Capture::default();
     let logger = Arc::new(Logger::start(&scratch.path().join("private logs")).unwrap());
@@ -113,7 +113,7 @@ fn parsed_proxy_add_refuses_a_corrupt_store_and_keeps_its_exact_private_recovery
 
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/proxy-cli");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let stdout = Capture::default();
     let stderr = Capture::default();
     let mut context = Context::test_context(scratch.path());
@@ -151,7 +151,7 @@ fn parsed_proxy_add_refuses_a_corrupt_store_and_keeps_its_exact_private_recovery
 fn parsed_proxy_fetch_http_failure_preserves_pool_query_routing_and_private_diagnostics() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/proxy-cli");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let paths = Context::test_context(scratch.path()).paths;
     let store = ProxyStore::new(paths.proxies());
     store
@@ -227,7 +227,7 @@ fn parsed_proxy_fetch_caps_a_large_body_keeps_complete_lines_and_closes_the_resp
 
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/proxy-cli");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let paths = Context::test_context(scratch.path()).paths;
     let store = ProxyStore::new(paths.proxies());
     store
@@ -306,7 +306,7 @@ fn parsed_proxy_fetch_caps_a_large_body_keeps_complete_lines_and_closes_the_resp
 fn parsed_proxy_serve_missing_password_exits_one_without_starting_a_listener_or_claiming_success() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/proxy-cli");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let stdout = Capture::default();
     let stderr = Capture::default();
     let mut context = Context::test_context(scratch.path());

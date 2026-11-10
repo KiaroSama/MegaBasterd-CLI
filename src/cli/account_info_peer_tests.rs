@@ -26,7 +26,7 @@ const PASS: &str = "synthetic vault passphrase";
 fn parsed_account_info_preserves_saved_quota_on_rejection_and_releases_responses() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/account-info");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     seed_accounts(scratch.path(), &[(EMAIL, SID, 4096)]);
     let paths = Context::test_context(scratch.path()).paths;
     Context::test_context(scratch.path())

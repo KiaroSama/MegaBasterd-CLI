@@ -29,7 +29,7 @@ fn state(path: &Path) -> TransferState {
 fn malformed_saved_transfer_fields_refuse_before_load_save_or_clear_can_change_the_document() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/state-metadata");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let path = scratch.path().join("private/transfer.json");
     let valid = state(&path);
     let data = serde_json::to_value(&valid).unwrap();
@@ -141,7 +141,7 @@ fn malformed_saved_transfer_fields_refuse_before_load_save_or_clear_can_change_t
 fn supported_native_upload_fields_roundtrip_without_plaintext_crypto_material_or_extra_files() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/state-metadata");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let path = scratch.path().join("private/transfer.json");
     let source = scratch.path().join("payload.bin");
     fs::write(&source, [0x78; 128]).unwrap();
@@ -197,3 +197,6 @@ fn supported_native_upload_fields_roundtrip_without_plaintext_crypto_material_or
     assert!(!save.contains("File::open") && !save.contains("OpenOptions"));
     assert!(save.contains("locked.save(state)"));
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

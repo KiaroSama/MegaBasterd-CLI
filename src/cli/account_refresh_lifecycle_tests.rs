@@ -21,7 +21,7 @@ use crate::{
 fn parsed_refresh_all_releases_each_account_response_before_context_drop() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/account-refresh-lifecycle");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let choices = [
         ("a@example.invalid", "refresh-session-a", 4096),
         ("b@example.invalid", "refresh-session-b", 8192),

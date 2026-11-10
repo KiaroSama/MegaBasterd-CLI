@@ -62,10 +62,10 @@ impl Capture {
     }
 }
 
-fn scratch() -> tempfile::TempDir {
+fn scratch() -> crate::test_support::TempDir {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/machine-command-peers");
     std::fs::create_dir_all(&base).unwrap();
-    tempfile::tempdir_in(base).unwrap()
+    crate::test_support::tempdir_in(base).unwrap()
 }
 
 fn request(request: &Request) -> Value {

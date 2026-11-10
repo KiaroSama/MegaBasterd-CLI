@@ -16,7 +16,7 @@ use megabasterd_cli::{
 };
 
 struct Fixture {
-    _scratch: tempfile::TempDir,
+    _scratch: private_tempfile::TempDir,
     paths: Paths,
     temporary: PathBuf,
     cwd: PathBuf,
@@ -26,7 +26,7 @@ impl Fixture {
     fn new() -> Self {
         let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/proxy-process");
         fs::create_dir_all(&base).unwrap();
-        let scratch = tempfile::tempdir_in(base).unwrap();
+        let scratch = private_tempfile::tempdir_in(base).unwrap();
         let root = scratch.path().join("runtime with spaces");
         let paths = Paths {
             user: root.join("private user/native-v2"),
@@ -157,3 +157,6 @@ fn independent_import_and_add_commands_preserve_all_entries_from_a_spaced_input_
     assert_eq!(fs::read(listing).unwrap(), bytes);
     fixture.no_stage();
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

@@ -462,7 +462,7 @@ fn session_probe_preserves_uncertain_or_suspicious_state_but_forgets_only_defini
     ] {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/session-peers");
         std::fs::create_dir_all(&root).unwrap();
-        let scratch = tempfile::tempdir_in(root).unwrap();
+        let scratch = crate::test_support::tempdir_in(root).unwrap();
         let path = scratch.path().join("private/session.json");
         let store = Sessions::new(&path);
         let vault = Vault::new("synthetic session passphrase");

@@ -3,7 +3,7 @@
 use std::{fs, process::Command};
 #[test]
 fn candidate_launcher_forwards_arguments_from_an_unrelated_cwd_and_preserves_native_exit_codes() {
-    let scratch = tempfile::tempdir().unwrap();
+    let scratch = private_tempfile::tempdir().unwrap();
     let binary = scratch.path().join("mb with spaces.exe");
     fs::copy(env!("CARGO_BIN_EXE_mb"), &binary).unwrap();
     for (arguments, expected) in [
@@ -23,3 +23,6 @@ fn candidate_launcher_forwards_arguments_from_an_unrelated_cwd_and_preserves_nat
     }
     assert!(!scratch.path().join("Run.ps1").exists());
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

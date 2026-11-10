@@ -15,10 +15,10 @@ use megabasterd_cli::{
     transfers::{control::Control, upload::source_hash},
 };
 
-fn scratch() -> tempfile::TempDir {
+fn scratch() -> private_tempfile::TempDir {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/upload-source-identity");
     std::fs::create_dir_all(&base).unwrap();
-    tempfile::tempdir_in(base).unwrap()
+    private_tempfile::tempdir_in(base).unwrap()
 }
 
 #[test]
@@ -110,3 +110,6 @@ fn source_hash_matches_the_independent_fixture_and_cancellation_remains_typed() 
         plaintext
     );
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

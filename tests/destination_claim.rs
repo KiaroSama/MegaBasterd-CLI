@@ -15,10 +15,10 @@ use megabasterd_cli::{
     transfers::{claims::Claim, planner::filename},
 };
 
-fn scratch() -> tempfile::TempDir {
+fn scratch() -> private_tempfile::TempDir {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/destination-claims");
     fs::create_dir_all(&base).unwrap();
-    tempfile::tempdir_in(base).unwrap()
+    private_tempfile::tempdir_in(base).unwrap()
 }
 
 #[test]
@@ -165,3 +165,6 @@ fn released_sidecars_remain_inert_reusable_and_cannot_split_three_party_ownershi
     }
     assert_eq!(fs::read_dir(scratch.path()).unwrap().count(), 8);
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

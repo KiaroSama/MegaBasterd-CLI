@@ -116,10 +116,10 @@ impl Fixture {
     }
 }
 
-fn scratch() -> tempfile::TempDir {
+fn scratch() -> crate::test_support::TempDir {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/download-peers");
     std::fs::create_dir_all(&root).unwrap();
-    tempfile::tempdir_in(root).unwrap()
+    crate::test_support::tempdir_in(root).unwrap()
 }
 
 fn options(verify: bool) -> DownloadOptions {

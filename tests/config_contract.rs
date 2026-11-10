@@ -172,7 +172,7 @@ fn exact_source_hand_edited_values_and_nested_secrets_fall_back_without_echoing_
 fn missing_native_config_retains_exact_logging_and_transfer_defaults() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/config-defaults");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let (config, warnings) = ConfigStore::new(scratch.path().join("private/missing.json"))
         .load()
         .unwrap();
@@ -187,7 +187,7 @@ fn missing_native_config_retains_exact_logging_and_transfer_defaults() {
 fn batch_command_is_a_nullable_persisted_string_and_invalid_values_fall_back_safely() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/config-defaults");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let store = ConfigStore::new(scratch.path().join("private/config.json"));
     assert!(store.load().unwrap().0.all_finished_command.is_none());
     store.set("all_finished_command", "notify --flag").unwrap();
@@ -211,3 +211,6 @@ fn batch_command_is_a_nullable_persisted_string_and_invalid_values_fall_back_saf
         assert_eq!(std::fs::read(store.path()).unwrap(), before);
     }
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

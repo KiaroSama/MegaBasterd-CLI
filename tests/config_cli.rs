@@ -20,7 +20,7 @@ use megabasterd_cli::{
 use serde_json::{Value, json};
 
 struct Fixture {
-    _scratch: tempfile::TempDir,
+    _scratch: private_tempfile::TempDir,
     paths: Paths,
     cwd: PathBuf,
     temporary: PathBuf,
@@ -30,7 +30,7 @@ impl Fixture {
     fn new() -> Self {
         let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/config-cli");
         fs::create_dir_all(&base).unwrap();
-        let scratch = tempfile::tempdir_in(base).unwrap();
+        let scratch = private_tempfile::tempdir_in(base).unwrap();
         let root = scratch.path().join("runtime with spaces");
         let paths = Paths {
             user: root.join("User/native-v2"),
@@ -351,3 +351,6 @@ fn actual_config_null_and_unset_persist_json_null_and_reload_without_staging_res
         fixture.only_config_files();
     }
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

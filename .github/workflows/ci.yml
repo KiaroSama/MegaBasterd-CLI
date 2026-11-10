@@ -89,6 +89,7 @@ jobs:
           name: test-evidence-${{ matrix.target }}
           path: |
             .ci-work/receipt.json
+            .ci-work/source-contracts.xml
             .ci-work/resource-report.json
             .ci-work/results/*.txt
           include-hidden-files: true

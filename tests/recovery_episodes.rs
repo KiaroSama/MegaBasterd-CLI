@@ -17,7 +17,7 @@ fn backup_inventory(path: &Path) -> BTreeMap<OsString, Vec<u8>> {
 fn config_and_queue_recovery_report_the_current_episode_and_do_not_duplicate_repeated_reads() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/recovery-episodes");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     for queue in [false, true] {
         let path = scratch.path().join(if queue {
             "queue/queue.json"
@@ -97,3 +97,6 @@ fn config_and_queue_recovery_report_the_current_episode_and_do_not_duplicate_rep
         assert_eq!(backup_inventory(&path).len(), 2);
     }
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

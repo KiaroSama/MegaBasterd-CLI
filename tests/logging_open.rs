@@ -11,10 +11,10 @@ use std::{
 #[path = "common/windows_log_acl.rs"]
 mod windows_log_acl;
 
-fn scratch() -> tempfile::TempDir {
+fn scratch() -> private_tempfile::TempDir {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/logging-open");
     fs::create_dir_all(&base).unwrap();
-    tempfile::tempdir_in(base).unwrap()
+    private_tempfile::tempdir_in(base).unwrap()
 }
 
 #[test]
@@ -291,3 +291,6 @@ fn shared_private_open_refuses_directories_and_fifos_without_blocking_or_replaci
         assert!(!fs::symlink_metadata(path.join(name)).unwrap().is_file());
     }
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

@@ -14,7 +14,7 @@ const MALFORMED: &[u8] = b"{\"max_workers\": 8,,,\n";
 fn repeated_and_concurrent_corrupt_loads_keep_one_verified_copy_per_distinct_content() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/config-backups");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     for concurrent in [false, true] {
         let path = scratch.path().join(if concurrent {
             "concurrent/config.json"
@@ -136,3 +136,6 @@ fn repeated_and_concurrent_corrupt_loads_keep_one_verified_copy_per_distinct_con
         );
     }
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

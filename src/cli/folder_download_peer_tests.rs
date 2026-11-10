@@ -102,7 +102,7 @@ fn parsed_folder_filter_downloads_only_selected_file_with_exact_bytes_and_no_mat
         (file.as_str(), false, false),
         (LINK, false, true),
     ] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let stdout = Capture::default();
         let stderr = Capture::default();
         let cdn = OnceLock::new();
@@ -275,7 +275,7 @@ fn parsed_parallel_folder_workers_preserve_disabled_resume_and_custom_user_agent
     let graph = listing(&raw_key);
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/folder-resume-options");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let cdn = OnceLock::new();
     let (_, calls) = test_peer::with_parallel_peer(
         |request| {
@@ -477,7 +477,7 @@ fn parsed_cyclic_folder_graph_refuses_before_ticket_or_disk_output() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/folder-cycle");
     std::fs::create_dir_all(&base).unwrap();
     for link in [LINK.to_owned(), format!("{LINK}/file/FILE0001")] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let stdout = Capture::default();
         let stderr = Capture::default();
         let output = scratch.path().join("no output");

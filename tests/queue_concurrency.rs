@@ -14,10 +14,10 @@ use megabasterd_cli::{
 
 const SIGNAL_TIMEOUT: Duration = Duration::from_secs(3);
 
-fn fixture() -> (tempfile::TempDir, Queue) {
+fn fixture() -> (private_tempfile::TempDir, Queue) {
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".ci-work/queue-concurrency");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let queue = Queue::new(scratch.path().join("private space/queue.json"));
     (scratch, queue)
 }
@@ -184,3 +184,6 @@ fn reclaimed_generation_finishes_before_the_parked_stale_writer_is_refused() {
     assert_eq!(saved.lease_epoch, 2);
     assert!(saved.run_id.is_none() && saved.heartbeat_iso.is_none());
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

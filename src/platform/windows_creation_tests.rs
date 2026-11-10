@@ -105,7 +105,7 @@ impl Write for Capture {
 fn an_unsafe_descriptor_at_creation_is_refused_empty_and_console_diagnostics_remain_available() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/logging-creation");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let logs = scratch.path().join("user@example.com-SENTINEL-CREATE");
     let directory = crate::platform::secure_files::PrivateDirectory::ensure(&logs).unwrap();
     let stdout = Capture::default();
@@ -163,7 +163,7 @@ fn an_unsafe_descriptor_at_creation_is_refused_empty_and_console_diagnostics_rem
 fn creation_override_is_directory_scoped_single_use_and_restored_after_unwind() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/logging-creation");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let first = scratch.path().join("first");
     let second = scratch.path().join("second");
     let directory = crate::platform::secure_files::PrivateDirectory::ensure(&first).unwrap();
@@ -197,7 +197,7 @@ fn context_startup_survives_a_log_created_with_an_unsafe_descriptor_without_writ
 
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/logging-creation");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let paths = Paths {
         root: scratch.path().to_owned(),
         user: scratch.path().join("private user"),

@@ -47,7 +47,7 @@ fn parsed_download_megacrypter_uses_its_selected_proxy_or_refuses_before_contact
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/download-routing");
     fs::create_dir_all(&base).unwrap();
     for available in [false, true] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let stdout = Capture::default();
         let stderr = Capture::default();
         let ((), calls) = test_peer::with_connect_peer(
@@ -127,7 +127,7 @@ fn parsed_download_refuses_absurd_or_noninteger_sizes_before_claims_staging_or_c
         (json!("12"), "protocol_error"),
         (Value::Null, "protocol_error"),
     ] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let stdout = Capture::default();
         let stderr = Capture::default();
         let ((), calls) = test_peer::with_peer(
@@ -196,7 +196,7 @@ fn parsed_download_quota_attempts_are_bounded_and_pool_escalation_does_not_wait(
         (2, 99, 2, "quota_exceeded"),
         (2, 1, 2, "mega_error"),
     ] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let stdout = Capture::default();
         let stderr = Capture::default();
         let mut count = 0;
@@ -293,7 +293,7 @@ fn parsed_download_direct_and_forced_manual_routes_publish_the_same_verified_sou
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/download-routing");
     fs::create_dir_all(&base).unwrap();
     for manual in [false, true] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let output = scratch.path().join("output with spaces");
         let stdout = Capture::default();
         let stderr = Capture::default();

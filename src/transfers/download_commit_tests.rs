@@ -15,7 +15,7 @@ fn chunk_sync_failure_never_publishes_coverage_and_success_syncs_before_the_eigh
         Some(std::io::ErrorKind::Other),
         None,
     ] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let destination = scratch.path().join("staging.bin");
         let mut file = File::create(&destination).unwrap();
         file.set_len(4_718_592).unwrap();

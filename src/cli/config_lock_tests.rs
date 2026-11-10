@@ -46,7 +46,7 @@ impl Write for Capture {
 fn parsed_config_mutations_report_busy_after_required_confirmation_without_changing_saved_bytes() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/config-lock-cli");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let mut context = Context::test_context(scratch.path());
     context.config_store.set("max_workers", "7").unwrap();
     context

@@ -10,7 +10,7 @@ fn state_entry_points_refuse_a_held_writer_and_clear_only_after_release() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/state-lock");
     fs::create_dir_all(&base).unwrap();
     for mode in ["missing", "valid", "corrupt", "future"] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let path = scratch.path().join("private/state.json");
         let states = States(Store::new(&path).with_timeout(Duration::ZERO));
         let state = TransferState::new("upload", "fixture", &path, 0, &[1; 16]).unwrap();

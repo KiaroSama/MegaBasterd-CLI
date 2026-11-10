@@ -76,7 +76,7 @@ fn cyclic_folder_ancestry_is_refused_before_any_file_plan() {
 fn root_subfolder_and_single_file_plans_preserve_exact_paths_without_disk_writes() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/folder-plans");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let tree = Tree::new(vec![
         node("root", "", 1, "Root Folder"),
         node("sub", "root", 1, "Season 01"),
@@ -154,7 +154,7 @@ fn hostile_folder_components_stay_inside_the_output_root_without_planning_side_e
 
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/folder-plans");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let output = scratch.path().join("out");
     std::fs::create_dir(&output).unwrap();
     for (nodes, expected) in [
@@ -263,3 +263,6 @@ fn file_selection_applies_numbering_after_glob_filters() {
             .unwrap();
     assert_eq!(link.subpath.as_deref(), Some("ijklmnop"));
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

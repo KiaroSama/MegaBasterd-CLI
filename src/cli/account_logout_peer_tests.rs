@@ -35,7 +35,7 @@ fn parsed_logout_handles_missing_success_rejected_and_unreadable_sessions_withou
         "future",
         "uncertain",
     ] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let paths = Context::test_context(scratch.path()).paths;
         let accounts = Accounts::new(paths.accounts());
         let vault = Vault::new(PASS);
@@ -180,7 +180,7 @@ fn parsed_logout_handles_missing_success_rejected_and_unreadable_sessions_withou
 fn sent_logout_uncertainty_releases_resources_without_replay_or_discarding_the_cache() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/account-logout");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let paths = Context::test_context(scratch.path()).paths;
     let vault = Vault::new(PASS);
     Accounts::new(paths.accounts())

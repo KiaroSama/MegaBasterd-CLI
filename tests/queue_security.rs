@@ -15,10 +15,10 @@ use megabasterd_cli::{
 };
 use serde_json::Value;
 
-fn fixture() -> (tempfile::TempDir, Queue) {
+fn fixture() -> (private_tempfile::TempDir, Queue) {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/queue-security");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let queue = Queue::new(scratch.path().join("private space/queue.json"));
     (scratch, queue)
 }
@@ -341,3 +341,6 @@ fn malformed_queue_is_copied_once_without_creating_a_key_and_reset_can_recover()
         assert_eq!(fs::read(&backups[0]).unwrap(), raw);
     }
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

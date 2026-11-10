@@ -50,7 +50,7 @@ fn account_verification_releases_responses_on_rejection_malformed_reply_missing_
         "canceled-mfa",
         "success",
     ] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let stdout = Capture::default();
         let stderr = Capture::default();
         let (closed, closure) = mpsc::sync_channel(3);
@@ -226,7 +226,7 @@ fn account_verification_releases_responses_on_rejection_malformed_reply_missing_
 fn account_verification_timeout_releases_each_attempt_without_consent_or_saved_state() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/client-lifecycle");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(&base).unwrap();
+    let scratch = crate::test_support::tempdir_in(&base).unwrap();
     let stdout = Capture::default();
     let stderr = Capture::default();
     let (closed, closure) = mpsc::sync_channel(5);
@@ -319,7 +319,7 @@ fn failed_upload_and_queue_logins_release_the_response_before_context_drop() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/client-lifecycle");
     std::fs::create_dir_all(&base).unwrap();
     for queued in [false, true] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let source = scratch.path().join("upload source.bin");
         std::fs::write(&source, b"data").unwrap();
         seed_accounts(scratch.path(), &[(EMAIL, SID, 1024)]);
@@ -472,7 +472,7 @@ fn public_info_and_failed_stream_setup_release_responses_before_context_drop() {
         "info-empty-folder",
         "stream-rejected",
     ] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let stdout = Capture::default();
         let stderr = Capture::default();
         let (closed, closure) = mpsc::sync_channel(1);
@@ -559,7 +559,7 @@ fn cloud_and_share_commands_release_responses_on_success_body_failure_and_login_
         "cloud-login-rejected",
         "share-login-rejected",
     ] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         seed_accounts(scratch.path(), &[(EMAIL, SID, 1024)]);
         let paths = Context::test_context(scratch.path()).paths;
         let login_rejected = mode.ends_with("login-rejected");

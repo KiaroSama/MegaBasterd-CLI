@@ -37,7 +37,7 @@ fn ready(outcome: Outcome) -> Vec<OsString> {
 fn download_wizard_preserves_local_input_lists_and_all_source_options() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/menu-wizard");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let listing = scratch.path().join("links with  spaces.txt");
     fs::write(&listing, b"synthetic public link list").unwrap();
     let (outcome, secrets, _) = answers(

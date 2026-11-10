@@ -21,10 +21,10 @@ use crate::transfers::control::Control;
 const PNG: &[u8] = include_bytes!("../../tests/fixtures/media/1x1-green.png");
 const HANDLE: [u8; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
 
-fn scratch() -> tempfile::TempDir {
+fn scratch() -> crate::test_support::TempDir {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/attribute-peers");
     std::fs::create_dir_all(&root).unwrap();
-    tempfile::tempdir_in(root).unwrap()
+    crate::test_support::tempdir_in(root).unwrap()
 }
 
 fn api_reply(value: Value) -> Response {

@@ -11,7 +11,7 @@ use megabasterd_cli::{
 fn ambiguous_remote_outcome_aborts_queue_before_a_second_job() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/queue-outcome");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let queue = Queue::new(scratch.path().join("private/queue.json"));
     let payload = QueuePayload {
         source: "synthetic.bin".into(),
@@ -38,3 +38,6 @@ fn ambiguous_remote_outcome_aborts_queue_before_a_second_job() {
     assert_eq!(jobs[0].status, JobStatus::Active);
     assert_eq!(jobs[1].status, JobStatus::Pending);
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

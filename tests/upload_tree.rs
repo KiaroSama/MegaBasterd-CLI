@@ -10,7 +10,7 @@ use std::fs;
 fn bounded_manifest_preserves_empty_directories_exact_names_and_sizes() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/upload-tree");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(&base).unwrap();
+    let scratch = private_tempfile::tempdir_in(&base).unwrap();
     let root = scratch.path().join("root with spaces");
     fs::create_dir_all(root.join("empty")).unwrap();
     fs::create_dir_all(root.join("sub")).unwrap();
@@ -37,7 +37,7 @@ fn bounded_manifest_preserves_empty_directories_exact_names_and_sizes() {
 fn manifest_never_follows_a_symlinked_file_or_directory() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/upload-tree");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(&base).unwrap();
+    let scratch = private_tempfile::tempdir_in(&base).unwrap();
     let root = scratch.path().join("source");
     let external = scratch.path().join("outside");
     fs::create_dir_all(&root).unwrap();
@@ -71,3 +71,6 @@ fn manifest_never_follows_a_symlinked_file_or_directory() {
         b"not selected"
     );
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

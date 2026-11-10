@@ -28,10 +28,10 @@ const PASS: &str = "synthetic vault passphrase";
 const MASTER: [u8; 16] = [9; 16];
 const SHARE: [u8; 16] = [7; 16];
 
-fn scratch() -> tempfile::TempDir {
+fn scratch() -> crate::test_support::TempDir {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/share-commands");
     fs::create_dir_all(&base).unwrap();
-    tempfile::tempdir_in(base).unwrap()
+    crate::test_support::tempdir_in(base).unwrap()
 }
 
 fn node(handle: &str, parent: &str, kind: u8, name: &str) -> Value {

@@ -16,7 +16,7 @@ use megabasterd_cli::{
 fn resume_rechecks_saved_chunk_bytes_before_suppressing_network_work() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/download-safety");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let directory = OutputDirectory::ensure(scratch.path()).unwrap();
     let mut file = directory
         .open_file(std::ffi::OsStr::new("stage"), true)
@@ -71,7 +71,7 @@ fn disk_verification_rereads_two_chunks_and_refuses_changed_or_truncated_bytes()
         .collect();
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/download-safety");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let directory = OutputDirectory::open(scratch.path()).unwrap();
     let mut file = directory
         .open_file(std::ffi::OsStr::new("on-disk.bin"), true)
@@ -143,7 +143,7 @@ fn missing_or_wrong_width_nonce_is_refused_before_a_verification_key_can_be_cons
 fn unrelated_destination_appearance_is_not_overwritten_at_publication() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/download-safety");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let claim = Claim::acquire(&scratch.path().join("file.bin"), false, |_| Ok(false)).unwrap();
     let staging = claim.temporary_name().unwrap();
     let mut file = claim.directory.open_file(&staging, true).unwrap();
@@ -166,7 +166,7 @@ fn unrelated_destination_appearance_is_not_overwritten_at_publication() {
 fn resume_staging_identity_rejects_a_replaced_same_length_file() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/download-safety");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let directory = OutputDirectory::ensure(scratch.path()).unwrap();
     let original = directory
         .open_file(std::ffi::OsStr::new("stage-a"), true)
@@ -194,3 +194,6 @@ fn resume_staging_identity_rejects_a_replaced_same_length_file() {
     state.staging_name = Some("../not-owned".into());
     assert!(state.validate().is_err());
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

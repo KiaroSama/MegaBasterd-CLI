@@ -53,7 +53,7 @@ fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 fn actual_binary_removes_selected_account_cache_then_last_account_without_touching_other_data() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/account-removal");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let root = scratch.path().join("runtime with spaces");
     let paths = Paths {
         user: root.join("User/native-v2"),
@@ -212,3 +212,6 @@ fn actual_binary_removes_selected_account_cache_then_last_account_without_touchi
         original[Path::new("User/native-v2/Config/config.json")]
     );
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

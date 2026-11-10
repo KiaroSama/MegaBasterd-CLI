@@ -13,10 +13,10 @@ use crate::{
     transfers::download::DownloadOptions,
 };
 
-fn fixture() -> tempfile::TempDir {
+fn fixture() -> crate::test_support::TempDir {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/proxy-routing");
     fs::create_dir_all(&base).unwrap();
-    tempfile::tempdir_in(base).unwrap()
+    crate::test_support::tempdir_in(base).unwrap()
 }
 
 #[test]

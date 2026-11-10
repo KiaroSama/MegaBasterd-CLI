@@ -23,7 +23,7 @@ const KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 fn parsed_crypter_prints_the_underlying_link_after_bounded_fallback_without_exporting_password() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/megacrypter-cli");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let stdout = Capture::default();
     let stderr = Capture::default();
     let mut methods = Vec::new();
@@ -102,7 +102,7 @@ fn metadata_only_info_succeeds_and_transfer_consumers_do_not_repeat_a_rejected_d
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/megacrypter-cli");
     fs::create_dir_all(&base).unwrap();
     for verb in ["download", "info", "stream"] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let stdout = Capture::default();
         let stderr = Capture::default();
         let mut steps = Vec::new();
@@ -194,7 +194,7 @@ fn download_info_and_stream_use_openlink_key_aliases_before_the_public_metadata_
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/megacrypter-cli");
     fs::create_dir_all(&base).unwrap();
     for verb in ["download", "info", "stream"] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let stdout = Capture::default();
         let stderr = Capture::default();
         let mut steps = Vec::new();

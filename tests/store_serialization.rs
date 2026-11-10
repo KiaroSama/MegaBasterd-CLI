@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 fn saved_json_preserves_unique_values_and_rejects_duplicates_or_incomplete_documents() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/store-serialization");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(&base).unwrap();
+    let scratch = private_tempfile::tempdir_in(&base).unwrap();
     let path = scratch.path().join("private/document.json");
     let store = Store::new(&path);
     let locked = store.lock().unwrap();
@@ -88,7 +88,7 @@ fn failed_serialization_preserves_existing_or_absent_documents_without_staging_o
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/store-serialization");
     fs::create_dir_all(&base).unwrap();
     for existing in [false, true] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = private_tempfile::tempdir_in(&base).unwrap();
         let path = scratch.path().join("private/config.json");
         let store = Store::new(&path);
         let locked = store.lock().unwrap();
@@ -134,3 +134,6 @@ fn failed_serialization_preserves_existing_or_absent_documents_without_staging_o
         assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 2);
     }
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

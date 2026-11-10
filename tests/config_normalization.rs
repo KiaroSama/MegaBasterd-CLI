@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 fn normalization_removes_only_stale_settings_preserves_values_and_is_byte_stable_afterward() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/config-normalization");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let path = scratch.path().join("private/config.json");
     let store = ConfigStore::new(&path);
     Store::new(&path)
@@ -61,7 +61,7 @@ fn normalization_removes_only_stale_settings_preserves_values_and_is_byte_stable
 fn normalization_never_creates_missing_data_or_rewrites_corrupt_future_or_previous_formats() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/config-normalization");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let missing = ConfigStore::new(scratch.path().join("missing/config.json"));
     assert!(missing.migrate().unwrap().is_empty());
     assert!(!missing.path().exists());
@@ -107,7 +107,7 @@ fn normalization_never_creates_missing_data_or_rewrites_corrupt_future_or_previo
 fn obsolete_builtin_user_agent_normalizes_while_custom_values_and_other_settings_survive() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/config-normalization");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     for (index, (agent, expected)) in [
         ("MegaBasterd-CLI/1.0", ""),
         ("custom-client/7.2", "custom-client/7.2"),
@@ -158,3 +158,6 @@ fn malformed_in_memory_settings_report_exact_repairs_without_echoing_values() {
     assert_eq!(repaired.log_level, Config::default().log_level);
     assert!(!warnings.join(" ").contains("NOPE"));
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

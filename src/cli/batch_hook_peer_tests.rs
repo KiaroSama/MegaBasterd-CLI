@@ -30,10 +30,10 @@ const MASTER: [u8; 16] = [9; 16];
 const EMAIL: &str = "fixture@example.invalid";
 const RAW_KEY: &str = "0000000000000000896bfac36bc3028500010203040506078162f0c867ce0c8a";
 
-fn scratch() -> tempfile::TempDir {
+fn scratch() -> crate::test_support::TempDir {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/batch-hook-peers");
     std::fs::create_dir_all(&root).unwrap();
-    tempfile::tempdir_in(root).unwrap()
+    crate::test_support::tempdir_in(root).unwrap()
 }
 
 fn command(request: &Request) -> Value {

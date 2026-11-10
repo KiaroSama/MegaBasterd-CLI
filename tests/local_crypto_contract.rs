@@ -14,7 +14,7 @@ fn fixture() -> Result<Value> {
 
 #[test]
 fn reads_source_mbcr_v2_empty_multichunk_and_legacy_with_warning() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempfile::tempdir()?;
     for case in fixture()?["mbcr"]
         .as_array()
         .ok_or_else(|| Error::invalid("Fixture cases"))?
@@ -48,7 +48,7 @@ fn reads_source_mbcr_v2_empty_multichunk_and_legacy_with_warning() -> Result<()>
 
 #[test]
 fn v2_writer_preserves_empty_and_odd_tail_and_reports_plaintext_progress() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempfile::tempdir()?;
     for (bytes, chunk_size, password) in [
         (Vec::new(), 16, "synthetic"),
         (b"hello".to_vec(), 64 * 1024, "synthetic"),
@@ -146,7 +146,7 @@ fn source_sequence_tampering_and_wrong_password_preserve_existing_destination() 
     bitflip[60] ^= 1;
     attacks.push(bitflip);
     attacks.push([header.to_vec(), chunks[0].clone(), vec![0; 5]].concat());
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempfile::tempdir()?;
     let input = directory.path().join("input");
     let output = directory.path().join("precious");
     fs::write(&output, b"original")?;
@@ -191,7 +191,7 @@ fn source_sequence_tampering_and_wrong_password_preserve_existing_destination() 
 #[test]
 fn failed_legacy_authentication_preserves_exact_original_destination_without_staging() -> Result<()>
 {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempfile::tempdir()?;
     let input = directory.path().join("legacy.mbcr");
     let output = directory.path().join("important.txt");
     let original = b"irreplaceable user data\n".repeat(40);
@@ -215,7 +215,7 @@ fn failed_legacy_authentication_preserves_exact_original_destination_without_sta
 #[test]
 fn exact_small_default_chunk_roundtrip_keeps_source_payload_and_bounded_format_overhead()
 -> Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempfile::tempdir()?;
     let input = directory.path().join("input.bin");
     let encrypted = directory.path().join("input.enc");
     let output = directory.path().join("output.bin");
@@ -241,7 +241,7 @@ fn exact_small_default_chunk_roundtrip_keeps_source_payload_and_bounded_format_o
 
 #[test]
 fn invalid_header_bounds_are_rejected_as_input_before_authentication() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempfile::tempdir()?;
     let input = directory.path().join("input");
     let output = directory.path().join("output");
     for (chunk, original) in [
@@ -301,7 +301,7 @@ fn invalid_header_bounds_are_rejected_as_input_before_authentication() -> Result
 
 #[test]
 fn aliases_no_clobber_and_callback_failure_never_damage_input_or_existing_output() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempfile::tempdir()?;
     let input = directory.path().join("input");
     let output = directory.path().join("output");
     fs::write(&input, b"source")?;
@@ -337,3 +337,6 @@ fn assert_no_staging(directory: &Path) -> Result<()> {
     }
     Ok(())
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

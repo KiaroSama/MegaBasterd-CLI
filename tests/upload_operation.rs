@@ -8,7 +8,7 @@ use megabasterd_cli::{error::Error, transfers::upload_operation};
 fn queued_operation_pins_account_and_target_across_retries_without_conflating_new_jobs() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/upload-operation");
     std::fs::create_dir_all(&root).unwrap();
-    let scratch = tempfile::tempdir_in(root).unwrap();
+    let scratch = private_tempfile::tempdir_in(root).unwrap();
     let source = scratch.path().join("file with spaces.bin");
     let first = upload_operation::bind(
         scratch.path(),
@@ -77,7 +77,7 @@ fn queued_operation_pins_account_and_target_across_retries_without_conflating_ne
 fn invalid_operation_identifiers_do_not_create_binding_files() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/upload-operation-invalid");
     std::fs::create_dir_all(&root).unwrap();
-    let scratch = tempfile::tempdir_in(root).unwrap();
+    let scratch = private_tempfile::tempdir_in(root).unwrap();
     for operation in ["", "job\ncontrol"] {
         assert!(
             upload_operation::bind(
@@ -91,3 +91,6 @@ fn invalid_operation_identifiers_do_not_create_binding_files() {
     }
     assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 0);
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

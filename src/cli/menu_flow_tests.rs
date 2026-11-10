@@ -56,7 +56,7 @@ fn menu_lifecycle_keeps_private_logs_and_forwards_root_flags_without_recording_a
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/menu-flow");
     std::fs::create_dir_all(&base).unwrap();
     for logging in [false, true] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let mut context = Context::test_context(scratch.path());
         let stdout = Capture::default();
         let stderr = Capture::default();
@@ -222,7 +222,7 @@ fn menu_eof_errors_and_unwinds_finalize_once_and_seal_the_same_log() {
         "reader_unwind",
         "dispatch_unwind",
     ] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let mut context = Context::test_context(scratch.path());
         let stdout = Capture::default();
         let stderr = Capture::default();

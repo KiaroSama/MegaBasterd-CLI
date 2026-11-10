@@ -14,7 +14,7 @@ fn payload() -> Vec<u8> {
 #[test]
 fn source_part_names_sha1_newline_and_any_part_merge_are_preserved() -> Result<()> {
     let data: Value = serde_json::from_str(include_str!("fixtures/local_file_services.json"))?;
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempfile::tempdir()?;
     let source = directory.path().join("split.bin");
     fs::write(&source, payload())?;
     let result = split_file(&source, 1, None, false, None)?;
@@ -47,7 +47,7 @@ fn source_part_names_sha1_newline_and_any_part_merge_are_preserved() -> Result<(
 #[test]
 fn exact_four_part_roundtrip_and_late_interruption_keep_completed_parts_only() -> Result<()> {
     use sha1::{Digest, Sha1};
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempfile::tempdir()?;
     let source = directory.path().join("data.bin");
     let bytes: Vec<_> = (0..3 * 1024 * 1024 + 17)
         .map(|index| (index % 251) as u8)
@@ -101,7 +101,7 @@ fn exact_four_part_roundtrip_and_late_interruption_keep_completed_parts_only() -
 
 #[test]
 fn checksum_mismatch_missing_parts_and_bad_sidecar_preserve_target_and_parts() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempfile::tempdir()?;
     let source = directory.path().join("split.bin");
     fs::write(&source, payload())?;
     let result = split_file(&source, 1, None, false, None)?;
@@ -163,7 +163,7 @@ fn checksum_mismatch_missing_parts_and_bad_sidecar_preserve_target_and_parts() -
 
 #[test]
 fn exact_source_sha1_mismatches_preserve_absent_and_precious_destinations() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempfile::tempdir()?;
     let output = directory.path().join("out.bin");
     for (name, bytes, original) in [
         ("foo.bin", b"hello world ".repeat(1000), None),
@@ -200,7 +200,7 @@ fn exact_source_sha1_mismatches_preserve_absent_and_precious_destinations() -> R
 
 #[test]
 fn deletion_requires_flag_and_happens_only_after_verified_success() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempfile::tempdir()?;
     let source = directory.path().join("source");
     fs::write(&source, b"known input")?;
     let result = split_file(&source, 1, None, false, None)?;
@@ -217,7 +217,7 @@ fn deletion_requires_flag_and_happens_only_after_verified_success() -> Result<()
 
 #[test]
 fn source_and_output_hardlink_aliases_are_refused_before_any_publication() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempfile::tempdir()?;
     let source = directory.path().join("source");
     fs::write(&source, b"known input")?;
     let parts = directory.path().join("parts");
@@ -258,7 +258,7 @@ fn source_and_output_hardlink_aliases_are_refused_before_any_publication() -> Re
 
 #[test]
 fn parent_traversal_spelling_of_a_later_input_part_is_refused_without_writes() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempfile::tempdir()?;
     let source = directory.path().join("data.bin");
     let bytes = b"abcdefgh".repeat(160_000);
     fs::write(&source, &bytes)?;
@@ -294,7 +294,7 @@ fn parent_traversal_spelling_of_a_later_input_part_is_refused_without_writes() -
 
 #[test]
 fn cancellation_no_clobber_empty_and_overflow_do_not_publish_partial_outputs() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempfile::tempdir()?;
     let source = directory.path().join("source");
     fs::write(&source, payload())?;
     let mut canceled = |_, _| Err(Error::Canceled);
@@ -345,7 +345,7 @@ fn cancellation_no_clobber_empty_and_overflow_do_not_publish_partial_outputs() -
 
 #[test]
 fn explicit_no_verify_accepts_bad_checksum_but_malformed_part_numbers_are_refused() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = private_tempfile::tempdir()?;
     let part = directory.path().join("base.part1-1");
     fs::write(&part, b"content")?;
     fs::write(directory.path().join("base.sha1"), "not a checksum")?;
@@ -390,3 +390,6 @@ fn no_staging(directory: &Path) -> Result<()> {
     }
     Ok(())
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

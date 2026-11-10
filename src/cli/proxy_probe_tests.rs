@@ -21,7 +21,7 @@ use clap::Parser;
 fn parsed_proxy_probe_includes_configured_urls_and_reports_yes_no_with_safe_reasons() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/proxy-probe");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let live = TcpListener::bind("127.0.0.1:0").unwrap();
     let unused = TcpListener::bind("127.0.0.1:0").unwrap();
     let dead = unused.local_addr().unwrap();
@@ -139,7 +139,7 @@ fn parsed_proxy_probe_includes_configured_urls_and_reports_yes_no_with_safe_reas
 fn parsed_hostname_only_entry_reports_a_controlled_failure_without_losing_the_stored_value() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/proxy-probe");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let stdout = Capture::default();
     let stderr = Capture::default();
     let mut context = Context::test_context(scratch.path());
@@ -270,7 +270,7 @@ fn probe_command_reports_timed_out_and_unstarted_entries_within_its_budget_and_j
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/proxy-probe");
     fs::create_dir_all(&base).unwrap();
     for count in [1, 2] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let stdout = Capture::default();
         let stderr = Capture::default();
         let mut context = Context::test_context(scratch.path());

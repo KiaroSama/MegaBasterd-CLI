@@ -73,7 +73,7 @@ fn parsed_stream_cancellation_closes_upstream_and_downstream_and_releases_the_li
 
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/stream-cli");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let stdout = Capture::default();
     let stderr = Capture::default();
     let (banner, listening) = mpsc::sync_channel(1);
@@ -212,7 +212,7 @@ fn parsed_stream_banners_are_dialable_tokens_stay_private_and_short_bodies_log_e
         let token = if query_token { "leaky-token" } else { TOKEN };
         let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/stream-cli");
         std::fs::create_dir_all(&base).unwrap();
-        let scratch = tempfile::tempdir_in(base).unwrap();
+        let scratch = crate::test_support::tempdir_in(base).unwrap();
         let stdout = Capture::default();
         let stderr = Capture::default();
         let (banner, listening) = mpsc::sync_channel(1);

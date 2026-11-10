@@ -1,9 +1,11 @@
-use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
+#[cfg(any(not(windows), test))]
+use std::{ffi::OsString, path::Path};
 
 use super::{args, context::Context};
 use crate::error::{Error, Result};
+#[cfg(any(not(windows), test))]
 use crate::platform::process;
 use crate::protocol::links;
 use crate::storage::queue::{JobStatus, JobType, Queue, QueuePayload};
@@ -12,18 +14,9 @@ use crate::storage::queue::{JobStatus, JobType, Queue, QueuePayload};
 #[path = "watch_tests.rs"]
 mod tests;
 
-#[cfg(any(windows, test))]
-const WINDOWS_CLIPBOARD: &[(&str, &[&str])] = &[
-    ("pwsh", POWERSHELL_CLIPBOARD_ARGS),
-    ("powershell", POWERSHELL_CLIPBOARD_ARGS),
-];
-#[cfg(any(windows, test))]
-const POWERSHELL_CLIPBOARD_ARGS: &[&str] = &[
-    "-NoProfile",
-    "-NonInteractive",
-    "-Command",
-    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); Get-Clipboard -Raw -ErrorAction Stop",
-];
+#[cfg(test)]
+const TEST_CLIPBOARD: &[(&str, &[&str])] =
+    &[("preferred-clipboard", &[]), ("fallback-clipboard", &[])];
 #[cfg(any(target_os = "macos", test))]
 const MACOS_CLIPBOARD: &[(&str, &[&str])] = &[("pbpaste", &[])];
 #[cfg(any(target_os = "linux", test))]
@@ -32,9 +25,13 @@ const LINUX_CLIPBOARD: &[(&str, &[&str])] = &[
     ("xclip", &["-selection", "clipboard", "-o"]),
 ];
 
+#[cfg(windows)]
 fn clipboard(context: &Context) -> Result<String> {
-    #[cfg(windows)]
-    let commands = WINDOWS_CLIPBOARD;
+    crate::platform::clipboard::read(&context.control)
+}
+
+#[cfg(not(windows))]
+fn clipboard(context: &Context) -> Result<String> {
     #[cfg(target_os = "macos")]
     let commands = MACOS_CLIPBOARD;
     #[cfg(target_os = "linux")]
@@ -51,6 +48,7 @@ fn clipboard(context: &Context) -> Result<String> {
     })
 }
 
+#[cfg(any(not(windows), test))]
 fn clipboard_with(
     commands: &[(&str, &[&str])],
     mut run: impl FnMut(&Path, &[OsString]) -> Result<process::ProcessOutput>,

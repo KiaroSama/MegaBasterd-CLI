@@ -34,10 +34,10 @@ const FILES: [&str; 5] = ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC", "DDDDDDDD", "abc[d
 const TRASH_FILES: [&str; 5] = ["TRASH001", "TRASH002", "TRASH003", "TRASH004", "TRASH005"];
 const HEADER: &str = "Type | Name | Size | Handle\n";
 
-fn scratch() -> tempfile::TempDir {
+fn scratch() -> crate::test_support::TempDir {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/cloud-render");
     fs::create_dir_all(&base).unwrap();
-    tempfile::tempdir_in(base).unwrap()
+    crate::test_support::tempdir_in(base).unwrap()
 }
 
 fn text(capture: &Capture) -> String {

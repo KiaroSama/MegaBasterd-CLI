@@ -79,7 +79,7 @@ fn parsed_public_folder_info_keeps_exact_json_paths_counts_types_and_read_only_b
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/public-info-peers");
     std::fs::create_dir_all(&base).unwrap();
     for (json_mode, subfolder) in [(true, false), (true, true), (false, false)] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let stdout = Capture::default();
         let stderr = Capture::default();
         assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 0);

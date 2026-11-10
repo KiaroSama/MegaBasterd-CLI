@@ -85,7 +85,7 @@ fn scenario(folder: bool, sibling_fails: bool) {
     ]});
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/download-isolation");
     std::fs::create_dir_all(&root).unwrap();
-    let scratch = tempfile::tempdir_in(root).unwrap();
+    let scratch = crate::test_support::tempdir_in(root).unwrap();
     let stdout = Capture::default();
     let stderr = Capture::default();
     let cdn = OnceLock::new();
