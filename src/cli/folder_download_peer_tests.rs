@@ -205,7 +205,7 @@ fn parsed_folder_filter_downloads_only_selected_file_with_exact_bytes_and_no_mat
             assert_eq!(records[0]["size"].as_u64(), Some(17));
             assert_eq!(records[0]["integrity_ok"], true);
             let path = output.join("Show/Season 1/e1.mkv");
-            assert_eq!(records[0]["path"], serde_json::to_value(&path).unwrap());
+            assert_eq!(Path::new(records[0]["path"].as_str().unwrap()), path);
             assert_eq!(
                 hex::encode(Sha256::digest(std::fs::read(&path).unwrap())),
                 vector["plaintext_sha256"]
@@ -329,7 +329,11 @@ fn parsed_parallel_folder_workers_preserve_disabled_resume_and_custom_user_agent
             let directory = OutputDirectory::ensure(&output.join("Show/Season 1")).unwrap();
             let mut seeded = Vec::new();
             for (handle, name) in [("FILE0001", "e1.mkv"), ("FILE0002", "e2.mkv")] {
-                let destination = output.join("Show/Season 1").join(name);
+                let destination: std::path::PathBuf = output
+                    .join("Show/Season 1")
+                    .join(name)
+                    .components()
+                    .collect();
                 let staging_name = format!(".mb-resume-{handle}.tmp");
                 let mut staging = directory.open_file(staging_name.as_ref(), true).unwrap();
                 staging.write_all(&plaintext).unwrap();

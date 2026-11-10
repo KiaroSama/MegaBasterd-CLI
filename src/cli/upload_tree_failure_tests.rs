@@ -381,8 +381,8 @@ fn failed_folder_and_its_child_are_reported_without_a_child_upload_slot() {
             .contains("Access denied")
     );
     assert_eq!(
-        output[1]["path"],
-        source.join("broken/child.txt").to_str().unwrap()
+        Path::new(output[1]["path"].as_str().unwrap()),
+        source.join("broken/child.txt")
     );
     assert_eq!(
         output[1]["error"],

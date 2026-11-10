@@ -208,10 +208,12 @@ fn effective_default_paths_and_user_overrides_reach_the_actual_configuration_com
         };
         let path = binary(&["config", "path"]);
         assert_eq!(
-            String::from_utf8(path.stdout)
-                .unwrap()
-                .trim_end_matches(['\r', '\n']),
-            expected_user.join("Config/config.json").to_str().unwrap()
+            Path::new(
+                String::from_utf8(path.stdout)
+                    .unwrap()
+                    .trim_end_matches(['\r', '\n'])
+            ),
+            expected_user.join("Config/config.json")
         );
         assert!(path.stderr.is_empty());
         if mode == "default" {

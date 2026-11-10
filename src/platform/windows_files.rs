@@ -410,8 +410,10 @@ impl Directory {
         let mut chain = vec![open_path(
             &current,
             true,
-            READ_CONTROL,
-            FILE_SHARE_READ,
+            // Metadata-only READ_CONTROL opens do not participate in native
+            // sharing checks. Read/list access makes the no-delete pin effective.
+            GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
             OPEN_EXISTING,
             None,
         )?];
@@ -427,8 +429,8 @@ impl Directory {
             let opened = open_path(
                 &current,
                 true,
-                READ_CONTROL,
-                FILE_SHARE_READ,
+                GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
                 OPEN_EXISTING,
                 None,
             );
@@ -450,8 +452,8 @@ impl Directory {
                     let handle = open_path(
                         &current,
                         true,
-                        READ_CONTROL,
-                        FILE_SHARE_READ,
+                        GENERIC_READ,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE,
                         OPEN_EXISTING,
                         None,
                     )?;
@@ -547,7 +549,7 @@ impl Directory {
         use std::os::windows::fs::MetadataExt;
         let token = token_user()?;
         self.check(sid_from_token(&token)?)?;
-        // Retained prefix handles deny delete/write sharing, so this path cannot be redirected.
+        // Retained prefix handles deny delete sharing, so these directories cannot be renamed.
         let mut entries = Vec::new();
         for entry in std::fs::read_dir(&self.path)? {
             let entry = entry?;
@@ -593,8 +595,9 @@ impl Directory {
         let cloned = source.try_clone()?;
         File::from(cloned).sync_all()?;
         // Use Win32's absolute destination form with a NULL root. The retained
-        // ancestor handles deny write/delete sharing, so this path cannot be
-        // renamed or redirected while the exact source handle is published.
+        // ancestor handles deny delete sharing, so these directories cannot be
+        // renamed while the exact source handle is published. Write sharing is
+        // needed for the filesystem's internal target-directory open.
         // Include a terminator in the buffer, but not in FileNameLength.
         let name = wide(self.path.join(to).as_os_str())?;
         let bytes = offset_of!(FILE_RENAME_INFO, FileName) + name.len() * 2;

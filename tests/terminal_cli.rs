@@ -109,8 +109,12 @@ fn unsafe_native_log_directory_disables_only_file_logging_without_disclosing_the
     let control = run(root, &["config", "path"]);
     assert_eq!(control.status.code(), Some(0));
     assert_eq!(
-        String::from_utf8(control.stdout.clone()).unwrap(),
-        format!("{}\n", config.display())
+        Path::new(
+            String::from_utf8(control.stdout.clone())
+                .unwrap()
+                .trim_end_matches(['\r', '\n'])
+        ),
+        config
     );
     assert!(control.stderr.is_empty());
     let result = run_with_logging(root, &["config", "path"], true);

@@ -75,6 +75,7 @@ fn child(path: &Path, index: usize, mode: &str, test: &str) -> OwnedChild {
     ] {
         command.env(key, &temporary);
     }
+    let log = fs::File::create(parent.join(format!("child-{index}.txt"))).unwrap();
     command
         .env(CHILD_PATH, path)
         .env(MODE, mode)
@@ -82,8 +83,8 @@ fn child(path: &Path, index: usize, mode: &str, test: &str) -> OwnedChild {
         .env("HOOKMAKER_MAX_TEST_WORKERS", "1")
         .args(["--exact", test, "--test-threads=1"])
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(Stdio::from(log.try_clone().unwrap()))
+        .stderr(Stdio::from(log));
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -96,8 +97,14 @@ fn child_mode() -> bool {
     let Some(path) = std::env::var_os(CHILD_PATH) else {
         return false;
     };
-    let path = PathBuf::from(path).canonicalize().unwrap();
-    assert!(path.starts_with(base().canonicalize().unwrap()));
+    let path = PathBuf::from(path);
+    // Validate containment without changing the parent's exact saved identity
+    // into Windows' verbatim \\?\ spelling in the child.
+    assert!(
+        path.canonicalize()
+            .unwrap()
+            .starts_with(base().canonicalize().unwrap())
+    );
     let parent = path.parent().unwrap();
     let index = std::env::var(INDEX).unwrap();
     fs::write(parent.join(format!("ready-{index}")), b"ready").unwrap();
@@ -146,13 +153,17 @@ fn run_children(path: &Path, mode: &str, test: &str, count: usize) {
     let parent = path.parent().unwrap();
     wait_for(|| (0..count).all(|index| parent.join(format!("ready-{index}")).exists()));
     fs::write(parent.join("start"), b"start").unwrap();
-    for child in &mut children {
+    for (index, child) in children.iter_mut().enumerate() {
         let mut result = None;
         wait_for(|| {
             result = child.0.try_wait().unwrap();
             result.is_some()
         });
-        assert!(result.unwrap().success(), "native storage child failed");
+        assert!(
+            result.unwrap().success(),
+            "native storage child failed: {}",
+            fs::read_to_string(parent.join(format!("child-{index}.txt"))).unwrap()
+        );
     }
     for index in 0..count {
         assert_eq!(
