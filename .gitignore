@@ -72,6 +72,7 @@ cookie.*
 cookies.*
 session.*
 sessions.*
+!/src/storage/sessions.rs
 
 # Local output / generated data
 output/
@@ -181,3 +182,17 @@ explain-AI.md
 !/.env.sample
 !/.env.template
 !/.env.dist
+
+/.specify/
+/specs/
+/.codebase-memory/
+
+# Native build and task-owned verification artifacts
+/target/
+/debug/
+/release/
+/.ci-work/
+/.ci-cache/
+*.rs.bk
+*.rlib
+*.profraw

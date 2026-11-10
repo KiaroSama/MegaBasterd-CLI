@@ -1,180 +1,197 @@
-# Configuration Reference
+# Native Configuration Reference
 
-Configuration is stored as JSON under the project-local `User/` directory.
-The exact path can always be printed with:
+The Rust candidate uses **fresh, versioned native storage**. It does not read or
+rewrite Python-era configuration/accounts/queues. This reference describes
+source behavior; native runtime verification is still pending.
 
-```powershell
-.\Run.ps1 config path
+```bash
+mb config path
 ```
 
-## Editing
+## Location and format
 
-```powershell
-.\Run.ps1 config show
-.\Run.ps1 config get KEY
-.\Run.ps1 config set KEY VALUE
-.\Run.ps1 config reset
+By default the configuration is
+`<native-executable-directory>/User/native-v2/Config/config.json`.
+`MEGABASTERD_PROJECT_ROOT` changes the application root;
+`MEGABASTERD_USER_DIR` selects the base user directory with `native-v2` appended.
+The CLI should run from a writable installation directory. A configured relative
+file path is resolved relative to the caller's CWD unless the relevant command
+specifies otherwise; the default application data paths are independent of CWD.
+
+Stores use an envelope, not a bare settings object:
+
+```json
+{"version":2,"data":{"max_workers":8,"verify_integrity":true}}
 ```
 
-Values are cast to the field type defined by the application config dataclass.
-Booleans accept `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off`.
+Prefer `config set` to hand edits. The store serializes under a persistent sidecar
+lock, reloads the latest value, writes a private same-directory stage, flushes,
+syncs and atomically replaces. Lock files remain intentionally. Permissions,
+path aliases and unsupported filesystem behavior are validated, not bypassed
+through an insecure reopen. Final replacement makes at most five attempts for
+permission refusals or Windows sharing/lock violations, with 50/100/150/200 ms waits.
+The same stage, directory anchor and sidecar lock remain owned until completion.
+Other failures are returned immediately; failed replacement removes only its
+stage and preserves the original error unless staging cleanup itself fails.
+A successful rename is never replayed after a directory-sync failure.
 
-Values are validated centrally: `config set` rejects out-of-range values
-(ports outside 1–65535, non-positive timeouts, worker counts outside 1–64,
-negative speed limits or quota waits, unknown log levels) and exits non-zero,
-and invalid values found in a hand-edited `config.json` produce a warning and
-fall back to the default instead of crashing at runtime. Optional (nullable)
-keys are type-checked too: `default_account`, `smart_proxy_url`,
-`run_command`, `all_finished_command`, `upload_log_path`,
-`connect_proxy_password`, and
-`megacrypter_server` must be strings or null, and `elc_accounts` must be
-`{host: {field: string}}`. Booleans are not accepted for numeric keys.
+## Commands and validation
 
-Secrets are never displayed: `config show` and `config get` print
-`<redacted>` for `connect_proxy_password` and recursively redact the
-credential fields inside `elc_accounts`; `config set` confirms only that the
-key was updated and never echoes the value; validation warnings never echo
-secret values.
-
-Nullable keys can be cleared: `config set <key> null` (or `none`) stores JSON
-null, and `mb config unset <key>` clears a nullable key (any other string
-value, including a URL or the literal `null-value`, is kept verbatim).
-`config get`/`set`/`unset` exit non-zero on unknown keys, invalid values, or
-deprecated keys. Config writes are cross-process safe (a bounded file lock,
-reload-before-write, and a unique fsync'd temp file), so the CLI and any
-external caller can update the file concurrently without losing each other's
-changes.
-
-Deprecated or unknown keys in old files are ignored with a single warning per
-key per process; `mb config migrate` rewrites the file without them.
-
-## Corrupt config files
-
-A `config.json` that is not valid UTF-8 JSON, or whose root is not an object,
-is treated as corruption rather than silently replaced by defaults. The
-original is preserved byte-for-byte and copied to
-`config.json.corrupt.<timestamp>-<hash>.json`. Backups are deduplicated by
-content, so re-reading the same broken file does not pile up copies while a
-LATER, different corruption still gets its own backup; `set`, `unset`, `migrate`, and `reset`
-then refuse with a sanitized message and a non-zero exit. `mb config recover`
-reports the state, and `mb config recover --reset` writes a fresh default
-config while keeping the backup. Corruption messages never include values read
-from the corrupt file.
-
-## Transfer Settings
-
-| Key | Default | Purpose |
-| --- | --- | --- |
-| `download_path` | `<project>\Output` | Default destination for downloads. |
-| `max_workers` | `8` | Parallel chunk workers per downloaded file. |
-| `upload_workers` | `4` | Parallel chunk workers per uploaded file. |
-| `max_parallel_downloads` | `6` | Number of files downloaded at once. |
-| `max_parallel_uploads` | `1` | Number of files uploaded at once. |
-| `speed_limit_kbps` | `0` | Aggregate download cap in KB/s for the whole command; every parallel worker shares one limiter. `0` means unlimited. |
-| `upload_speed_limit_kbps` | `0` | Aggregate upload cap in KB/s for the whole command. `0` means unlimited. |
-| `verify_integrity` | `true` | Verify final MAC after download. |
-| `timeout_seconds` | `60` | HTTP timeout. |
-| `auto_resume` | `true` | Reuse `.mbstate` files. When `false`, existing resume state is never reused for downloads or uploads (unrelated existing files are still preserved via unique names). |
-| `keep_state_files_on_error` | `true` | Keep state files after failed transfers. |
-| `quota_wait_seconds` | `3600` | Wait after quota errors. |
-| `quota_max_wait_loops` | `24` | Maximum quota wait loops. |
-
-## Account and Streaming Settings
-
-| Key | Default | Purpose |
-| --- | --- | --- |
-| `default_account` | `null` | Legacy fallback account used when `--account` is omitted AND no vault default is set. Precedence everywhere (upload, queue, share, cloud): `--account` → `mb account default` (vault) → this key. |
-| `streaming_port` | `8080` | Default port for `stream` (1–65535). |
-| `streaming_host` | `127.0.0.1` | Default stream bind host. |
-
-## Proxy Settings
-
-| Key | Default | Purpose |
-| --- | --- | --- |
-| `smart_proxy_enabled` | `false` | Enable rotating proxy pool. |
-| `smart_proxy_url` | `null` | One proxy URL or a comma-separated URL list. |
-| `force_smart_proxy` | `false` | Refuse direct connections. Enforced on EVERY outbound request - API calls, chunk transfers, streaming CDN reads, MegaCrypter/DLC/ELC resolution, and `proxy fetch` - and the refusal happens before a socket is opened, with no direct fallback after a proxy failure. |
-
-### Deprecated keys
-
-These keys never had an effect and were removed; `config set` rejects them
-with an explanation and old config files that still contain them load fine
-(the keys are ignored with a warning):
-
-| Key | Reason |
+| Command | Meaning |
 | --- | --- |
-| `chunk_size_kb` | MEGA chunk sizes are protocol-defined and cannot be configured. |
-| `smart_proxy_autorefresh_minutes` | Not implemented; the pool is reloaded on every command run. |
-| `smart_proxy_timeout_seconds` | Not implemented; use `mb proxy fetch --timeout`. |
-| `smart_proxy_random` | Not implemented; the pool always picks randomly, weighted by health. |
+| `mb config show` | Sanitized effective settings. |
+| `mb config get KEY` | Sanitized one-setting display. |
+| `mb config set KEY VALUE` | Validate and persist a setting without echoing its value. |
+| `mb config unset KEY` | Clear a nullable setting. |
+| `mb config reset` | Confirm default reset; refuses corrupt data. |
+| `mb config path` | Active path. |
+| `mb config migrate` | Normalize supported native settings and remove retired/unknown keys; no old-data import. |
+| `mb config recover` | Report corruption without mutating it. |
+| `mb config recover --reset` | Confirm preserving original bytes and restoring defaults. |
 
-## CONNECT Proxy Settings
+Booleans accept `true/false`, `1/0`, `yes/no`, `on/off`. Numeric fields reject
+booleans. Nullable strings accept `null`/`none`; an ordinary string is not cleared
+just because it contains those characters. `elc_accounts` accepts a JSON object
+of host → object of string values.
 
-| Key | Default | Purpose |
+Unknown/retired keys cannot be set. Invalid known values in an otherwise valid
+native settings object produce sanitized warnings and use their default.
+Unknown keys are ignored with warnings. Command contexts report each ignored key
+at most once per process; invalid known values still report their repair on every
+load. Unknown key names and secret values are never echoed. Warning history keeps
+at most 4096 key digests; exceeding that bound blocks normal commands until stale
+settings are removed and the process is restarted.
+`config migrate` normalizes only a supported native envelope under the same lock:
+retired/unknown settings are removed, valid values are retained, and invalid known
+values use their validated defaults. A second call does not rewrite unchanged
+settings. It does not import Python-era or unsupported-format documents. The old
+built-in `MegaBasterd-CLI/1.0` User-Agent normalizes to empty, selecting the current
+version-derived default; custom User-Agents remain unchanged.
+
+Malformed UTF-8/JSON, duplicate object keys (including escaped spellings and
+nested objects), unsupported envelope/root/data shapes and future versions are
+corruption, not a reason to overwrite with defaults. Every non-`config`
+command refuses before prompting, contacting a service or changing command data;
+read-only configuration display may show defaults with a warning. Config mutations
+also refuse until explicit recovery. Detecting damaged data attempts one private
+`config.json.corrupt-<sha256>` recovery copy per distinct content under the same
+sidecar lock. Repeated reads reuse a copy only after verifying its exact bytes;
+a copy failure is reported without changing the original. If another operation
+holds the lock, a bounded private snapshot may diagnose corruption but cannot
+supply usable settings, create a copy or authorize a mutation. Explicit recovery
+verifies the preserved copy before replacing damaged data with defaults. A future
+version is not reset. Keep recovery copies until recovery is verified.
+
+## Transfer settings
+
+| Key | Default | Meaning |
 | --- | --- | --- |
-| `connect_proxy_port` | `9999` | Local CONNECT proxy port. |
-| `connect_proxy_password` | `null` | Basic-Auth password for clients. |
-| `connect_proxy_allow_any_port` | `false` | Allow CONNECT ports other than 443. |
+| `download_path` | `""` | Empty selects application-root `Output/`; `config get/show` displays that effective path. |
+| `max_workers` | `8` | Download chunk workers, 1–64. |
+| `upload_workers` | `4` | Upload chunk workers, 1–64. |
+| `max_parallel_downloads` | `6` | Parallel download files, 1–32. |
+| `max_parallel_uploads` | `1` | Parallel upload files, 1–32. |
+| `speed_limit_kbps` | `0` | Aggregate download KiB/s, finite/nonnegative; 0 unlimited. |
+| `upload_speed_limit_kbps` | `0` | Aggregate upload KiB/s, finite/nonnegative; 0 unlimited. |
+| `verify_integrity` | `true` | Final on-disk download MAC verification. |
+| `timeout_seconds` | `60` | Positive HTTP timeout. |
+| `auto_resume` | `true` | Reuse compatible validated native transfer state. |
+| `keep_state_files_on_error` | `true` | Retain failed-download state/staging for recovery. |
+| `quota_wait_seconds` | `3600` | Maximum wait between definitive quota-rejected metadata attempts; 0 disables recovery. |
+| `quota_max_wait_loops` | `24` | Total metadata attempts, including the first; 0 or 1 permits only one attempt. |
 
-## Container and Link Settings
+MEGA chunk sizes are protocol-defined. `chunk_size_kb` is retired as a download
+setting; `crypter encrypt --chunk-size-kb` is a separate local-file parameter.
+Corrupt/foreign/future state is preserved rather than reused. Upload state whose
+source changed after sending is discarded only while known unregistered;
+ambiguous-registration markers/confirmed receipts are never cleared by that path.
 
-| Key | Default | Purpose |
+## Account and listener settings
+
+| Key | Default | Meaning |
 | --- | --- | --- |
-| `megacrypter_server` | `null` | Default MegaCrypter server for `crypter make-link`. |
-| `elc_accounts` | `{}` | Optional stored ELC account credentials by user. |
+| `default_account` | `null` | Fallback only after explicit selection and the vault default. |
+| `streaming_port` | `8080` | Stream port, 1–65535. |
+| `streaming_host` | `"127.0.0.1"` | Stream bind host; non-loopback requires access token. |
+| `connect_proxy_port` | `9999` | Loopback proxy port, 1–65535. |
+| `connect_proxy_password` | `null` | Local proxy authentication password; redacted in displays. |
+| `connect_proxy_allow_any_port` | `false` | Broaden ports, not the MEGA-domain boundary. |
 
-`elc_accounts` is a JSON object when set through `config set`:
+Account passwords/sessions belong in the encrypted vault/session store, not
+ordinary config. `MEGABASTERD_VAULT_PASSPHRASE` is a supported noninteractive
+unlock input; keep it out of logs, history and support attachments. Native
+configuration is permission-restricted, not a universal encrypted secret store.
 
-```powershell
-.\Run.ps1 config set elc_accounts '{ "example-elc-host.com": { "user": "user@example.com", "api_key": "API_KEY" } }'
-```
+## Routing and containers
 
-You can avoid storing ELC credentials by passing `--elc-user` and
-`--elc-api-key` directly to `download`, `info`, `stream`, or
-`crypter elc-resolve`.
-
-## Logging and Hooks
-
-| Key | Default | Purpose |
+| Key | Default | Meaning |
 | --- | --- | --- |
-| `log_level` | `WARNING` | Default console log level; file logs still keep debug details. |
-| `log_to_file` | `true` | Write debug logs to a file. |
-| `log_max_bytes` | `5000000` | Rotate Python logs after this many bytes. |
-| `log_backups` | `5` | Keep this many rotated Python log files. |
-| `user_agent` | `""` | HTTP user agent for API and transfer requests. Empty means `MegaBasterd-CLI/<installed version>`. |
-| `run_command` | `null` | Command run after each completed transfer. Parsed with Windows rules on Windows and POSIX rules elsewhere; the transferred path is appended as exactly one argument. Hook arguments are not written to logs. |
-| `all_finished_command` | `null` | Command run ONCE after a whole `download`, `upload`, or `queue run` finishes — the hook for "shut down when everything is done", which `run_command` cannot express because the last file's hook has no way to know it was the last. `<download\|upload\|queue> <succeeded> <failed>` is appended as three arguments. Never run for an empty batch, never once per parallel worker, and a hook that fails is reported but does not fail the batch. |
-| `upload_log_path` | `null` | JSON-lines upload log path (written by every upload mode, including queue and directory uploads). |
+| `smart_proxy_enabled` | `false` | Enable rotating local proxy pool. |
+| `smart_proxy_url` | `null` | Configured proxy URLs, split on whitespace/comma/semicolon. |
+| `force_smart_proxy` | `false` | Refuse direct fallback when no valid proxy is selected. |
+| `megacrypter_server` | `null` | Server for `crypter make-link`. |
+| `elc_accounts` | `{}` | Host-specific string-valued ELC credentials; recursively redacted. |
 
-## Runtime Data
+Pool data reload is bounded and local; it is not a remote proxy crawler or an
+automatic background refresh service. Explicit `--proxy` remains explicit.
+`smart_proxy_autorefresh_minutes`, `smart_proxy_timeout_seconds` and
+`smart_proxy_random` are retired; use real supported command options instead.
+TLS/DNS/public-address/redirect rules apply to API calls, CDN, link services and
+attribute transfers; forced mode must not be worked around by another adapter.
 
-| Data | Location |
+## Logging and post-transfer commands
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `log_level` | `"WARNING"` | Console diagnostic threshold: DEBUG/INFO/WARNING/ERROR/CRITICAL. |
+| `log_to_file` | `true` | Private per-run file logging, overridable by root flags. |
+| `log_max_bytes` | `5000000` | Current-run rotation threshold. |
+| `log_backups` | `5` | Current-run rotated segment limit. |
+| `user_agent` | `""` | Empty selects `MegaBasterd-CLI/<version>`. |
+| `run_command` | `null` | Optional per-file local command; path appended as one literal argument. |
+| `all_finished_command` | `null` | Optional once-per-nonempty-batch command; kind/succeeded/failed arguments. |
+| `upload_log_path` | `null` | Optional sanitized JSONL upload-result log. |
+
+`-v`/`-vv` select INFO/DEBUG console diagnostics; `--quiet` suppresses ordinary
+console messages. File entries are independent of console filtering. Logs use
+UTF-8, unique `mb_YYYY-MM-DD_HH-mm-ss_UTC.log` names and UTC
+`[timestamp] [LEVEL] [COMPONENT] Message` records with sanitized structured fields.
+Set either rotation value to 0 to disable rollover. Rotation affects only this
+run's base/numbered segments; earlier operational logs are not deleted. Default
+log location is `<user-base>/native-v2/Logs/`; `MEGABASTERD_LOG_DIR` overrides it
+directly. A write/init failure produces a safe console warning, not a false log
+creation claim.
+
+Post-transfer command strings are trusted local configuration, parsed into an
+executable/argument vector, never run through a shell. INFO diagnostics identify
+only the executable basename and configured-argument count, not argument values,
+appended file paths or child output. Output is bounded; cancellation/timeouts own
+the child tree. The application does not install hooks or services.
+Hook/share/thumbnail errors are separately reported after upload.
+
+## Native runtime files
+
+| Native path under `User/native-v2/` | Contents |
 | --- | --- |
-| Config | `<project>/User/Config/config.json`, also printed by `.\Run.ps1 config path`. |
-| Accounts vault | `<project>/User/Data/accounts.json`. |
-| Sessions | `<project>/User/Data/sessions/`. |
-| Queue | `<project>/User/Data/queue.json`. |
-| Proxy pool | `<project>/User/Data/proxies.json`. |
-| Resume state | Next to each transfer as `.mbstate`. |
-| Launcher logs | `<project>/Logs/launcher-<timestamp>.log`. |
-| Launcher transcripts | `<project>/Logs/launcher-transcript-<timestamp>.log`. |
-| CLI logs | `<project>/Logs/cli-<timestamp>.log` through `Run.ps1`; user log directory when installed directly. |
+| `Config/config.json` | Versioned settings. |
+| `Data/accounts.json` | Account records with encrypted passwords. |
+| `Data/sessions/` | Encrypted cached sessions. |
+| `Data/queue.json` | Encrypted queue payloads and job state. |
+| `Data/proxies.json` | Stored pool URLs. |
+| `Data/transfers/` | Native download/upload state and receipts. |
+| `Logs/` | Default diagnostic logs. |
 
-## Per-Run Overrides
+Account documents reject malformed roots, unknown fields, ambiguous email/label
+identifiers, invalid quota types/ranges and malformed encrypted credential envelopes
+before mutation. Account labels are matched without regard to case. A damaged
+account document is kept unchanged, with one private `accounts.json.corrupt-<sha256>`
+recovery copy per distinct content when that copy can be written and verified.
+A failed backup is reported; it never authorizes replacing the original vault.
+Proxy documents likewise require an object with a URL-string list, reject unknown
+fields and preserve corrupt bytes before mutation. Their private recovery copies
+use `proxies.json.corrupt-<sha256>` with the same exact-byte verification policy;
+a damaged store is not permission to silently clear the proxy routing policy.
 
-Most frequently edited settings have matching CLI options:
-
-```powershell
-.\Run.ps1 download URL -w 12 -P 4 -l 8192
-.\Run.ps1 upload .\file.zip -w 8 -P 2
-.\Run.ps1 stream URL --host 127.0.0.1 --port 9090
-```
-
-Command-line options affect only that invocation; config changes persist.
-
-The source launcher sets the project root before running the CLI, so the default
-source checkout destination is:
-
-```text
-<project>\Output
-```
+Preserve these as user/application data. Old-runtime cleanup never authorizes
+removing credentials, outputs, queue data or operational logs. The native
+candidate has not yet passed native CI/practical migration verification.

@@ -22,7 +22,12 @@ Include:
 
 | Version | Supported |
 | --- | --- |
-| 1.0.x | Yes |
+| 1.0.x (retained Python implementation) | Yes, while it remains the working version before verified cutover |
+| 2.0.0 Rust migration candidate | Not a verified release; compilation, native platform validation and signed release verification are pending |
+
+Identify which implementation, OS/architecture and exact source commit a report
+concerns. Do not infer native security assurance from tests of the retained
+implementation.
 
 ## Scope
 
@@ -37,6 +42,6 @@ In scope:
 Out of scope:
 
 - Issues in MEGA's own service.
-- Issues in upstream Python dependencies. Report those to the dependency
-  maintainers.
+- Issues in upstream dependencies themselves. Report those to the dependency
+  maintainers; unsafe dependency integration in this project remains in scope.
 - Local attacks requiring already-compromised user accounts.

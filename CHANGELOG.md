@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Native rewrite — unverified candidate
+
+- A standalone Rust 2.0.0 CLI candidate replaces the application runtime, with
+  GPL-3.0-or-later for new owner-authored code and preserved historical notices.
+- Native validation and optimized intermediate builds are defined for Windows,
+  Linux and macOS Intel/Apple Silicon through manually dispatched CI. Compilation,
+  complete assertion coverage, signed release artifacts and practical cutover
+  verification remain pending; no native release or successful replacement is
+  claimed here.
+- Installation guidance and the full native command reference describe the
+  candidate. The current root `Run.ps1` still runs the retained Python application;
+  its stores and working installation must remain intact until verified cutover.
+
+## Retained Python implementation — unreleased history
+
+The entries below describe the retained implementation, not verified Rust parity.
+Native storage uses a fresh namespace and does not read Python-era personal stores.
+
 ### Changed
 - **Stored account credentials must be re-added.** The account vault now records the scrypt cost inside each encrypted credential instead of assuming a constant, which is what makes the cost raisable at all - and it is raised from 2**14 to 2**15. Credentials written by earlier versions are not read: `mb account remove` then `mb account add` restores them in seconds, and opening one reports the old format explicitly rather than claiming a wrong passphrase. The cipher is unchanged (AES-256-GCM), and the KDF parameters read out of the vault file are range-checked, so a hand-edited file cannot force an unbounded scrypt cost.
 

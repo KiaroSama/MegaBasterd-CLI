@@ -1,0 +1,66 @@
+{
+  "provenance": {
+    "source_commit": "c4559ec",
+    "python": "3.11.9",
+    "pycryptodome": "3.23.0",
+    "source_sha256": {
+      "crypto": "4fb16595eb6e375b95e178493506a87f19c05891f71da97dcdbc0222311401bc",
+      "chunks": "6c3abdb668d7eef6a55b5e380d7976091277e0d4e4f8e20d8a8e00552190f72c",
+      "auth": "0be059ccf1cde33f0258c9ba819c2532855707890dd1ab7ab661e72af7a98725"
+    },
+    "synthetic_only": true
+  },
+  "plaintext_recipe": "byte(i) = (13*i + 7) % 256",
+  "vectors": [
+    {
+      "size": 0,
+      "raw_key": "000000000000000008090a0b0c0d0e0f00010203040506070000000000000000",
+      "aes_key": "000102030405060708090a0b0c0d0e0f",
+      "nonce": "0001020304050607",
+      "plaintext_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "ciphertext": "ciphertext-0.bin",
+      "ciphertext_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "chunks": []
+    },
+    {
+      "size": 17,
+      "raw_key": "0000000000000000896bfac36bc3028500010203040506078162f0c867ce0c8a",
+      "aes_key": "000102030405060708090a0b0c0d0e0f",
+      "nonce": "0001020304050607",
+      "plaintext_sha256": "22f22bdc60fc16e495400f16088af4ed246cb07a15b5049865c4e9c231a21c59",
+      "ciphertext": "ciphertext-17.bin",
+      "ciphertext_sha256": "1fa7c88404476bcee55056c13f9f742eaac78cfe9f9f06b6fb465a0dc4f4c8a2",
+      "chunks": [
+        {
+          "index": 0,
+          "offset": 0,
+          "size": 17,
+          "mac": "110e1a89f506e3e5d33167e2a932e544"
+        }
+      ]
+    },
+    {
+      "size": 131089,
+      "raw_key": "00000000000000009197166fea5ba11b0001020304050607999e1c64e656af14",
+      "aes_key": "000102030405060708090a0b0c0d0e0f",
+      "nonce": "0001020304050607",
+      "plaintext_sha256": "a31213bc27f2b5e03d3e3591de6049e0832e93e1a28864a596bcfda869c93072",
+      "ciphertext": "ciphertext-131089.bin",
+      "ciphertext_sha256": "0d35b323e0ddacc8ad92d60a782e05497a7b8e206df6a5a30b67d5ae0e401d30",
+      "chunks": [
+        {
+          "index": 0,
+          "offset": 0,
+          "size": 131072,
+          "mac": "1f7ec6ce08f27461f268bf02cfe09156"
+        },
+        {
+          "index": 1,
+          "offset": 131072,
+          "size": 17,
+          "mac": "110e1a89f506e3e5d33167e2a932e544"
+        }
+      ]
+    }
+  ]
+}
