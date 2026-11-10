@@ -38,6 +38,43 @@ fn client(address: SocketAddr) -> TcpStream {
     socket
 }
 
+fn read_body(socket: &mut TcpStream, actual: &mut Vec<u8>, limit: usize, mode: &str) {
+    // Restrict the receive window only while exercising a non-reading peer.
+    // Verification must drain normally, with one total budget rather than a
+    // fresh timeout for every small TCP window update.
+    let receive = tokio::net::TcpSocket::from_std_stream(socket.try_clone().unwrap());
+    receive.set_recv_buffer_size(1024 * 1024).unwrap();
+    drop(receive);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut bytes = [0; 32 * 1024];
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "{mode}: response did not close after {} bytes",
+            actual.len()
+        );
+        socket
+            .set_read_timeout(Some(remaining.min(Duration::from_millis(100))))
+            .unwrap();
+        match socket.read(&mut bytes) {
+            Ok(0) => return,
+            Ok(count) => {
+                actual.extend_from_slice(&bytes[..count]);
+                assert!(actual.len() <= limit, "{mode}: oversized response");
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::Interrupted
+                ) => {}
+            Err(error) => panic!("{mode}: response read failed: {error}"),
+        }
+    }
+}
+
 fn status(address: SocketAddr) -> u16 {
     let mut socket = client(address);
     socket
@@ -97,9 +134,7 @@ fn stalled_body_timeout_releases_actual_server_capacity_without_cancellation() {
                     if requests.fetch_add(1, Ordering::Relaxed) == 0 {
                         assert_eq!(request.method, "GET");
                         let send = tokio::net::TcpSocket::from_std_stream(socket.try_clone()?);
-                        // Windows' zero send buffer prevents successful enqueue
-                        // of the whole body from masquerading as a stalled reader.
-                        send.set_send_buffer_size(if cfg!(windows) { 0 } else { 4096 })?;
+                        send.set_send_buffer_size(4096)?;
                         drop(send);
                         reply(
                             socket,
@@ -117,7 +152,9 @@ fn stalled_body_timeout_releases_actual_server_capacity_without_cancellation() {
                             socket,
                             body,
                             server_control,
-                            Instant::now() + Duration::from_secs(3),
+                            // Leave time to observe termination even if TCP keeps
+                            // making small writes and the lifetime bound expires first.
+                            Instant::now() + Duration::from_secs(2),
                             Duration::from_millis(400),
                         );
                     }
@@ -175,6 +212,7 @@ fn real_body_writer_preserves_offsets_and_releases_on_idle_deadline_and_cancella
         "paused-idle",
         "paused-deadline",
     ] {
+        writeln!(std::io::stdout(), "HTTP body peer mode: {mode}").unwrap();
         let reading = mode == "reading";
         let paused = mode.starts_with("paused-");
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -184,8 +222,7 @@ fn real_body_writer_preserves_offsets_and_releases_on_idle_deadline_and_cancella
         let (mut socket, _) = listener.accept().unwrap();
         socket.set_nonblocking(false).unwrap();
         let send = tokio::net::TcpSocket::from_std_stream(socket.try_clone().unwrap());
-        send.set_send_buffer_size(if cfg!(windows) { 0 } else { 4096 })
-            .unwrap();
+        send.set_send_buffer_size(4096).unwrap();
         drop(send);
         let size = if reading { 33 * 1024 } else { 16 * 1024 * 1024 };
         let expected: Vec<_> = (0..size).map(|n| (n % 251) as u8).collect();
@@ -204,7 +241,7 @@ fn real_body_writer_preserves_offsets_and_releases_on_idle_deadline_and_cancella
                         + if matches!(mode, "deadline" | "paused-deadline") {
                             Duration::from_millis(400)
                         } else {
-                            Duration::from_secs(3)
+                            Duration::from_secs(2)
                         },
                     if matches!(mode, "idle" | "paused-idle") {
                         Duration::from_millis(400)
@@ -217,10 +254,7 @@ fn real_body_writer_preserves_offsets_and_releases_on_idle_deadline_and_cancella
             });
             if reading {
                 let mut actual = Vec::new();
-                std::io::Read::by_ref(&mut client)
-                    .take(expected.len() as u64 + 1)
-                    .read_to_end(&mut actual)
-                    .unwrap();
+                read_body(&mut client, &mut actual, expected.len(), mode);
                 assert_eq!(actual, expected);
                 done.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
             } else {
@@ -251,10 +285,7 @@ fn real_body_writer_preserves_offsets_and_releases_on_idle_deadline_and_cancella
                         );
                     }
                 }
-                std::io::Read::by_ref(&mut client)
-                    .take(expected.len() as u64 + 1)
-                    .read_to_end(&mut actual)
-                    .unwrap();
+                read_body(&mut client, &mut actual, expected.len(), mode);
                 assert!(actual.len() < expected.len());
                 assert_eq!(actual, expected[..actual.len()]);
             }
