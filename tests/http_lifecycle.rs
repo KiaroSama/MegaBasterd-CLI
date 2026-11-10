@@ -262,7 +262,15 @@ fn expired_headers_release_real_server_capacity_for_the_same_peer() {
                 assert!(control.toggle_pause().unwrap());
             }
             expire.send(()).unwrap();
-            assert_eq!(stalled.read(&mut [0]).unwrap(), 0);
+            match stalled.read(&mut [0]) {
+                Ok(0) => (),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                    ) => {}
+                result => panic!("Expired header connection did not close: {result:?}"),
+            }
             assert!(!control.is_canceled());
             if paused {
                 assert!(

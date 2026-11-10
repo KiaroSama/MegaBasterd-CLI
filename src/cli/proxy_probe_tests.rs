@@ -52,11 +52,16 @@ fn parsed_proxy_probe_includes_configured_urls_and_reports_yes_no_with_safe_reas
     };
     assert_eq!(dispatch(&mut context, command()).unwrap(), 0);
     let text = String::from_utf8(std::mem::take(&mut *stdout.0.lock().unwrap())).unwrap();
+    // A refused loopback connection can reach the configured deadline before
+    // Windows reports its socket error. Both remain controlled unavailable probes.
+    let unavailable = |text: &str| {
+        text.contains("IoError")
+            || text.contains("TimeoutError")
+            || text.contains("no answer within 1s")
+    };
     assert!(
-        text.contains("yes")
-            && text.contains("no")
-            && text.contains("ms")
-            && text.contains("IoError")
+        text.contains("yes") && text.contains("no") && text.contains("ms") && unavailable(&text),
+        "{text}"
     );
     assert!(text.contains("127.0.0.1") && !text.contains("SENTINEL_PASSWORD"));
     assert!(
@@ -76,7 +81,7 @@ fn parsed_proxy_probe_includes_configured_urls_and_reports_yes_no_with_safe_reas
     let error = dispatch(&mut context, command()).unwrap_err();
     assert_eq!(error.exit_code(), 1);
     let text = String::from_utf8(std::mem::take(&mut *stdout.0.lock().unwrap())).unwrap();
-    assert!(text.contains("no") && text.contains("IoError"));
+    assert!(text.contains("no") && unavailable(&text), "{text}");
     assert!(!text.contains("SENTINEL_PASSWORD"));
     assert_eq!(
         ProxyStore::new(context.paths.proxies()).list().unwrap(),

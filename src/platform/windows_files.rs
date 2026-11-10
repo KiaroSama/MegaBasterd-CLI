@@ -35,12 +35,15 @@ use windows_sys::Win32::{
         FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_WRITE_THROUGH,
         FILE_ID_INFO, FILE_RENAME_INFO, FILE_RENAME_INFO_0, FILE_SHARE_DELETE, FILE_SHARE_READ,
         FILE_SHARE_WRITE, FILE_TYPE_DISK, FileAttributeTagInfo, FileDispositionInfo, FileIdInfo,
-        FileRenameInfo, GetFileInformationByHandle, GetFileInformationByHandleEx, GetFileType,
-        OPEN_EXISTING, READ_CONTROL, SetFileInformationByHandle,
+        FileRenameInfo, FileRenameInfoEx, GetFileInformationByHandle, GetFileInformationByHandleEx,
+        GetFileType, OPEN_EXISTING, READ_CONTROL, SetFileInformationByHandle,
     },
     System::{
         SystemServices::{ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE},
         Threading::{GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken},
+        WindowsProgramming::{
+            FILE_RENAME_FLAG_POSIX_SEMANTICS, FILE_RENAME_FLAG_REPLACE_IF_EXISTS,
+        },
     },
 };
 
@@ -604,8 +607,15 @@ impl Directory {
         let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
         // SAFETY: aligned allocation includes full header+UTF16 tail, root/source retained through call.
         unsafe {
+            // Retain the verified destination handle through replacement.
+            // POSIX semantics allow replacing its directory entry while that
+            // FILE_SHARE_DELETE handle still identifies the old object.
             (*info).Anonymous = FILE_RENAME_INFO_0 {
-                ReplaceIfExists: overwrite,
+                Flags: if overwrite {
+                    FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS
+                } else {
+                    0
+                },
             };
             (*info).RootDirectory = ptr::null_mut();
             (*info).FileNameLength = u32::try_from((name.len() - 1) * 2)
@@ -617,7 +627,11 @@ impl Directory {
             );
             if SetFileInformationByHandle(
                 source.as_raw_handle(),
-                FileRenameInfo,
+                if overwrite {
+                    FileRenameInfoEx
+                } else {
+                    FileRenameInfo
+                },
                 info.cast(),
                 u32::try_from(bytes)
                     .map_err(|_| Error::invalid("Replacement buffer is too large"))?,
