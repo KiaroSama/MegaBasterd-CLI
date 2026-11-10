@@ -12,7 +12,23 @@ use super::{read_head, reply, serve, write_body};
 use crate::{error::Error, transfers::control::Control};
 
 fn client(address: SocketAddr) -> TcpStream {
-    let socket = TcpStream::connect_timeout(&address, Duration::from_secs(2)).unwrap();
+    // Set the receive window before connection establishment; shrinking an
+    // established Windows loopback socket need not constrain its negotiated window.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let pending = tokio::net::TcpSocket::new_v4().unwrap();
+    pending.set_recv_buffer_size(4096).unwrap();
+    let socket = runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(2), pending.connect(address))
+            .await
+            .unwrap()
+            .unwrap()
+            .into_std()
+            .unwrap()
+    });
+    socket.set_nonblocking(false).unwrap();
     socket
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();
@@ -81,7 +97,9 @@ fn stalled_body_timeout_releases_actual_server_capacity_without_cancellation() {
                     if requests.fetch_add(1, Ordering::Relaxed) == 0 {
                         assert_eq!(request.method, "GET");
                         let send = tokio::net::TcpSocket::from_std_stream(socket.try_clone()?);
-                        send.set_send_buffer_size(4096)?;
+                        // Windows' zero send buffer prevents successful enqueue
+                        // of the whole body from masquerading as a stalled reader.
+                        send.set_send_buffer_size(if cfg!(windows) { 0 } else { 4096 })?;
                         drop(send);
                         reply(
                             socket,
@@ -107,16 +125,13 @@ fn stalled_body_timeout_releases_actual_server_capacity_without_cancellation() {
                     reply(socket, 200, &[], b"")
                 },
                 |error| {
-                    assert!(matches!(error, Error::Timeout));
+                    assert!(matches!(error, Error::Timeout), "{error:?}");
                     timed_out.send(()).unwrap();
                 },
             );
             finished.send(result).unwrap();
         });
         let mut stalled = client(address);
-        let receive = tokio::net::TcpSocket::from_std_stream(stalled.try_clone().unwrap());
-        receive.set_recv_buffer_size(4096).unwrap();
-        drop(receive);
         stalled
             .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
             .unwrap();
@@ -165,17 +180,12 @@ fn real_body_writer_preserves_offsets_and_releases_on_idle_deadline_and_cancella
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
-        let mut client = TcpStream::connect_timeout(&address, Duration::from_secs(2)).unwrap();
-        client
-            .set_read_timeout(Some(Duration::from_secs(3)))
-            .unwrap();
-        let receive = tokio::net::TcpSocket::from_std_stream(client.try_clone().unwrap());
-        receive.set_recv_buffer_size(4096).unwrap();
-        drop(receive);
+        let mut client = client(address);
         let (mut socket, _) = listener.accept().unwrap();
         socket.set_nonblocking(false).unwrap();
         let send = tokio::net::TcpSocket::from_std_stream(socket.try_clone().unwrap());
-        send.set_send_buffer_size(4096).unwrap();
+        send.set_send_buffer_size(if cfg!(windows) { 0 } else { 4096 })
+            .unwrap();
         drop(send);
         let size = if reading { 33 * 1024 } else { 16 * 1024 * 1024 };
         let expected: Vec<_> = (0..size).map(|n| (n % 251) as u8).collect();

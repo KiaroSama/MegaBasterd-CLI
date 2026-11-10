@@ -329,11 +329,9 @@ fn parsed_parallel_folder_workers_preserve_disabled_resume_and_custom_user_agent
             let directory = OutputDirectory::ensure(&output.join("Show/Season 1")).unwrap();
             let mut seeded = Vec::new();
             for (handle, name) in [("FILE0001", "e1.mkv"), ("FILE0002", "e2.mkv")] {
-                let destination: std::path::PathBuf = output
-                    .join("Show/Season 1")
-                    .join(name)
-                    .components()
-                    .collect();
+                // Match the planner's native child components while preserving
+                // the caller's output-root spelling used by the saved-state hash.
+                let destination = output.join("Show").join("Season 1").join(name);
                 let staging_name = format!(".mb-resume-{handle}.tmp");
                 let mut staging = directory.open_file(staging_name.as_ref(), true).unwrap();
                 staging.write_all(&plaintext).unwrap();
