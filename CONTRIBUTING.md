@@ -30,9 +30,9 @@ user paths require the same isolated user override.
 ## CI and test accounting
 
 The CI matrix uses actual native runners for Linux x64, Windows x64 and both
-macOS architectures. Every push and PR builds all Release aliases, runs unit,
+macOS architectures. Pushes to `main`/`develop` and every PR build all Release aliases, run unit,
 integration, regression, process, filesystem, cryptographic-vector, network-peer,
-media and command-line tests, and packages binaries plus source and checksums.
+media and command-line tests, and package binaries plus source and checksums.
 Formatting, Clippy/types, advisories/licenses/sources and LLVM line coverage run
 as separate required checks. The coverage threshold remains 76 percent.
 
