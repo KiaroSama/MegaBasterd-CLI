@@ -48,7 +48,12 @@ fn merge_retains_pinned_inputs_with_a_low_soft_limit_and_refuses_an_insufficient
         let output = directory.join("merged.bin");
         let mut command = Command::new(env!("CARGO_BIN_EXE_mb"));
         command.current_dir(&directory).env_clear();
-        for key in ["PATH", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"] {
+        for key in [
+            "LLVM_PROFILE_FILE",
+            "PATH",
+            "LD_LIBRARY_PATH",
+            "DYLD_LIBRARY_PATH",
+        ] {
             if let Some(value) = std::env::var_os(key) {
                 command.env(key, value);
             }

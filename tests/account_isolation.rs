@@ -102,6 +102,7 @@ fn discovered_account_paths_begin_empty_and_real_credentials_land_only_in_the_is
     let mut command = Command::new(std::env::current_exe().unwrap());
     command.current_dir(scratch.path()).env_clear();
     for key in [
+        "LLVM_PROFILE_FILE",
         "PATH",
         "SystemRoot",
         "WINDIR",

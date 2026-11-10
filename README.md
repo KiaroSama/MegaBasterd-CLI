@@ -28,15 +28,17 @@ Python runtime bridge is included in the native implementation.
 The application, tests and CI driver are implemented in Rust. The three native
 commands are `mb`, `mbcli` and `megabasterd-cli`. No interpreter or script launcher
 is required. CI builds Linux x64, Windows x64, macOS Intel and macOS Apple Silicon
-on every push and pull request.
+on pushes to `main`/`develop` and every pull request.
 
 ## Installation
 
 Download the artifact matching your OS and architecture from a successful
 [Rust CI run](https://github.com/KiaroSama/MegaBasterd-CLI/actions/workflows/ci.yml).
-Each artifact contains the three command aliases, `SHA256SUMS`, license notices
-and the matching Rust source package. Extract the commands together, verify the
-checksums and add the directory to `PATH`. Build artifacts are unsigned;
+Unpack the artifact's ZIP, then extract its `.tar.gz` payload; the tar archive
+preserves executable permissions on Linux and macOS. It contains the three
+command aliases, `SHA256SUMS`, license notices and the matching Rust source
+package. Verify the archive's `.sha256` file and keep the commands together when
+adding the directory to `PATH`. Build artifacts are unsigned;
 [Releases](https://github.com/KiaroSama/MegaBasterd-CLI/releases) is the destination
 for published versions.
 

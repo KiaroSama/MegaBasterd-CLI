@@ -157,6 +157,7 @@ fn default_conflict_warns_once_after_empty_defaults_and_explicit_overrides_witho
     let mut command = Command::new(std::env::current_exe().unwrap());
     command.current_dir(&cwd).env_clear();
     for key in [
+        "LLVM_PROFILE_FILE",
         "PATH",
         "SystemRoot",
         "WINDIR",

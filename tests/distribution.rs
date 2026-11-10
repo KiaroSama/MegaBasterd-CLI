@@ -6,6 +6,11 @@ use std::{fs, path::Path, process::Command, time::Duration};
 fn run(binary: &Path, cwd: &Path, home: &Path, arguments: &[&str]) -> process::ProcessOutput {
     let mut command = Command::new(binary);
     command.current_dir(cwd).env_clear();
+    // Instrumented aliases must retain their absolute profile destination so
+    // LLVM does not write default.profraw into the caller's working directory.
+    if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+        command.env("LLVM_PROFILE_FILE", profile);
+    }
     #[cfg(windows)]
     for key in ["SystemRoot", "WINDIR", "PATHEXT"] {
         if let Some(value) = std::env::var_os(key) {

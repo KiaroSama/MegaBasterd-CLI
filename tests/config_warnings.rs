@@ -116,6 +116,7 @@ fn repeated_command_contexts_warn_once_per_ignored_key_but_repeat_invalid_value_
     let mut command = Command::new(std::env::current_exe().unwrap());
     command.current_dir(&cwd).env_clear();
     for key in [
+        "LLVM_PROFILE_FILE",
         "PATH",
         "SystemRoot",
         "WINDIR",

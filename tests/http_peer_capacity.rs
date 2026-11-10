@@ -60,10 +60,14 @@ fn listener() -> (TcpListener, SocketAddr, SocketAddr) {
 }
 
 fn client(address: SocketAddr, other: bool) -> TcpStream {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
+    // Reuse the fixture reactor: repeatedly creating/dropping kqueue reactors
+    // otherwise adds macOS teardown time to the accept-loop latency assertion.
+    thread_local! {
+        static RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+    }
     let socket = if address.is_ipv6() {
         tokio::net::TcpSocket::new_v6().unwrap()
     } else {
@@ -78,13 +82,15 @@ fn client(address: SocketAddr, other: bool) -> TcpStream {
         .unwrap();
     #[cfg(target_os = "macos")]
     let _ = other;
-    let stream = runtime.block_on(async {
-        tokio::time::timeout(Duration::from_secs(2), socket.connect(address))
-            .await
-            .unwrap()
-            .unwrap()
-            .into_std()
-            .unwrap()
+    let stream = RUNTIME.with(|runtime| {
+        runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(2), socket.connect(address))
+                .await
+                .unwrap()
+                .unwrap()
+                .into_std()
+                .unwrap()
+        })
     });
     stream.set_nonblocking(false).unwrap();
     stream

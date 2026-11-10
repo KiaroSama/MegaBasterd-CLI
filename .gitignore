@@ -196,6 +196,7 @@ explain-AI.md
 *.rs.bk
 *.rlib
 *.profraw
+/lcov.info
 
 # Native CI distributions
 /dist/

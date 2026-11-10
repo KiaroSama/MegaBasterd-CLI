@@ -25,6 +25,7 @@ fn command(
     let mut command = Command::new(executable);
     command.current_dir(cwd).env_clear();
     for key in [
+        "LLVM_PROFILE_FILE",
         "PATH",
         "SystemRoot",
         "WINDIR",

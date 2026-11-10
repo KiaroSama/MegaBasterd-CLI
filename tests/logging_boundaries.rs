@@ -406,7 +406,12 @@ fn a_regular_rotation_control_still_succeeds_after_private_handle_verification()
         let scratch = scratch();
         let mut command = Command::new(std::env::current_exe().unwrap());
         command.current_dir(scratch.path()).env_clear();
-        for key in ["PATH", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"] {
+        for key in [
+            "LLVM_PROFILE_FILE",
+            "PATH",
+            "LD_LIBRARY_PATH",
+            "DYLD_LIBRARY_PATH",
+        ] {
             if let Some(value) = std::env::var_os(key) {
                 command.env(key, value);
             }

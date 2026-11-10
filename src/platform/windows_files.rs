@@ -589,12 +589,11 @@ impl Directory {
         }
         let cloned = source.try_clone()?;
         File::from(cloned).sync_all()?;
-        let name: Vec<u16> = to.encode_wide().collect();
-        if name.len() > 32_766 {
-            return Err(Error::invalid(
-                "Replacement name exceeds the native length limit",
-            ));
-        }
+        // Use Win32's absolute destination form with a NULL root. The retained
+        // ancestor handles deny write/delete sharing, so this path cannot be
+        // renamed or redirected while the exact source handle is published.
+        // Include a terminator in the buffer, but not in FileNameLength.
+        let name = wide(self.path.join(to).as_os_str())?;
         let bytes = offset_of!(FILE_RENAME_INFO, FileName) + name.len() * 2;
         let mut buffer = vec![
             0usize;
@@ -608,8 +607,8 @@ impl Directory {
             (*info).Anonymous = FILE_RENAME_INFO_0 {
                 ReplaceIfExists: overwrite,
             };
-            (*info).RootDirectory = self.leaf()?;
-            (*info).FileNameLength = u32::try_from(name.len() * 2)
+            (*info).RootDirectory = ptr::null_mut();
+            (*info).FileNameLength = u32::try_from((name.len() - 1) * 2)
                 .map_err(|_| Error::invalid("Replacement name is too long"))?;
             ptr::copy_nonoverlapping(
                 name.as_ptr(),

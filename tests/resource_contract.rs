@@ -192,6 +192,7 @@ fn run(
 ) -> (process::ProcessOutput, u64) {
     command.current_dir(scratch).env_clear();
     for key in [
+        "LLVM_PROFILE_FILE",
         "PATH",
         "SystemRoot",
         "WINDIR",

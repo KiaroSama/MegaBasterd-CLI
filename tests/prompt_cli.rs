@@ -117,6 +117,7 @@ impl Fixture {
         command.current_dir(&self.cwd).env_clear();
         // Preserve only native loader/Windows prerequisites, never operator app/auth settings.
         for key in [
+            "LLVM_PROFILE_FILE",
             "PATH",
             "SystemRoot",
             "WINDIR",
