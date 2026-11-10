@@ -143,7 +143,7 @@ fn exact_source_hand_edited_values_and_nested_secrets_fall_back_without_echoing_
         assert!(config.value().unwrap()[*key].is_null());
     }
     let (config, warnings) = Config::from_value(json!({"default_account":["not","a","string"],
-        "run_command":42,"connect_proxy_password":{"oops":"SECRET-VALUE"},"upload_log_path":3.14}))
+        "run_command":42,"connect_proxy_password":{"oops":"SECRET-VALUE"},"upload_log_path":3.25}))
     .unwrap();
     assert!(config.default_account.is_none() && config.run_command.is_none());
     assert!(config.connect_proxy_password.is_none() && config.upload_log_path.is_none());

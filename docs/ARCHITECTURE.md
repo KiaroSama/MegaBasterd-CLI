@@ -1,9 +1,9 @@
 # Native Architecture
 
-The candidate is a standalone Rust CLI, not a Python wrapper. Three binary names
-share `src/main.rs` and one dispatcher. The retained Python tree/launcher is a
-migration oracle and recovery implementation, not a native runtime dependency.
-Native compilation, platform behavior and complete parity are still unverified.
+The application is a standalone Rust CLI. Three small Rust entrypoints call one
+dispatcher. There is no interpreter bridge; historical source remains in Git.
+
+Build and test evidence is recorded by the native CI matrix for each commit.
 
 ## Responsibilities and dependency direction
 
@@ -94,7 +94,7 @@ non-array result diagnostics describe the failure without echoing arbitrary
 headers or bodies. Origin HTTP errors do not blame or credit a selected proxy;
 HTTP 407 and unusable bodies do. Credit requires a usable result, and each
 response owns its connection until it is consumed or rejected. Actual native
-socket closure and attribution fixtures remain unexecuted verification gates.
+socket closure and attribution fixtures are exercised by native tests.
 
 Hashcash accepts both the retained `1:easiness:token` challenge and the current
 SDK's `1:easiness:timestamp:token` form. Their solution headers are respectively
@@ -110,7 +110,7 @@ check cancellation and expiry; a late solution cannot authorize another request.
 Ordinary transfer pause checkpoints retain their deadline-free behavior. A 402
 rejection may be answered with a proof, but an uncertain sent mutation after that
 proof is still not replayed. Independent SHA-256 vectors and direct/CONNECT peer
-fixtures cover these contracts in source; native execution remains pending.
+fixtures cover these contracts in source; native CI executes these tests.
 
 Trash/import batches return successful handles plus definitive rejections in
 `BatchOutcome`. They continue definitive sibling failures and invalidate cached
@@ -132,7 +132,7 @@ sent request returns malformed registration data: its outcome is ambiguous and
 must not be replayed; a later explicit listing can reveal the committed folder.
 Trash cleanup deletes only direct children of the trash root; an empty listing
 sends no deletion. Persistent parsed-command and TLS peer fixtures express these
-contracts, but native execution remains pending.
+contracts, but native CI executes these tests.
 
 Every remote path uses the selected transport policy: HTTPS without embedded
 service credentials, verified host/certificate, bounded response, public resolved
@@ -230,7 +230,7 @@ terminal rows. File executors own live rendering, and final queue rows are
 reported afterward through the existing bounded progress formatter, without
 starting a second renderer or writing to machine stdout. Unknown remote mutation
 does not become automatic retry. Native race, deadline, progress and recovery
-tests remain unexecuted; source assertions alone are insufficient.
+tests run in the native matrix; source assertions alone are insufficient.
 
 ## Local services and child processes
 
@@ -252,29 +252,22 @@ captures and owned process-group/job cleanup. No shell evaluation, automatic med
 installation, background daemon or hook installation is part of this design.
 Native process-tree/pipe/cancellation tests remain required.
 
-## Verification and release boundary
+## Verification and distribution
 
 `tests/fixtures/cli-schema.json` records the independently transcribed source
-schema. Crypto/link/local-file/transfer vectors record source provenance. The
-source assertion ledger tracks all 1,416 static source definitions across 164
-modules; parameter decorators are not claimed to be collected runtime cases.
-A row marked written is not verified. The CI guard separately validates structure,
-accounting and exact-commit cross-platform execution evidence. Native CI keeps
-an isolated sparse checkout of the immutable source baseline, checks its Git SHA
-and module hashes, and inspects only source AST/text. Retiring old runtime code
-from the candidate does not remove or execute the coverage denominator.
+schema. Crypto, link, local-file and transfer vectors retain source provenance.
+The parity ledger keeps all 1,416 baseline definitions across 164 modules.
+`cargo xtask verify` checks target hashes, discovers and executes the native
+harnesses, then reconciles each applicable mapping with actual passing results.
+Receipts include the exact commit, native OS and architecture; static source
+inspection alone never marks a test passed.
 
-Controlled TLS peers enter actual API/download/upload/auth/stream/attribute paths;
-they are bounded cooperative fixtures, not a universal sandbox. Maintained small
-PNG/MP4/WebM files exercise real codecs without claiming representative media
-performance. All final heavy Rust builds/tests run in manually initiated native
-CI. The existing `release.yml` manual entrypoint delegates to the native matrix
-through a same-commit `workflow_call`; it does not initiate another run or inherit
-signing/account secrets. Python under `tools/ci`/`tools/oracle` is development tooling
-only, never a native runtime dependency.
+Rust CI runs on every push and pull request. Native runners build Release
+binaries for Windows, Linux, macOS Intel and macOS Apple Silicon. Separate
+formatting, Clippy/type, dependency-policy and LLVM coverage checks preserve the
+previous check categories and 76% line-coverage floor. The CI driver and packaging
+tool are Rust (`xtask/`). Test-only FFmpeg/ffprobe prerequisites use pinned archives
+and checksums; no runtime install step is part of the application.
 
-The working old implementation/environment remains until native CI, signed
-artifact identity, practical output validation and rollback succeed. Release
-archives require allowlisted runtime assets, matching source/notices, version/
-commit/target hashes and verified approved signing inputs. These gates are
-unfinished; no native platform/release/cutover proof is implied by written code.
+[Migration notes](MIGRATION.md) document the native storage/compatibility boundary;
+[upstream review](UPSTREAM.md) records the relevant Java behaviors ported to Rust.

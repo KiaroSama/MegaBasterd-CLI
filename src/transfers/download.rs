@@ -95,6 +95,10 @@ struct Shared {
     error: Option<Error>,
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Explicit transfer state and cancellation dependencies at this boundary."
+)]
 pub fn download(
     api: Api,
     info: FileInfo,
@@ -121,6 +125,10 @@ pub fn download(
     )
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Explicit transfer state and cancellation dependencies at this boundary."
+)]
 fn download_with_space(
     api: Api,
     info: FileInfo,
@@ -272,22 +280,20 @@ fn download_with_space(
                         )?;
                     }
                 };
-                if let Err(error) = run() {
-                    if let Ok(mut state) = shared.lock() {
-                        if state.error.is_none() {
-                            state.error = Some(error)
-                        }
-                    }
+                if let Err(error) = run()
+                    && let Ok(mut state) = shared.lock()
+                    && state.error.is_none()
+                {
+                    state.error = Some(error)
                 }
             }));
         }
         for thread in threads {
-            if thread.join().is_err() {
-                if let Ok(mut state) = shared.lock() {
-                    if state.error.is_none() {
-                        state.error = Some(Error::protocol("Download worker was interrupted"));
-                    }
-                }
+            if thread.join().is_err()
+                && let Ok(mut state) = shared.lock()
+                && state.error.is_none()
+            {
+                state.error = Some(Error::protocol("Download worker was interrupted"));
             }
         }
     });
@@ -356,6 +362,10 @@ fn commit_download_chunk(
     Ok(())
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Explicit transfer state and cancellation dependencies at this boundary."
+)]
 fn fetch_chunk(
     chunk: chunks::Chunk,
     shared: &Mutex<Shared>,
@@ -379,6 +389,10 @@ fn fetch_chunk(
     )
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Explicit transfer state and cancellation dependencies at this boundary."
+)]
 fn fetch_chunk_with_send(
     chunk: chunks::Chunk,
     shared: &Mutex<Shared>,

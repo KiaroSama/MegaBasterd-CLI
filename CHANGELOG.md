@@ -2,18 +2,18 @@
 
 ## Unreleased
 
-### Native rewrite — unverified candidate
+### Native Rust rewrite
 
-- A standalone Rust 2.0.0 CLI candidate replaces the application runtime, with
-  GPL-3.0-or-later for new owner-authored code and preserved historical notices.
-- Native validation and optimized intermediate builds are defined for Windows,
-  Linux and macOS Intel/Apple Silicon through manually dispatched CI. Compilation,
-  complete assertion coverage, signed release artifacts and practical cutover
-  verification remain pending; no native release or successful replacement is
-  claimed here.
-- Installation guidance and the full native command reference describe the
-  candidate. The current root `Run.ps1` still runs the retained Python application;
-  its stores and working installation must remain intact until verified cutover.
+- Complete the `refactor/rust-cli-rewrite` checkpoint as a native Rust application,
+  including all three command aliases, tests and CI tooling; remove Python,
+  PowerShell, C# and C project sources and their packaging configuration.
+- Build and test Linux x64, Windows x64 and macOS Intel/Apple Silicon on every
+  push and PR; publish CI artifacts with source and SHA-256 checksums.
+- Preserve formatting, type checking, dependency audit and 76% line coverage;
+  retain all 1,416 baseline contract identities with executed native mappings.
+- Fix compilation failures found in the checkpoint and port relevant upstream
+  proxy parsing and thumbnail retry fixes. See `docs/UPSTREAM.md`.
+- Use fresh native storage; historical data remains untouched. See `docs/MIGRATION.md`.
 
 ## Retained Python implementation — unreleased history
 

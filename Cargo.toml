@@ -9,6 +9,10 @@ description = "A native command-line MEGA.nz transfer client"
 repository = "https://github.com/KiaroSama/MegaBasterd-CLI"
 autobins = false
 
+[workspace]
+members = ["xtask"]
+resolver = "3"
+
 [lib]
 name = "megabasterd_cli"
 path = "src/lib.rs"
@@ -19,11 +23,11 @@ path = "src/main.rs"
 
 [[bin]]
 name = "mbcli"
-path = "src/main.rs"
+path = "src/mbcli.rs"
 
 [[bin]]
 name = "megabasterd-cli"
-path = "src/main.rs"
+path = "src/megabasterd-cli.rs"
 
 [dependencies]
 aes = { version = "0.9.3", features = ["zeroize"] }
@@ -31,13 +35,14 @@ aes-gcm = { version = "0.11.1", features = ["zeroize"] }
 base64 = "0.23.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 cipher = { version = "0.5.2", features = ["zeroize"] }
-clap = { version = "4.6.7", features = ["derive"] }
+clap = { version = "4.6.7", features = ["derive", "env"] }
 crossterm = "0.29.0"
 ctr = { version = "0.10.1", features = ["zeroize"] }
 ctrlc = "3.5.2"
 flate2 = "1.1.10"
 hex = "0.4.3"
 hmac = "0.13.0"
+md-5 = "0.11.0"
 # Inspect typed causes from reqwest's already-shared HTTP backend, not error text.
 hyper = { version = "1.12.0", default-features = false }
 hickory-resolver = { version = "0.26.3", default-features = false, features = ["tokio", "system-config"] }
@@ -80,6 +85,12 @@ strip = "symbols"
 [profile.dev]
 debug = 0
 incremental = false
+
+[profile.test]
+opt-level = 1
+
+[profile.test.package."*"]
+opt-level = 3
 
 [lints.clippy]
 unwrap_used = "deny"

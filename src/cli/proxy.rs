@@ -9,7 +9,7 @@ use url::Url;
 use super::{args::Proxy, context::Context};
 use crate::error::{Error, Result};
 use crate::services::{connect, local_crypto::open_source};
-use crate::storage::proxies::{ProxyStore, validate_proxy};
+use crate::storage::proxies::{ProxyStore, import_proxy, validate_proxy};
 use crate::terminal::{prompts, redaction};
 
 #[cfg(test)]
@@ -41,8 +41,8 @@ fn read_list(path: &Path) -> Result<Vec<String>> {
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(str::to_owned)
-        .collect();
+        .map(import_proxy)
+        .collect::<Result<_>>()?;
     if urls.len() > 10_000 {
         return Err(Error::invalid("Proxy input exceeds 10000 entries"));
     }
@@ -260,7 +260,7 @@ pub(super) fn fetch_sources(
         context.control.checkpoint()?;
         let result = (|| {
             let url =
-                Url::parse(&source).map_err(|_| Error::invalid("Proxy list URL is invalid"))?;
+                Url::parse(source).map_err(|_| Error::invalid("Proxy list URL is invalid"))?;
             let mut reply = transport.send(Method::GET, url, HeaderMap::new(), None, false)?;
             if !reply.response.status().is_success() {
                 return Err(Error::protocol(

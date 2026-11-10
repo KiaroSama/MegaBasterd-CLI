@@ -308,10 +308,7 @@ fn pump(source: &mut TcpStream, destination: &mut TcpStream, buffer: &mut Buffer
                 if matches!(
                     error.kind(),
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
-                ) =>
-            {
-                ()
-            }
+                ) => {}
             Err(error) => return Err(error.into()),
         }
     }
@@ -326,10 +323,7 @@ fn pump(source: &mut TcpStream, destination: &mut TcpStream, buffer: &mut Buffer
                 if matches!(
                     error.kind(),
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
-                ) =>
-            {
-                ()
-            }
+                ) => {}
             Err(error) => return Err(error.into()),
         }
     }

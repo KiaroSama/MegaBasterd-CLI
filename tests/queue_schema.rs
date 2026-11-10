@@ -417,7 +417,7 @@ fn supported_optional_nulls_distinct_jobs_and_utc_z_remain_usable() {
     assert_eq!(fs::read(fixture.queue.path()).unwrap(), ownerless);
     assert_eq!(
         fixture.queue.recover_interrupted().unwrap(),
-        [first_id.clone()]
+        std::slice::from_ref(&first_id)
     );
     let recovered = fixture.queue.list().unwrap();
     assert_eq!(recovered.len(), 2);

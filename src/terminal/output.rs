@@ -174,16 +174,16 @@ impl Output {
     pub(crate) fn select_files_interactive(&self, count: usize) -> Result<Vec<usize>> {
         use std::io::IsTerminal;
 
-        if std::io::stdin().is_terminal() {
-            if let Some(control) = crate::platform::signals::current()? {
-                let destination = if self.json {
-                    &self.stderr
-                } else {
-                    &self.stdout
-                };
-                let mut destination = destination.lock().map_err(poisoned)?;
-                return super::prompts::select_controlled(count, &control, &mut *destination);
-            }
+        if std::io::stdin().is_terminal()
+            && let Some(control) = crate::platform::signals::current()?
+        {
+            let destination = if self.json {
+                &self.stderr
+            } else {
+                &self.stdout
+            };
+            let mut destination = destination.lock().map_err(poisoned)?;
+            return super::prompts::select_controlled(count, &control, &mut *destination);
         }
         self.select_files(count, &mut std::io::stdin().lock())
     }

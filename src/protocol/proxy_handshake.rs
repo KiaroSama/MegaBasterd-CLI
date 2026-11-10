@@ -98,17 +98,16 @@ pub fn socks5(
     credentials: Option<(&str, &str)>,
 ) -> Result<()> {
     destination(target)?;
-    if let Some((user, password)) = credentials {
-        if user.is_empty()
+    if let Some((user, password)) = credentials
+        && (user.is_empty()
             || password.is_empty()
             || user.len() > 255
             || password.len() > 255
-            || user.chars().chain(password.chars()).any(char::is_control)
-        {
-            return Err(Error::invalid(
-                "SOCKS credentials require 1..255 bytes without control characters",
-            ));
-        }
+            || user.chars().chain(password.chars()).any(char::is_control))
+    {
+        return Err(Error::invalid(
+            "SOCKS credentials require 1..255 bytes without control characters",
+        ));
     }
     let method = if credentials.is_some() { 2 } else { 0 };
     stream.write_all(&[5, 1, method])?;

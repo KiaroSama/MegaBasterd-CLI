@@ -265,10 +265,7 @@ fn parsed_proxy_fetch_caps_a_large_body_keeps_complete_lines_and_closes_the_resp
                         std::io::ErrorKind::UnexpectedEof
                             | std::io::ErrorKind::ConnectionReset
                             | std::io::ErrorKind::ConnectionAborted
-                    ) =>
-                {
-                    ()
-                }
+                    ) => {}
                 other => panic!("capped proxy response was not closed: {other:?}"),
             }
         },

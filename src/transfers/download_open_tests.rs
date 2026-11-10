@@ -109,11 +109,10 @@ fn resume_open_failures_preserve_committed_coverage_and_bytes_before_any_snapsho
                                     "controlled staging permission refusal",
                                 )
                                 .into()),
-                                "io" => Err(std::io::Error::new(
-                                    std::io::ErrorKind::InputOutputError,
-                                    "controlled staging I/O refusal",
-                                )
-                                .into()),
+                                "io" => {
+                                    Err(std::io::Error::other("controlled staging I/O refusal")
+                                        .into())
+                                }
                                 "descriptors" => {
                                     Err(std::io::Error::from_raw_os_error(exhausted).into())
                                 }
@@ -138,7 +137,7 @@ fn resume_open_failures_preserve_committed_coverage_and_bytes_before_any_snapsho
                                     assert_eq!(cause.kind(), std::io::ErrorKind::PermissionDenied)
                                 }
                                 "io" => {
-                                    assert_eq!(cause.kind(), std::io::ErrorKind::InputOutputError)
+                                    assert_eq!(cause.kind(), std::io::ErrorKind::Other)
                                 }
                                 "descriptors" => assert_eq!(cause.raw_os_error(), Some(exhausted)),
                                 _ => unreachable!(),

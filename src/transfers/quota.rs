@@ -80,10 +80,10 @@ fn wait_with(
         wait(tick)?;
         control.checkpoint()?;
         remaining -= tick;
-        if let Some(baseline) = baseline {
-            if route().is_some_and(|current| current != baseline) {
-                return Ok(());
-            }
+        if let Some(baseline) = baseline
+            && route().is_some_and(|current| current != baseline)
+        {
+            return Ok(());
         }
     }
     Ok(())

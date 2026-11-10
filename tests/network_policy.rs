@@ -33,6 +33,7 @@ fn nonpublic_addresses_are_rejected_before_a_socket_is_opened() {
         "2001:1::4",
         "2001:1ff::1",
         "2001:10::1",
+        "2001:40::1",
         "2001::1",
         "2002::1",
         "3fff::1",
@@ -52,12 +53,11 @@ fn nonpublic_addresses_are_rejected_before_a_socket_is_opened() {
         "2001:20::1",
         "2001:2f:ffff::1",
         "2001:30::1",
-        "2001:40::1",
         "2001:200::1",
         "3ffe:ffff::1",
         "3fff:1000::1",
     ] {
-        assert!(is_public(valid.parse::<IpAddr>().unwrap()));
+        assert!(is_public(valid.parse::<IpAddr>().unwrap()), "{valid}");
     }
 }
 

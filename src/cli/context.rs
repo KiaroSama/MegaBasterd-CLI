@@ -297,10 +297,10 @@ impl Context {
     ) -> Result<(Api, auth::Session)> {
         let mut api = self.api(explicit)?;
         let sessions = Sessions::new(self.paths.session(&account.email));
-        let session = match sessions.restore(&account.email, &vault, &mut api)? {
+        let session = match sessions.restore(&account.email, vault, &mut api)? {
             Some(session) => session,
             None => {
-                let password = Accounts::password(&account, &vault)?;
+                let password = Accounts::password(account, vault)?;
                 let session = auth::login(&mut api, &account.email, &password, mfa_code, || {
                     Ok(self
                         .secret("Current six-digit 2FA code:", None, "--mfa-code")?
@@ -341,10 +341,10 @@ impl Context {
         fields: &serde_json::Value,
     ) {
         let _ = self.output.diagnostic_console(level, message);
-        if let Some(logger) = &self.logger {
-            if logger.write(level, component, message, fields).is_err() {
-                let _ = self.output.logging_warning(logger);
-            }
+        if let Some(logger) = &self.logger
+            && logger.write(level, component, message, fields).is_err()
+        {
+            let _ = self.output.logging_warning(logger);
         }
     }
 
@@ -353,15 +353,16 @@ impl Context {
     }
 
     pub fn finish(&self, code: i32) {
-        if let Some(logger) = &self.logger {
-            if logger.finish(code).is_err() {
-                let _ = self.output.logging_warning(logger);
-            }
+        if let Some(logger) = &self.logger
+            && logger.finish(code).is_err()
+        {
+            let _ = self.output.logging_warning(logger);
         }
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use zeroize::Zeroizing;

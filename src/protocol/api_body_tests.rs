@@ -212,10 +212,7 @@ fn actual_api_identity_and_gzip_streams_stop_without_eof_and_close_the_socket() 
                             io::ErrorKind::UnexpectedEof
                                 | io::ErrorKind::ConnectionReset
                                 | io::ErrorKind::ConnectionAborted
-                        ) =>
-                    {
-                        ()
-                    }
+                        ) => {}
                     other => panic!("oversized API response socket remained open: {other:?}"),
                 }
                 closed.send(()).unwrap();

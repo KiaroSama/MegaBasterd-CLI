@@ -279,10 +279,7 @@ mod unix {
             };
             let names: Vec<_> = absolute
                 .components()
-                .filter_map(|c| match c {
-                    Component::RootDir | Component::CurDir => None,
-                    _ => Some(c),
-                })
+                .filter(|c| !matches!(c, Component::RootDir | Component::CurDir))
                 .collect();
             if (names.is_empty() && policy == LeafPolicy::Private)
                 || names.iter().any(|c| !matches!(c, Component::Normal(_)))
@@ -483,7 +480,7 @@ mod unix {
             // SAFETY: successful fstatat initialized all stat fields.
             let stat = unsafe { stat.assume_init() };
             let metadata = file.metadata()?;
-            if stat.st_dev as u64 != metadata.dev() || stat.st_ino as u64 != metadata.ino() {
+            if stat.st_dev != metadata.dev() || stat.st_ino != metadata.ino() {
                 return Err(Error::protocol(
                     "Private file identity changed before mutation",
                 ));
@@ -561,12 +558,12 @@ mod unix {
         }
         fn remove_checked(&self, name: &OsStr, expected_identity: Option<&str>) -> Result<()> {
             let file = self.open_file(name, false, true)?;
-            if let Some(expected) = expected_identity {
-                if file_identity(&file)? != expected {
-                    return Err(Error::protocol(
-                        "Cleanup refused because the file identity changed",
-                    ));
-                }
+            if let Some(expected) = expected_identity
+                && file_identity(&file)? != expected
+            {
+                return Err(Error::protocol(
+                    "Cleanup refused because the file identity changed",
+                ));
             }
             let name = component(name)?;
             self.check_identity(&name, &file)?;

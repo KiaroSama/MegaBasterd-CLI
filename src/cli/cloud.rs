@@ -6,7 +6,6 @@ use super::{
 };
 use crate::error::{Error, Result};
 use crate::protocol::{
-    cloud::Cloud,
     links::{parse_link, require_link_key, resolve_offline},
     nodes::Node,
     shares::decode_import_listing,
@@ -184,14 +183,4 @@ pub fn import(
         "INFO",
         &format!("Imported {} node(s).", outcome.completed.len()),
     )
-}
-
-pub fn mutation(
-    context: &mut Context,
-    auth: &AccountOptions,
-    action: impl FnOnce(&mut Cloud) -> Result<()>,
-) -> Result<()> {
-    let (mut cloud, _) = context.cloud(auth)?;
-    action(&mut cloud)?;
-    context.output.message("INFO", "Cloud operation completed.")
 }

@@ -150,7 +150,7 @@ pub fn decode_login_response(
     if encrypted_master.len() != 16 {
         return Err(Error::protocol("Login master key has an invalid width"));
     }
-    let master = Zeroizing::new(wire::aes_key_wrap_decrypt(&encrypted_master, &login_key)?);
+    let master = Zeroizing::new(wire::aes_key_wrap_decrypt(&encrypted_master, login_key)?);
     let master_key: [u8; 16] = master
         .as_slice()
         .try_into()
@@ -176,9 +176,9 @@ pub fn decode_login_response(
             (sid.to_owned(), None)
         }
         None => {
-            let private = wire::b64_url_decode(string(&result, "privk")?)?;
+            let private = wire::b64_url_decode(string(result, "privk")?)?;
             let decrypted = Zeroizing::new(wire::aes_key_wrap_decrypt(&private, &master_key)?);
-            let csid = wire::b64_url_decode(string(&result, "csid")?)?;
+            let csid = wire::b64_url_decode(string(result, "csid")?)?;
             let sid = keys::decode_session_id(&csid, &decrypted)?;
             (sid, Some(decrypted.to_vec()))
         }

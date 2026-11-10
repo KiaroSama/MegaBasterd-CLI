@@ -22,10 +22,7 @@ pub(super) fn require_eof(
                 std::io::ErrorKind::UnexpectedEof
                     | std::io::ErrorKind::ConnectionReset
                     | std::io::ErrorKind::ConnectionAborted
-            ) =>
-        {
-            ()
-        }
+            ) => {}
         other => panic!("upload retry retained a response connection: {other:?}"),
     }
 }

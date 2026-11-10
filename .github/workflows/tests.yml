@@ -1,59 +1,24 @@
-name: Tests
-
-on:
-  workflow_dispatch:
-
+name: Coverage
+on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
-
 jobs:
-  test:
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-        python-version: ["3.10", "3.11", "3.12"]
-
+  coverage:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    env:
+      HOOKMAKER_MAX_TEST_WORKERS: 2
+      CARGO_BUILD_JOBS: 2
+      MEGABASTERD_USER_DIR: ${{ github.workspace }}/.ci-work/runtime space/User
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - run: rustup toolchain install 1.99.1 --profile minimal --component llvm-tools-preview --no-self-update
+      - run: cargo install cargo-llvm-cov --locked
+      - run: cargo xtask media
+      - name: Preserve the 76 percent coverage gate
+        run: cargo llvm-cov --locked --workspace --all-targets --ignore-filename-regex 'xtask/|tests/|_tests.rs' --fail-under-lines 76 --lcov --output-path lcov.info -- --test-threads=2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
         with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-
-
-      - name: Run tests
-        # -n auto comes from addopts in pyproject.toml, so a local run and this
-        # job fan out the same way. Coverage is currently ~78%; the gate is 76.
-        run: pytest --cov=megabasterd_cli --cov-report=xml --cov-fail-under=76
-
-      - name: Smoke-test script launcher
-        shell: pwsh
-        run: ./Run.ps1 --help
-
-      # Windows PowerShell 5.1 is a different host, not an older pwsh: with
-      # $ErrorActionPreference = "Stop" it turns a child's redirected stderr
-      # into a TERMINATING error, which pwsh 7 does not. Two launcher bugs
-      # lived only on this host and stayed invisible behind a fully green
-      # matrix, because every job above runs pwsh. It is also the host a
-      # double-clicked .ps1 gets on a stock Windows box.
-      - name: Smoke-test script launcher (Windows PowerShell 5.1)
-        if: matrix.os == 'windows-latest'
-        shell: powershell
-        run: ./Run.ps1 --help
-
-      - name: Upload coverage
-        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
-        uses: codecov/codecov-action@v7
-        with:
-          file: ./coverage.xml
-          fail_ci_if_error: false
+          name: rust-coverage
+          path: lcov.info

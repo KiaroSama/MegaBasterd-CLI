@@ -101,8 +101,8 @@ fn native_docs_do_not_claim_old_toolchain_or_unexecuted_platform_success() {
         }
     }
     let readme = include_str!("../README.md");
-    assert!(readme.contains("Migration candidate, not a verified release"));
-    assert!(readme.contains("Compilation, native CI"));
+    assert!(readme.contains("CI builds Linux x64, Windows x64, macOS Intel"));
+    assert!(readme.contains("1,416 baseline test"));
     assert!(readme.contains("User/native-v2/"));
     assert!(readme.contains("collision suffixes"));
     assert!(readme.contains("[LEVEL] [COMPONENT]"));

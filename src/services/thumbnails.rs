@@ -77,7 +77,7 @@ fn thumbnail_dimensions(width: u32, height: u32) -> (u32, u32) {
     let aspect = f64::from(width) / f64::from(height);
     let choose = |value: f64, width_axis: bool| {
         let (floor, ceil) = (value.floor().max(1.0), value.ceil().max(1.0));
-        let error = |n| {
+        let error = |n: f64| {
             if width_axis {
                 (aspect - n / f64::from(THUMB_SIZE)).abs()
             } else {

@@ -54,10 +54,7 @@ fn all_link_services_bound_identity_and_gzip_bodies_and_close_before_returning()
                                 std::io::ErrorKind::UnexpectedEof
                                     | std::io::ErrorKind::ConnectionReset
                                     | std::io::ErrorKind::ConnectionAborted
-                            ) =>
-                        {
-                            ()
-                        }
+                            ) => {}
                         other => panic!("oversized service body left its socket open: {other:?}"),
                     }
                     closed.send(()).unwrap();

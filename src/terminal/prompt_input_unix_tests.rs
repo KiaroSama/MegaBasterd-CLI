@@ -106,10 +106,7 @@ fn write_input(
                     if matches!(
                         error.kind(),
                         io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
-                    ) =>
-                {
-                    ()
-                }
+                    ) => {}
                 Err(error) => return Err(error),
             }
         }

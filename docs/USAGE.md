@@ -1,9 +1,7 @@
 # Native Usage Guide
 
-The Rust implementation is an uncompiled migration candidate. The commands below
-are the intended native interface; they are not a claim of a published binary,
-passing platform tests or completed installation. See the [installation status](../README.md#installation).
-The retained `Run.ps1` continues to launch the previous application until cutover.
+Install a native binary or build from source using the [README](../README.md#installation).
+All examples use `mb`; `mbcli` and `megabasterd-cli` are equivalent aliases.
 
 ## Interactive menu
 
@@ -31,7 +29,7 @@ menu or transfer keyboard listener. Hidden answers are bounded to 64 KiB of UTF-
 Unix visible prompts retain the terminal's cooked editing and refuse answers at
 its reported safe line capacity instead of accepting possible kernel truncation;
 pass long values as CLI arguments. Menu and terminal behavior are still awaiting
-native/PTY verification, just like the rest of this migration candidate.
+native/PTY tests on the supported platforms.
 
 ## Start with public metadata
 
@@ -382,10 +380,10 @@ JSON object; human diagnostics go to stderr.
 | 2 | Invalid arguments/input. |
 | 130 | Cancellation. |
 
-## Current verification limits
+## Validation scope
 
-Native compile/Clippy/tests, full source-contract reconciliation, real account
-operations, signed packaging and practical cutover remain pending. Small real
-PNG/MP4/WebM fixtures and bounded local TLS tests are checked into the candidate;
-their presence is not an execution result. Do not remove the working old runtime
-until the replacement and rollback have been practically validated.
+CI uses synthetic accounts and bounded local TLS peers, independent cryptographic
+vectors, real small media files and filesystem/process fixtures. It does not use
+personal MEGA accounts or publish signed binaries. Review the native CI results
+for the exact commit you install. Existing Python-era user data remains untouched;
+see [migration notes](MIGRATION.md) before changing installations.

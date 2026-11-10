@@ -12,7 +12,7 @@ fn chunk_sync_failure_never_publishes_coverage_and_success_syncs_before_the_eigh
     for failure in [
         Some(std::io::ErrorKind::PermissionDenied),
         Some(std::io::ErrorKind::StorageFull),
-        Some(std::io::ErrorKind::InputOutputError),
+        Some(std::io::ErrorKind::Other),
         None,
     ] {
         let scratch = tempfile::tempdir_in(&base).unwrap();

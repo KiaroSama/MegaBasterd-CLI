@@ -92,10 +92,7 @@ fn challenged_request(through_proxy: bool, timestamped: bool, action: &str, inte
                     io::ErrorKind::UnexpectedEof
                         | io::ErrorKind::ConnectionReset
                         | io::ErrorKind::ConnectionAborted
-                ) =>
-            {
-                ()
-            }
+                ) => {}
             other => panic!("Hashcash response retained its connection: {other:?}"),
         }
         closed.send(()).unwrap();

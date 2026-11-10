@@ -22,12 +22,11 @@ Include:
 
 | Version | Supported |
 | --- | --- |
-| 1.0.x (retained Python implementation) | Yes, while it remains the working version before verified cutover |
-| 2.0.0 Rust migration candidate | Not a verified release; compilation, native platform validation and signed release verification are pending |
+| 1.x historical Python implementation | Superseded by the native rewrite |
+| 2.x Rust | Current development branch; report the exact commit and platform |
 
 Identify which implementation, OS/architecture and exact source commit a report
-concerns. Do not infer native security assurance from tests of the retained
-implementation.
+concerns. Do not infer native security assurance from tests of an older implementation.
 
 ## Scope
 

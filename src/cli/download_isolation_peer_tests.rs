@@ -53,10 +53,7 @@ fn reply_and_require_eof(
                 std::io::ErrorKind::UnexpectedEof
                     | std::io::ErrorKind::ConnectionReset
                     | std::io::ErrorKind::ConnectionAborted
-            ) =>
-        {
-            ()
-        }
+            ) => {}
         other => panic!("download response remained open: {other:?}"),
     }
 }

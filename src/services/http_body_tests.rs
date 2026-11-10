@@ -204,8 +204,7 @@ fn real_body_writer_preserves_offsets_and_releases_on_idle_deadline_and_cancella
             });
             if reading {
                 let mut actual = Vec::new();
-                client
-                    .by_ref()
+                std::io::Read::by_ref(&mut client)
                     .take(expected.len() as u64 + 1)
                     .read_to_end(&mut actual)
                     .unwrap();
@@ -239,8 +238,7 @@ fn real_body_writer_preserves_offsets_and_releases_on_idle_deadline_and_cancella
                         );
                     }
                 }
-                client
-                    .by_ref()
+                std::io::Read::by_ref(&mut client)
                     .take(expected.len() as u64 + 1)
                     .read_to_end(&mut actual)
                     .unwrap();

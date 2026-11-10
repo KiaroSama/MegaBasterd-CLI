@@ -182,7 +182,7 @@ fn unix_private_create_keeps_exclusive_nofollow_flags_and_verifies_before_return
     assert!(open.contains("if create_new {\n                    libc::O_CREAT | libc::O_EXCL"));
     assert!(open.contains("let file = open_at(self.leaf()?, &component(name)?, flags, 0o600)?;"));
     assert!(open.contains("if create_new {\n                    LeafPolicy::Private"));
-    assert!(open.find("verify(\n            &file,").unwrap() < open.find("Ok(file)").unwrap());
+    assert!(open.find("verify(\n                &file,").unwrap() < open.find("Ok(file)").unwrap());
     for forbidden in [
         "O_TRUNC",
         "O_APPEND",

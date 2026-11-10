@@ -161,10 +161,7 @@ fn each_link_service_refuses_error_status_without_credit_and_closes_the_unread_r
                             std::io::ErrorKind::UnexpectedEof
                                 | std::io::ErrorKind::ConnectionReset
                                 | std::io::ErrorKind::ConnectionAborted
-                        ) =>
-                    {
-                        ()
-                    }
+                        ) => {}
                     other => panic!("failed service response was not closed: {other:?}"),
                 }
             },
@@ -212,10 +209,7 @@ fn failed_service_send_blames_the_selected_proxy_without_direct_fallback_or_cred
                                     std::io::ErrorKind::UnexpectedEof
                                         | std::io::ErrorKind::ConnectionReset
                                         | std::io::ErrorKind::ConnectionAborted
-                                ) =>
-                            {
-                                ()
-                            }
+                                ) => {}
                             other => panic!("timed-out service socket remained open: {other:?}"),
                         }
                         closed.send(()).unwrap();
@@ -297,10 +291,7 @@ fn service_redirects_reselect_a_forced_proxy_and_close_each_hop_before_local_dec
                         std::io::ErrorKind::UnexpectedEof
                             | std::io::ErrorKind::ConnectionReset
                             | std::io::ErrorKind::ConnectionAborted
-                    ) =>
-                {
-                    ()
-                }
+                    ) => {}
                 other => panic!("service hop response was not closed: {other:?}"),
             }
             hop += 1;
@@ -351,10 +342,7 @@ fn redirect_rechecks_force_policy_after_the_only_proxy_enters_cooldown() {
                         std::io::ErrorKind::UnexpectedEof
                             | std::io::ErrorKind::ConnectionReset
                             | std::io::ErrorKind::ConnectionAborted
-                    ) =>
-                {
-                    ()
-                }
+                    ) => {}
                 other => panic!("redirect refusal left its first response open: {other:?}"),
             }
         },

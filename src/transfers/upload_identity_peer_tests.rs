@@ -150,7 +150,11 @@ fn empty_source_path_changes_are_rejected_or_prevented_by_the_native_held_handle
                     }
                     "p" => {
                         registrations += 1;
-                        assert!(cfg!(windows), "changed Unix source reached registration");
+
+                        assert!(
+                            std::env::consts::OS.starts_with("windows"),
+                            "changed Unix source reached registration"
+                        );
                         assert_eq!(registrations, 1);
                         assert_eq!(value["t"], "target");
                         let node = &value["n"][0];

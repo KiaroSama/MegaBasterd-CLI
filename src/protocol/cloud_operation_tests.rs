@@ -228,7 +228,7 @@ fn ambiguous_mutation_stops_both_operations_without_replay_or_later_sibling() {
         let mut mutations = 0;
         let mut remote = trash_listing();
         let calls = with_peer(
-            |_, command| {
+            move |_, command| {
                 if command["a"] == "f" {
                     return Some(remote.clone());
                 }
@@ -282,7 +282,7 @@ fn cancellation_while_a_mutation_reply_arrives_stops_both_operations_without_rep
         let tree = source_tree();
         let (cancel, receiver) = mpsc::sync_channel::<crate::transfers::control::Control>(1);
         let calls = with_peer(
-            |_, command| {
+            move |_, command| {
                 if command["a"] == "f" {
                     return Some(trash_listing());
                 }

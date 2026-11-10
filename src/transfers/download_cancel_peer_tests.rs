@@ -28,10 +28,7 @@ fn pending_download_body_cancellation_never_commits_plaintext_or_retries() {
                             std::io::ErrorKind::UnexpectedEof
                                 | std::io::ErrorKind::ConnectionReset
                                 | std::io::ErrorKind::ConnectionAborted
-                        ) =>
-                    {
-                        ()
-                    }
+                        ) => {}
                     other => panic!("canceled download left its pending body open: {other:?}"),
                 }
                 closed.send(()).unwrap();

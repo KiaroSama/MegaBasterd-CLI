@@ -125,17 +125,16 @@ pub fn validate_response(
         return Err(Error::invalid("Requested range is outside the file"));
     }
     if status == 200 && range.start == 0 && range.end == size - 1 {
-        if let Some(declared) = headers.get(reqwest::header::CONTENT_LENGTH) {
-            if declared
+        if let Some(declared) = headers.get(reqwest::header::CONTENT_LENGTH)
+            && declared
                 .to_str()
                 .ok()
                 .and_then(|value| value.parse::<u64>().ok())
                 != Some(length)
-            {
-                return Err(Error::protocol(
-                    "Full CDN response Content-Length differs from requested size",
-                ));
-            }
+        {
+            return Err(Error::protocol(
+                "Full CDN response Content-Length differs from requested size",
+            ));
         }
         return Ok(());
     }

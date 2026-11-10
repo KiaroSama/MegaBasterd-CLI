@@ -1,10 +1,8 @@
 # Native Command Reference
 
-This reference describes the Rust migration candidate, not a verified release.
-Use a verified native binary named `mb`, `mbcli` or `megabasterd-cli`; the retained
-`Run.ps1` still launches the previous application until the gated replacement.
-The [README](../README.md#all-commands) lists all 55 leaf commands directly.
-Native schema, parser, runtime and platform tests remain pending execution.
+The native commands are `mb`, `mbcli` and `megabasterd-cli`. They share one Rust
+dispatcher. The [README](../README.md#all-commands) lists all 55 leaf commands;
+append `--help` to a command for executable usage.
 
 ## Root options and shared authentication
 
@@ -102,7 +100,7 @@ attribute, public-share error or post-transfer hook error is reported separately
 and does not turn already uploaded file bytes into a failed upload. JSON upload
 results include `thumbnail.status` (`attached`, `not_applicable`, or `failed`),
 with a separate warning/error code where applicable. Native integration proof
-for these paths remains pending.
+for these paths runs in CI.
 
 ## Streaming and public metadata
 
@@ -193,7 +191,7 @@ Logout and remove are different operations, not aliases.
 Queue payloads are encrypted. Atomic claim/generation checks prevent stale
 owners from finishing another owner's job. Unknown remote mutation remains
 active for reconciliation rather than automatically retrying it. Corrupt/future
-stores are not silently replaced. Native cross-process verification is pending.
+stores are not silently replaced. Native process tests cover this behavior.
 
 ## Proxies
 
@@ -259,4 +257,4 @@ is installed; Ctrl+C ends the command. A usable platform clipboard is required.
 
 See [CONFIG.md](CONFIG.md) for defaults, storage envelopes, secret fields and
 log retention. Exit codes: 0 success/skip, 1 operation failure, 2 usage error,
-130 cancellation. An unexecuted candidate test is not a passing command contract.
+130 cancellation. CI records executed command contracts.

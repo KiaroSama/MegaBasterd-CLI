@@ -40,10 +40,10 @@ pub fn completion_token(body: &[u8], final_chunk: bool) -> Result<Option<String>
     }
     let token = std::str::from_utf8(body)
         .map_err(|_| Error::protocol("Upload completion token is not ASCII"))?;
-    if let Ok(code) = token.parse::<i64>() {
-        if code < 0 {
-            return Err(Error::mega(code));
-        }
+    if let Ok(code) = token.parse::<i64>()
+        && code < 0
+    {
+        return Err(Error::mega(code));
     }
     validate_token(token)?;
     Ok(Some(token.to_owned()))

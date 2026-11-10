@@ -142,10 +142,7 @@ fn unfinished_and_dribbling_headers_expire_the_total_deadline_without_cancellati
                     if matches!(
                         error.kind(),
                         std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
-                    ) =>
-                {
-                    ()
-                }
+                    ) => {}
                 result => panic!("expired header connection stayed open: {result:?}"),
             }
             drop(shutdown);

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use megabasterd_cli::transfers::control::Control;
 use std::time::Duration;
 

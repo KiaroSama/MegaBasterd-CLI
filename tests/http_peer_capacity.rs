@@ -221,10 +221,7 @@ fn open_refused_peers_do_not_block_acceptance_of_a_different_address() {
                         std::io::ErrorKind::ConnectionReset
                             | std::io::ErrorKind::ConnectionAborted
                             | std::io::ErrorKind::BrokenPipe
-                    ) =>
-                {
-                    ()
-                }
+                    ) => {}
                 Err(error) => panic!("refusal fixture request failed: {error}"),
             }
             rejected.push(socket);

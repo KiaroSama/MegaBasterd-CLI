@@ -192,7 +192,10 @@ fn native_execution_lock_blocks_recovery_and_expired_generation_cannot_write() {
         assert!(queue.remove(&id).is_err());
         assert!(queue.reset().is_err());
         drop(claim);
-        assert_eq!(other.recover_interrupted().unwrap(), [id.clone()]);
+        assert_eq!(
+            other.recover_interrupted().unwrap(),
+            std::slice::from_ref(&id)
+        );
         let recovered = other.list().unwrap().remove(0);
         assert_eq!(recovered.status, JobStatus::Interrupted);
         assert!(recovered.run_id.is_none() && recovered.heartbeat_iso.is_none());
@@ -302,7 +305,10 @@ fn expired_crashed_job_is_runnable_again_but_a_failed_sibling_requires_explicit_
     locked.save(&data).unwrap();
     drop(locked);
     let fresh = Queue::new(queue.path());
-    assert_eq!(fresh.recover_interrupted().unwrap(), [second.clone()]);
+    assert_eq!(
+        fresh.recover_interrupted().unwrap(),
+        std::slice::from_ref(&second)
+    );
     let items = fresh.list().unwrap();
     assert_eq!(items[0].id, first);
     assert_eq!(items[0].status, JobStatus::Failed);

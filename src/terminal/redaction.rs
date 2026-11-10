@@ -60,7 +60,7 @@ fn patterns() -> Option<&'static Patterns> {
                 r"(?i)(--(?:share-password|elc-api-key|passwords?|passphrases?|api[ _-]?keys?|access[ _-]?tokens?|",
                 r"auth[ _-]?tokens?|bearer[ _-]?tokens?|tokens?|sids?|session[ _-]?ids?|",
                 r"mfa(?:[ _-]?codes?)?|otps?|2fa(?:[ _-]?codes?)?|",
-                r"vault[ _-]?(?:passphrases?|secrets?)|secrets?))",
+                r"vault[ _-]?(?:passphrases?|secrets?)|secrets?)|-p)",
                 r#"(\s*=\s*|\s+)(\"[^\"]*\"|'[^']*'|[^\s\"'&]+)"#,
             )).ok()?,
             code: Regex::new(r"(?i)\b((?:mfa|otp|2fa)(?:[ _-]?code)?)\s+(\d{4,12})\b").ok()?,

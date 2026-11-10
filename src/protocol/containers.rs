@@ -86,7 +86,7 @@ fn cbc_decrypt(data: &[u8], key: &[u8], iv: &[u8], pkcs7: bool) -> Result<Zeroiz
         32 => Cipher::A256(Aes256::new_from_slice(key).map_err(|_| bad())?),
         _ => return Err(bad()),
     };
-    for input in data.chunks_exact(16) {
+    for input in data.as_chunks::<16>().0 {
         let mut block = Array::from([0; 16]);
         block.copy_from_slice(input);
         match &cipher {
@@ -115,7 +115,8 @@ fn cbc_decrypt(data: &[u8], key: &[u8], iv: &[u8], pkcs7: bool) -> Result<Zeroiz
         {
             return Err(Error::integrity("Invalid encrypted-container padding"));
         }
-        plain.truncate(plain.len() - padding);
+        let length = plain.len() - padding;
+        plain.truncate(length);
     }
     Ok(plain)
 }
@@ -260,8 +261,8 @@ pub fn decode_elc_payload(parsed: &ParsedLink) -> Result<ElcPayload> {
     let (&marker, payload) = raw
         .split_first()
         .ok_or_else(|| Error::invalid("Empty ELC envelope"))?;
-    let inflated;
-    if marker == 0x70 {
+
+    let inflated = if marker == 0x70 {
         if payload.len() > MAX_ELC_COMPRESSED_BYTES {
             return Err(Error::invalid("Compressed ELC envelope exceeds 1 MiB"));
         }
@@ -275,12 +276,12 @@ pub fn decode_elc_payload(parsed: &ParsedLink) -> Result<ElcPayload> {
         if bytes.len() > MAX_ELC_DECOMPRESSED_BYTES {
             return Err(Error::invalid("ELC envelope expands beyond 8 MiB"));
         }
-        inflated = bytes;
+        bytes
     } else if marker == 0xb9 {
-        inflated = payload.to_vec();
+        payload.to_vec()
     } else {
         return Err(Error::invalid("Bad ELC marker"));
-    }
+    };
     if inflated.len() > MAX_ELC_DECOMPRESSED_BYTES {
         return Err(Error::invalid("ELC envelope exceeds 8 MiB"));
     }
@@ -453,7 +454,7 @@ pub fn decrypt_megacrypter_info(body: &Value, password: Option<&str>) -> Result<
         field(&mut raw, "key", &*key, &iv, true)?;
         field(&mut raw, "name", &*key, &iv, false)?;
         field(&mut raw, "path", &*key, &iv, false)?;
-        pass_hash = Some(STANDARD.encode(&*key));
+        pass_hash = Some(STANDARD.encode(*key));
     }
     let name = string(&raw, "name")
         .map(|name| format!("{}{name}", string(&raw, "path").unwrap_or_default()));

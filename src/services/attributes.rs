@@ -36,7 +36,30 @@ pub fn encrypt_thumbnail(jpeg: &[u8], raw_key: &[u8]) -> Result<Vec<u8>> {
 }
 
 pub fn upload_ticket(size: usize) -> Value {
-    json!({"a":"ufa","s":size,"ssl":2})
+    // Upstream 3bb42c7: let MEGA choose its attribute storage endpoint.
+    json!({"a":"ufa","s":size})
+}
+
+fn retry_upload<T>(
+    control: &Control,
+    mut upload: impl FnMut() -> Result<T>,
+    mut wait: impl FnMut(std::time::Duration) -> Result<()>,
+) -> Result<T> {
+    for attempt in 0..5 {
+        control.checkpoint()?;
+        match upload() {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if attempt < 4
+                    && (error.retryable_network()
+                        || matches!(error, Error::Mega { code: -3 | -4, .. })) =>
+            {
+                wait(std::time::Duration::from_secs(1 << attempt))?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(Error::protocol("Thumbnail retry budget exhausted"))
 }
 
 pub fn attachment(node: &str, handle: &[u8]) -> Result<Value> {
@@ -105,21 +128,41 @@ pub fn attach(
     let ticket = cloud.api.request(upload_ticket(ciphertext.len()), &[])?;
     let endpoint = Url::parse(string(&ticket, "p")?)
         .map_err(|_| Error::protocol("Thumbnail upload URL is invalid"))?;
-    let mut reply = cloud.api.transport.send(
-        Method::POST,
-        endpoint,
-        HeaderMap::new(),
-        Some(ciphertext),
-        false,
+    let handle = retry_upload(
+        control,
+        || {
+            let mut reply = cloud.api.transport.send(
+                Method::POST,
+                endpoint.clone(),
+                HeaderMap::new(),
+                Some(ciphertext.clone()),
+                false,
+            )?;
+            let status = reply.response.status();
+            if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                return Err(Error::mega(
+                    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                        -4
+                    } else {
+                        -3
+                    },
+                ));
+            }
+            if !status.is_success() {
+                return Err(Error::protocol(
+                    "Thumbnail upload returned an unsuccessful HTTP status",
+                ));
+            }
+            let handle = reply.bytes(8)?;
+            if handle.len() != 8 {
+                return Err(Error::protocol("Thumbnail handle must contain eight bytes"));
+            }
+            reply.credit()?;
+            Ok(handle)
+        },
+        |delay| control.wait(delay),
     )?;
-    if !reply.response.status().is_success() {
-        return Err(Error::protocol(
-            "Thumbnail upload returned an unsuccessful HTTP status",
-        ));
-    }
-    let handle = reply.bytes(8)?;
     let command = attachment(node, &handle)?;
-    reply.credit()?;
     control.checkpoint()?;
     cloud.api.request(command, &[])?;
     cloud.invalidate();
