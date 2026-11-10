@@ -53,6 +53,39 @@ const MAX_HEADERS: usize = 16 * 1024;
 const MAX_BODY: usize = 2 * 1024 * 1024;
 const MAX_REQUESTS: usize = 32;
 
+/// Client connect completion can precede BSD listener readiness.
+pub(crate) fn accept_ready(
+    listener: &TcpListener,
+    budget: Duration,
+) -> io::Result<(TcpStream, SocketAddr)> {
+    listener.set_nonblocking(true)?;
+    let deadline = Instant::now() + budget;
+    loop {
+        match listener.accept() {
+            Ok((socket, address)) => {
+                socket.set_nonblocking(false)?;
+                return Ok((socket, address));
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) =>
+            {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "test peer accept deadline",
+                    ));
+                }
+                std::thread::sleep(remaining.min(Duration::from_millis(1)));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Request {
     pub method: String,
