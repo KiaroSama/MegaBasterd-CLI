@@ -182,7 +182,11 @@ mod tests {
         assert_eq!(fixture["python"], "3.11.9");
         assert_eq!(fixture["unicode"], "14.0.0");
         assert_eq!(fixture["fold_mappings"], 1530);
-        let table = include_str!("unicode_fold.rs").replace("\r\n", "\n");
+        // Clippy stores this large immutable array as static; pin the original
+        // generated table bytes independently of its Rust storage qualifier.
+        let table = include_str!("unicode_fold.rs")
+            .replace("\r\n", "\n")
+            .replacen("static FOLD:", "const FOLD:", 1);
         assert_eq!(
             hex::encode(Sha256::digest(table.as_bytes())),
             fixture["fold_table_sha256"]

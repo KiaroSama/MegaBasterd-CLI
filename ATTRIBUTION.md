@@ -58,3 +58,8 @@ commit, hashes and complete notice are retained beside the files. The test-only
 TLS certificates/key in `tests/fixtures/proxy_tls/` come from rustls under MIT;
 their notice and provenance are retained there. They are public synthetic test
 material, never production credentials, trusted roots, or signing inputs.
+
+Some registry archives omit the project-root license text. Supplemental copies
+under `licenses/third-party/` are tied to the published crate's VCS commit;
+`provenance.json` records source URLs and hashes. The native packager preserves
+these alongside registry notices, AUTHORS files and a package-associated index.

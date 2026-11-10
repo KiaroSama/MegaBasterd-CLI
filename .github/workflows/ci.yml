@@ -2,6 +2,7 @@ name: Rust CI
 
 on:
   push:
+    branches: [main, develop]
   pull_request:
   workflow_dispatch:
   workflow_call:
@@ -41,6 +42,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Restore native Cargo cache
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: native-${{ matrix.target }}-1.99.1-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: native-${{ matrix.target }}-1.99.1-${{ hashFiles('Cargo.lock') }}-
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy --no-self-update
       - name: Check actual native architecture
@@ -55,6 +66,15 @@ jobs:
         run: cargo xtask verify
       - name: Package binaries, source and checksums
         run: cargo xtask package
+      - name: Save native Cargo cache
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: native-${{ matrix.target }}-1.99.1-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
       - name: Upload native build
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
