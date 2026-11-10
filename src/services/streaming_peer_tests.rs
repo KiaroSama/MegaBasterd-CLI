@@ -114,7 +114,21 @@ fn local_raw_outcome(
     let address = server.address().unwrap();
     let mut socket = TcpStream::connect_timeout(&address, Duration::from_secs(3)).unwrap();
     server.listener.set_nonblocking(true).unwrap();
-    let (mut accepted, _) = server.listener.accept().unwrap();
+    // A successful client connect can precede accept readiness on BSD kernels.
+    // Await that readiness within the same bounded local connection budget.
+    let accept_deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let (mut accepted, _) = loop {
+        match server.listener.accept() {
+            Ok(accepted) => break accepted,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    && std::time::Instant::now() < accept_deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => panic!("local stream accept failed: {error}"),
+        }
+    };
     accepted.set_nonblocking(false).unwrap();
     accepted
         .set_write_timeout(Some(Duration::from_secs(5)))
