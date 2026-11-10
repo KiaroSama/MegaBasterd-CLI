@@ -47,6 +47,9 @@ fn state_entry_points_refuse_a_held_writer_and_clear_only_after_release() {
             );
         }
         drop(owner);
+        // Keep the held-writer checks above nonblocking. After release, allow
+        // bounded native descriptor teardown instead of racing a zero budget.
+        let states = States(Store::new(&path).with_timeout(Duration::from_secs(1)));
         if matches!(mode, "corrupt" | "future") {
             assert!(matches!(states.clear(), Err(Error::Corrupt(_))));
             assert_eq!(fs::read(&path).ok(), before);

@@ -48,7 +48,9 @@ fn listener() -> (TcpListener, SocketAddr, SocketAddr) {
         socket.bind("[::]:0".parse().unwrap()).unwrap();
         let listener = {
             let _entered = runtime.enter();
-            socket.listen(8).unwrap().into_std().unwrap()
+            // Match std's ordinary listener backlog. The 30-client burst must
+            // not measure Darwin SYN retransmission after an eight-slot overflow.
+            socket.listen(128).unwrap().into_std().unwrap()
         };
         let port = listener.local_addr().unwrap().port();
         (
@@ -60,8 +62,26 @@ fn listener() -> (TcpListener, SocketAddr, SocketAddr) {
 }
 
 fn client(address: SocketAddr, other: bool) -> TcpStream {
-    // Reuse the fixture reactor: repeatedly creating/dropping kqueue reactors
-    // otherwise adds macOS teardown time to the accept-loop latency assertion.
+    #[cfg(target_os = "macos")]
+    let stream = {
+        let _ = other; // Distinct IPv4/IPv6 destinations supply the two Darwin peers.
+        TcpStream::connect_timeout(&address, Duration::from_secs(2)).unwrap()
+    };
+    #[cfg(not(target_os = "macos"))]
+    let stream = bound_client(address, other);
+    stream.set_nonblocking(false).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    stream
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    stream
+}
+
+#[cfg(not(target_os = "macos"))]
+fn bound_client(address: SocketAddr, other: bool) -> TcpStream {
+    // Reuse one reactor for source-bound fixture connections.
     thread_local! {
         static RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -73,16 +93,13 @@ fn client(address: SocketAddr, other: bool) -> TcpStream {
     } else {
         tokio::net::TcpSocket::new_v4().unwrap()
     };
-    #[cfg(not(target_os = "macos"))]
     socket
         .bind(SocketAddr::from((
             [127, 0, 0, if other { 2 } else { 1 }],
             0,
         )))
         .unwrap();
-    #[cfg(target_os = "macos")]
-    let _ = other;
-    let stream = RUNTIME.with(|runtime| {
+    RUNTIME.with(|runtime| {
         runtime.block_on(async {
             tokio::time::timeout(Duration::from_secs(2), socket.connect(address))
                 .await
@@ -91,15 +108,7 @@ fn client(address: SocketAddr, other: bool) -> TcpStream {
                 .into_std()
                 .unwrap()
         })
-    });
-    stream.set_nonblocking(false).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
-    stream
-        .set_write_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
-    stream
+    })
 }
 
 fn status(address: SocketAddr, other: bool) -> u16 {
@@ -232,10 +241,12 @@ fn open_refused_peers_do_not_block_acceptance_of_a_different_address() {
             }
             rejected.push(socket);
         }
+        let setup = started.elapsed();
         assert_eq!(status(other, true), 200);
         assert!(
             started.elapsed() < Duration::from_secs(2),
-            "refused clients serialized the accept loop"
+            "refused clients serialized the accept loop: burst {setup:?}, total {:?}",
+            started.elapsed()
         );
         control.cancel();
         done.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
