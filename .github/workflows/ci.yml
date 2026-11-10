@@ -51,7 +51,9 @@ jobs:
             ~/.cargo/git
             target
           key: native-${{ matrix.target }}-1.99.1-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
-          restore-keys: native-${{ matrix.target }}-1.99.1-${{ hashFiles('Cargo.lock') }}-
+          restore-keys: |
+            native-${{ matrix.target }}-1.99.1-${{ hashFiles('Cargo.lock') }}-
+            native-${{ matrix.target }}-1.99.1-
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy --no-self-update
       - name: Check actual native architecture
