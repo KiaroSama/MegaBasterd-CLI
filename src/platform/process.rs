@@ -166,7 +166,14 @@ pub fn run_command(
             failure = Some(Error::Timeout);
             break;
         }
-        match child.0.try_wait() {
+        // process-wrap 10's Windows JobObject::try_wait consumes completion
+        // packets without caching the job status. Preserve those packets for
+        // the final wrapped wait, or cleanup can wait forever after child exit.
+        #[cfg(windows)]
+        let polled = child.0.inner_mut().try_wait();
+        #[cfg(not(windows))]
+        let polled = child.0.try_wait();
+        match polled {
             Ok(Some(exited)) => status = Some(exited),
             Ok(None) => (),
             Err(error) => {

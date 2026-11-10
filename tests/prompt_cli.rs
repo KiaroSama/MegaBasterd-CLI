@@ -214,12 +214,19 @@ fn actual_binary_destructive_declines_and_closed_input_explain_skip_without_muta
         }
         cases.push((args, 130));
     }
-    for (args, code) in cases {
+    for (case, (args, code)) in cases.into_iter().enumerate() {
         let mut inputs = vec![b"n\n".as_slice(), b"".as_slice()];
         if args == arguments(&["queue", "reset"]) {
             inputs.push(b"\n".as_slice());
         }
         for input in inputs {
+            use std::io::Write;
+            writeln!(
+                std::io::stdout(),
+                "Destructive prompt case {case}, input bytes: {}",
+                input.len()
+            )
+            .unwrap();
             let output = fixture.run(&args, input);
             assert_eq!(output.status.code(), Some(code));
             assert!(output.stdout.is_empty());

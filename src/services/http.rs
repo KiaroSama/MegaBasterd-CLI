@@ -233,7 +233,10 @@ pub(super) fn write_body(
         if remaining.is_zero() {
             return Err(Error::Timeout);
         }
-        match writer.write(bytes) {
+        // Winsock may accept an entire large send despite a small SO_SNDBUF.
+        // Bound each call so queued input stays small between control checks.
+        let block = &bytes[..bytes.len().min(64 * 1024)];
+        match writer.write(block) {
             Ok(0) => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::WriteZero,
