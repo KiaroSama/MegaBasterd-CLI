@@ -65,6 +65,14 @@ fn same_mode(expected: &libc::termios, actual: &libc::termios) {
     assert_eq!(expected.c_iflag, actual.c_iflag);
     assert_eq!(expected.c_oflag, actual.c_oflag);
     assert_eq!(expected.c_cflag, actual.c_cflag);
+    // Darwin marks input for reprocessing when canonical mode is restored.
+    // PENDIN is kernel input state; all actual line settings must still match.
+    #[cfg(target_os = "macos")]
+    assert_eq!(
+        expected.c_lflag & !libc::PENDIN,
+        actual.c_lflag & !libc::PENDIN
+    );
+    #[cfg(not(target_os = "macos"))]
     assert_eq!(expected.c_lflag, actual.c_lflag);
     assert_eq!(expected.c_cc, actual.c_cc);
     // SAFETY: both termios values were initialized by tcgetattr.
