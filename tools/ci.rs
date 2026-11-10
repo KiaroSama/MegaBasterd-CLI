@@ -95,13 +95,13 @@ fn ledger() -> Result<Value> {
                 {
                     return Err("Invalid parity target path".into());
                 }
-                let content = fs::read(root().join(path))?;
-                let digest = hex::encode(Sha256::digest(&content));
+                let content = fs::read_to_string(root().join(path))?.replace("\r\n", "\n");
+                let digest = hex::encode(Sha256::digest(content.as_bytes()));
                 if target["source_sha256"] != digest {
                     return Err(format!("Review parity mapping after changing {path}").into());
                 }
                 let name = target["test"].as_str().ok_or("Missing target name")?;
-                if !String::from_utf8(content)?.contains(&format!("fn {name}(")) {
+                if !content.contains(&format!("fn {name}(")) {
                     return Err(format!("Missing mapped test {path}::{name}").into());
                 }
             }
@@ -311,9 +311,17 @@ fn package() -> Result<()> {
                 .unwrap()
                 .to_string_lossy()
                 .to_ascii_lowercase();
-            if ["license", "licence", "copying", "notice", "copyright"]
-                .iter()
-                .any(|prefix| filename.starts_with(prefix))
+            if [
+                "license",
+                "licence",
+                "copying",
+                "notice",
+                "copyright",
+                "authors",
+                "unlicense",
+            ]
+            .iter()
+            .any(|prefix| filename.starts_with(prefix))
             {
                 notice_files(directory, &path, &notices.join(&name), &mut files)?;
             }
@@ -327,6 +335,12 @@ fn package() -> Result<()> {
         files.sort_by_key(|value| value["path"].as_str().unwrap_or_default().to_owned());
         files.dedup();
         if files.is_empty() {
+            let supplements = root().join("licenses/third-party").join(&name);
+            if supplements.is_dir() {
+                notice_files(&supplements, &supplements, &notices.join(&name), &mut files)?;
+            }
+        }
+        if files.is_empty() {
             return Err(format!("Dependency {name} has no packaged license text").into());
         }
         index.push(json!({"package":name,"license":package["license"],"source":package["source"],"files":files}));
@@ -334,6 +348,10 @@ fn package() -> Result<()> {
     fs::write(
         notices.join("index.json"),
         serde_json::to_vec_pretty(&index)?,
+    )?;
+    fs::copy(
+        root().join("licenses/third-party/provenance.json"),
+        notices.join("supplemental-provenance.json"),
     )?;
     let source = output(cargo().args([
         "package",
@@ -349,20 +367,36 @@ fn package() -> Result<()> {
         destination.join("megabasterd-cli-2.0.0.crate"),
     )?;
     let mut hashes = String::new();
-    let mut files = fs::read_dir(&destination)?
-        .map(|e| e.map(|e| e.path()))
-        .collect::<std::io::Result<Vec<_>>>()?;
+    let mut files = Vec::new();
+    distribution_files(&destination, &mut files)?;
     files.sort();
     for path in files {
         if path.is_file() && path.file_name().unwrap() != "SHA256SUMS" {
             hashes.push_str(&format!(
                 "{}  {}\n",
                 hex::encode(Sha256::digest(fs::read(&path)?)),
-                path.file_name().unwrap().to_string_lossy()
+                path.strip_prefix(&destination)?
+                    .to_string_lossy()
+                    .replace('\\', "/")
             ));
         }
     }
     fs::write(destination.join("SHA256SUMS"), hashes)?;
+    Ok(())
+}
+
+fn distribution_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(directory)? {
+        let path = entry?.path();
+        if path.is_symlink() {
+            return Err("Linked distribution file".into());
+        }
+        if path.is_dir() {
+            distribution_files(&path, files)?;
+        } else if path.is_file() {
+            files.push(path);
+        }
+    }
     Ok(())
 }
 

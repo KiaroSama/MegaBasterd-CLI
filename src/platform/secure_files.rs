@@ -240,6 +240,9 @@ mod unix {
         flags: libc::c_int,
         mode: libc::mode_t,
     ) -> Result<File> {
+        // Darwin mode_t is u16; C varargs require the promoted unsigned integer type.
+        #[cfg(target_os = "macos")]
+        let mode = u32::from(mode);
         // SAFETY: parent is live; name is a terminated component; mode supplied for create.
         fd_file(unsafe {
             libc::openat(
@@ -480,7 +483,12 @@ mod unix {
             // SAFETY: successful fstatat initialized all stat fields.
             let stat = unsafe { stat.assume_init() };
             let metadata = file.metadata()?;
-            if stat.st_dev != metadata.dev() || stat.st_ino != metadata.ino() {
+            // Match std's MetadataExt representation of Darwin's signed dev_t.
+            #[cfg(target_os = "macos")]
+            let device = stat.st_dev as u64;
+            #[cfg(not(target_os = "macos"))]
+            let device = stat.st_dev;
+            if device != metadata.dev() || stat.st_ino != metadata.ino() {
                 return Err(Error::protocol(
                     "Private file identity changed before mutation",
                 ));
