@@ -56,7 +56,7 @@ fn persisted_reload_keeps_config_proxies_and_deduplicates_the_union() {
     use megabasterd_cli::storage::proxies::Pool;
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/proxy-tests");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let path = scratch.path().join("private/proxies.json");
     let store = ProxyStore::new(path.clone());
     let configured = "http://configured.example:8080".to_owned();
@@ -92,7 +92,7 @@ fn invalid_saved_proxy_data_is_preserved_before_mutation() {
 
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/proxy-tests");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let path = scratch.path().join("private/proxies.json");
     let store = ProxyStore::new(path.clone());
     let mut cases = vec![
@@ -159,7 +159,7 @@ fn invalid_saved_proxy_data_is_preserved_before_mutation() {
 fn valid_proxy_transactions_reload_and_roundtrip_without_losing_other_updates() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/proxy-tests");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let path = scratch.path().join("private/proxies.json");
     let first = ProxyStore::new(path.clone());
     let second = ProxyStore::new(path.clone());
@@ -173,3 +173,6 @@ fn valid_proxy_transactions_reload_and_roundtrip_without_losing_other_updates() 
         ["http://a:1", "socks5://b:2"]
     );
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

@@ -22,10 +22,10 @@ const CORRUPT_CASE: &str =
     "independent_processes_preserve_one_exact_corruption_copy_without_creating_a_key";
 const CORRUPT: &[u8] = b"still not json";
 
-fn fixture() -> (tempfile::TempDir, Queue) {
+fn fixture() -> (private_tempfile::TempDir, Queue) {
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".ci-work/queue-processes");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let queue = Queue::new(scratch.path().join("private space/queue.json"));
     (scratch, queue)
 }
@@ -279,3 +279,6 @@ fn independent_processes_preserve_one_exact_corruption_copy_without_creating_a_k
             .ends_with(".tmp")
     }));
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

@@ -16,7 +16,7 @@ use crate::{
 fn parsed_mkdir_and_empty_trash_without_an_account_refuse_before_network_or_success() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/cloud-auth");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let stdout = Capture::default();
     let stderr = Capture::default();
     let (_, calls) = test_peer::with_peer(

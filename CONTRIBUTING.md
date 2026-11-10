@@ -50,7 +50,9 @@ updating its SHA-256. Never change an identity, delete a failing case, mark it
 retired, or point it at an unrelated passing helper. The Rust driver checks
 source digests and the exact harness identities against discovery and execution.
 Each platform writes `.ci-work/receipt.json` with the tested commit, architecture,
-native test count and the disposition of all 1,416 contracts. Platform-specific
+native test count and the disposition of all 1,416 contracts.
+The accompanying `source-contracts.xml` reports those same preserved identities
+in JUnit format; it is assertion-mapping evidence, not a second test execution. Platform-specific
 cases must execute on their applicable native runner; they are not claimed as
 passing elsewhere.
 

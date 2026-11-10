@@ -27,7 +27,7 @@ fn resume_open_failures_preserve_committed_coverage_and_bytes_before_any_snapsho
         .collect();
     for verify in [false, true] {
         for failure in ["permission", "io", "descriptors", "success"] {
-            let scratch = tempfile::tempdir_in(&base).unwrap();
+            let scratch = crate::test_support::tempdir_in(&base).unwrap();
             let destination = scratch.path().join("movie.mkv");
             let directory = OutputDirectory::open(scratch.path()).unwrap();
             let staging = std::ffi::OsStr::new(".mb-resume.tmp");

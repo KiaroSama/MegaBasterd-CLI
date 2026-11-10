@@ -24,7 +24,7 @@ fn native_public_modules_and_typed_operations_resolve_at_compile_time() {
 
 #[test]
 fn native_checksum_matches_an_independent_multiblock_md5_vector() {
-    let scratch = tempfile::tempdir().unwrap();
+    let scratch = private_tempfile::tempdir().unwrap();
     let path = scratch.path().join("blob.bin");
     fs::write(&path, b"megabasterd".repeat(5000)).unwrap();
     assert_eq!(file_md5(&path).unwrap(), "67a370eef85749ca323d2c0c58b021dd");
@@ -116,7 +116,7 @@ fn independent_native_user_namespace_does_not_import_or_mutate_python_stores() {
 
 #[test]
 fn bad_current_vault_credentials_never_split_the_passphrase_or_replace_the_account() {
-    let scratch = tempfile::tempdir().unwrap();
+    let scratch = private_tempfile::tempdir().unwrap();
     let path = scratch.path().join("accounts.json");
     let accounts = Accounts::new(path.clone());
     let correct = Vault::new("native test passphrase");
@@ -143,3 +143,6 @@ fn bad_current_vault_credentials_never_split_the_passphrase_or_replace_the_accou
         "original"
     );
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

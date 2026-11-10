@@ -29,7 +29,7 @@ use crate::{
 fn queue_retry_recovers_registered_upload_before_committing_done_without_another_mutation() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/queued-upload-peers");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let source = scratch.path().join("source with  spaces.bin");
     std::fs::write(&source, b"source bytes").unwrap();
     let queue = Queue::new(scratch.path().join("private queue/queue.json"));

@@ -16,7 +16,7 @@ fn every_native_config_entry_refuses_invalid_roots_and_explicit_recovery_preserv
 {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/config-recovery");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let mut invalid = vec![
         b"{\"max_workers\": 8,,,\n".to_vec(),
         b"\xff\xfe not utf-8 at all".to_vec(),
@@ -106,7 +106,7 @@ fn every_native_config_entry_refuses_invalid_roots_and_explicit_recovery_preserv
 fn concurrent_native_config_updates_reload_latest_and_recovery_creates_one_exact_backup() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/config-concurrency");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let path = scratch.path().join("private/config.json");
     let stale = ConfigStore::new(path.clone());
     stale.set("max_workers", "4").unwrap();
@@ -165,7 +165,7 @@ fn concurrent_native_config_updates_reload_latest_and_recovery_creates_one_exact
 fn preloaded_configuration_cannot_overwrite_corruption_written_after_the_load() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/config-recovery");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let path = scratch.path().join("private/config.json");
     let store = ConfigStore::new(&path);
     store.set("max_workers", "7").unwrap();
@@ -209,7 +209,7 @@ fn preloaded_configuration_cannot_overwrite_corruption_written_after_the_load() 
 fn a_newer_configuration_is_never_reset_or_recovered_with_current_defaults() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/config-future");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let path = scratch.path().join("private/config.json");
     let store = ConfigStore::new(path.clone());
     for bytes in [
@@ -233,3 +233,6 @@ fn a_newer_configuration_is_never_reset_or_recovered_with_current_defaults() {
         );
     }
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

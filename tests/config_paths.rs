@@ -118,7 +118,7 @@ fn effective_default_paths_and_user_overrides_reach_the_actual_configuration_com
 
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/config-paths");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let cwd = scratch.path().join("unrelated working directory");
     let temporary = scratch.path().join("private temporary");
     fs::create_dir(&cwd).unwrap();
@@ -271,3 +271,6 @@ fn effective_default_paths_and_user_overrides_reach_the_actual_configuration_com
         }
     }
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

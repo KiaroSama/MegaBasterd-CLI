@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 fn revisions_increase_and_stale_snapshots_leave_newer_coverage_and_metadata_untouched() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/state-revision");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let path = scratch.path().join("private/transfer.json");
     let states = States::new(&path);
     let mut live = TransferState::new(
@@ -76,7 +76,7 @@ fn revisions_increase_and_stale_snapshots_leave_newer_coverage_and_metadata_unto
 fn a_committed_foreign_source_at_revision_200_refuses_revision_one_without_changing_bytes() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/state-revision");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let destination = scratch.path().join("file.bin");
     fs::write(&destination, vec![0; 1024]).unwrap();
     let path = scratch.path().join("private/transfer.json");
@@ -106,7 +106,7 @@ fn a_committed_foreign_source_at_revision_200_refuses_revision_one_without_chang
 fn a_positive_size_empty_coverage_state_persists_without_creating_its_destination() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/state-revision");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let destination = scratch.path().join("not-created-yet.mkv");
     let path = scratch.path().join("private/transfer.json");
     assert_ne!(destination, path);
@@ -137,7 +137,7 @@ fn a_positive_size_empty_coverage_state_persists_without_creating_its_destinatio
 fn native_revision_defaults_to_zero_but_invalid_saved_types_never_become_usable() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/state-revision");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let path = scratch.path().join("private/transfer.json");
     let state = TransferState::new("download", "fixture", &path, 0, &[1; 32]).unwrap();
     let mut data = serde_json::to_value(&state).unwrap();
@@ -158,3 +158,6 @@ fn native_revision_defaults_to_zero_but_invalid_saved_types_never_become_usable(
         assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 2);
     }
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

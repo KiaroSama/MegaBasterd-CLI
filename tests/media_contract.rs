@@ -13,7 +13,7 @@ fn maintained_mp4_and_webm_decode_through_owned_seekable_input_and_produce_green
         .expect("Native media CI must supply its verified ffmpeg/ffprobe pair");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/media-codecs");
     std::fs::create_dir_all(&root).unwrap();
-    let scratch = tempfile::tempdir_in(root).unwrap();
+    let scratch = private_tempfile::tempdir_in(root).unwrap();
     for (extension, bytes, hash) in [
         (
             "mp4",
@@ -54,3 +54,6 @@ fn maintained_mp4_and_webm_decode_through_owned_seekable_input_and_produce_green
         );
     }
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

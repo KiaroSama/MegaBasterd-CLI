@@ -29,10 +29,10 @@ impl Write for Capture {
     }
 }
 
-fn scratch() -> tempfile::TempDir {
+fn scratch() -> private_tempfile::TempDir {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/logging-privacy");
     std::fs::create_dir_all(&base).unwrap();
-    tempfile::tempdir_in(base).unwrap()
+    private_tempfile::tempdir_in(base).unwrap()
 }
 
 const LEAKS: &[(&str, &[&str])] = &[
@@ -402,3 +402,6 @@ fn finish_flushes_syncs_and_closes_the_same_handle_and_refuses_later_writes() {
     assert!(text.contains("last owned record") && text.contains("\"exit_code\":7"));
     assert!(!text.contains("must not reopen"));
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

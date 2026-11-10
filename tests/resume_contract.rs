@@ -5,7 +5,7 @@ use megabasterd_cli::storage::transfer_state::{States, TransferState};
 fn changed_source_cleanup_removes_only_matching_unregistered_upload_state() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/state-cleanup");
     std::fs::create_dir_all(&root).unwrap();
-    let scratch = tempfile::tempdir_in(root).unwrap();
+    let scratch = private_tempfile::tempdir_in(root).unwrap();
     let path = scratch.path().join("upload.json");
     let states = States::new(&path);
     let mut state = TransferState::new("upload", "account:target", &path, 17, &[1; 16]).unwrap();
@@ -145,3 +145,6 @@ fn resume_identity_and_coverage_cannot_silently_switch_file_or_key() {
     upload.completion_token = Some(" ".repeat(27));
     assert!(upload.validate().is_err());
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

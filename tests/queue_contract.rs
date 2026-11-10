@@ -10,10 +10,10 @@ use megabasterd_cli::{
     transfers::control::Control,
 };
 
-fn fixture() -> (tempfile::TempDir, Queue) {
+fn fixture() -> (private_tempfile::TempDir, Queue) {
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".ci-work/queue-tests");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::Builder::new()
+    let scratch = private_tempfile::Builder::new()
         .prefix("queue-")
         .tempdir_in(base)
         .unwrap();
@@ -519,3 +519,6 @@ fn lost_heartbeat_cancels_inflight_executor_and_refuses_following_job() {
         JobStatus::Pending
     );
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

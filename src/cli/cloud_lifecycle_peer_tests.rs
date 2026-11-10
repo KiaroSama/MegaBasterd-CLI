@@ -25,7 +25,7 @@ fn parsed_share_import_accepts_empty_and_skips_only_unavailable_keys_before_muta
 
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/import-listings");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     seed_accounts(scratch.path(), &[(EMAIL, SID, 1024)]);
     let paths = Context::test_context(scratch.path()).paths;
     let accounts = fs::read(paths.accounts()).unwrap();
@@ -156,7 +156,7 @@ fn folder(handle: &str, parent: &str, name: &str, wrapping_key: &[u8]) -> Value 
 fn each_parsed_cloud_command_uses_shared_authentication_and_keeps_the_cached_session() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/cloud-lifecycle");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     seed_accounts(scratch.path(), &[(EMAIL, SID, 1024)]);
     let paths = Context::test_context(scratch.path()).paths;
     let before_accounts = fs::read(paths.accounts()).unwrap();

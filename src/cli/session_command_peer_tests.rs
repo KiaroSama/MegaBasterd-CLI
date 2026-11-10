@@ -44,7 +44,7 @@ fn fresh_upload_caches_its_login_for_later_upload_queue_info_and_refresh_command
     let sid = data["rsa"]["sid"].as_str().unwrap();
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/session-commands");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let paths = Context::test_context(scratch.path()).paths;
     let vault = Vault::new(PASS);
     let accounts = Accounts::new(paths.accounts());

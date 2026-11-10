@@ -68,7 +68,7 @@ chosen executable path, or make the tools available on `PATH`. The application
 never installs media tools automatically. Missing media support is a separate
 warning after an otherwise successful upload, not proof the upload failed.
 
-Clipboard watching uses PowerShell `Get-Clipboard` on Windows, `pbpaste` on
+Clipboard watching uses native Win32 Unicode clipboard APIs on Windows, `pbpaste` on
 macOS, or `wl-paste`/`xclip` on Linux. A usable graphical clipboard session is
 required; a headless host need not have one.
 

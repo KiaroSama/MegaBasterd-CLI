@@ -12,7 +12,7 @@ use std::{collections::BTreeSet, fs, path::Path};
 fn config_backup_creation_failure_is_reported_without_claiming_a_copy_or_changing_the_original() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/recovery-collisions");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let path = scratch.path().join("private/config.json");
     let original = b"{\"episode\": \"A\",,,";
     Store::new(&path)
@@ -69,7 +69,7 @@ fn config_backup_creation_failure_is_reported_without_claiming_a_copy_or_changin
 fn recovery_collision_uses_one_private_alternative_and_repeated_reads_adopt_its_exact_bytes() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/recovery-collisions");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let path = scratch.path().join("private/queue.json");
     let original = b"{ first corruption episode ,,,";
     let different = b"{ second corruption episode ,,,";
@@ -149,3 +149,6 @@ fn recovery_collision_uses_one_private_alternative_and_repeated_reads_adopt_its_
             .ends_with(".tmp")
     }));
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

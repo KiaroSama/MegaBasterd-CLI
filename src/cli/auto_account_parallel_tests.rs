@@ -42,7 +42,7 @@ fn parsed_parallel_auto_account_overlaps_transfers_isolates_sequences_and_reuses
     for quota_code in [None, Some(-17), Some(-24)] {
         let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/auto-account-parallel");
         std::fs::create_dir_all(&base).unwrap();
-        let scratch = tempfile::tempdir_in(base).unwrap();
+        let scratch = crate::test_support::tempdir_in(base).unwrap();
         seed_accounts(
             scratch.path(),
             &[

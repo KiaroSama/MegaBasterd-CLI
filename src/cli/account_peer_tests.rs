@@ -52,7 +52,7 @@ fn rejected_verification_declines_without_stores_and_only_explicit_consent_adds_
     ] {
         let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/account-add-peers");
         fs::create_dir_all(&base).unwrap();
-        let scratch = tempfile::tempdir_in(base).unwrap();
+        let scratch = crate::test_support::tempdir_in(base).unwrap();
         let stdout = Capture::default();
         let stderr = Capture::default();
         let (_, calls) = test_peer::with_peer(
@@ -127,7 +127,7 @@ fn parsed_account_batches_preserve_cache_and_distinguish_probe_cancel_from_logou
 
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/account-add-peers");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let paths = Context::test_context(scratch.path()).paths;
     let vault = Vault::new(PASSPHRASE);
     let accounts = Accounts::new(paths.accounts());
@@ -235,7 +235,7 @@ fn parsed_account_batches_preserve_cache_and_distinguish_probe_cancel_from_logou
 fn optional_session_cache_failure_preserves_authentication_and_does_not_claim_a_refresh() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/account-add-peers");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let stdout = Capture::default();
     let stderr = Capture::default();
     let output = Output::with_writers(false, false, stdout.clone(), stderr.clone());
@@ -277,7 +277,7 @@ fn parsed_account_add_missing_mfa_fails_without_offering_unverified_storage_in_m
         serde_json::from_str(include_str!("../../tests/fixtures/crypto-vectors.json")).unwrap();
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/account-add-peers");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let stdout = Capture::default();
     let stderr = Capture::default();
     let ((), calls) = test_peer::with_peer(
@@ -343,7 +343,7 @@ fn parsed_verified_duplicate_keeps_account_bytes_and_refreshes_session_without_r
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/account-add-peers");
     fs::create_dir_all(&base).unwrap();
     for (existing, cache_failure) in [(false, false), (true, false), (false, true), (true, true)] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = crate::test_support::tempdir_in(&base).unwrap();
         let paths = Context::test_context(scratch.path()).paths;
         let accounts = Accounts::new(paths.accounts());
         let vault = Vault::new(PASSPHRASE);

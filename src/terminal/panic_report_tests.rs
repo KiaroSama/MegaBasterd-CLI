@@ -147,7 +147,7 @@ fn actual_panics_keep_sanitized_origin_and_trace_only_in_the_private_log() {
     assert!(cli.contains("panic_report::record("));
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/panic-capture");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let mut command = Command::new(std::env::current_exe().unwrap());
     command.env_clear().current_dir(scratch.path());
     for key in [

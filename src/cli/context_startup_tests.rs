@@ -28,7 +28,7 @@ fn startup_uses_the_real_config_and_keeps_commands_usable_after_initial_logging_
     fs::create_dir_all(&base).unwrap();
     for quiet in [false, true] {
         for logging in [None, Some(true), Some(false)] {
-            let scratch = tempfile::tempdir_in(&base).unwrap();
+            let scratch = crate::test_support::tempdir_in(&base).unwrap();
             let paths = Paths {
                 root: scratch.path().to_owned(),
                 user: scratch.path().join("private user"),

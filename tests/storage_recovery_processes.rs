@@ -167,7 +167,7 @@ fn independent_config_readers_preserve_one_exact_backup_and_leave_the_corrupt_or
         return;
     }
     fs::create_dir_all(base()).unwrap();
-    let scratch = tempfile::tempdir_in(base()).unwrap();
+    let scratch = private_tempfile::tempdir_in(base()).unwrap();
     let path = scratch.path().join("private/config.json");
     Store::new(&path)
         .lock()
@@ -201,7 +201,7 @@ fn independent_state_writers_leave_one_parseable_valid_snapshot_without_staging_
         return;
     }
     fs::create_dir_all(base()).unwrap();
-    let scratch = tempfile::tempdir_in(base()).unwrap();
+    let scratch = private_tempfile::tempdir_in(base()).unwrap();
     let path = scratch.path().join("private/state.json");
     let state = TransferState::new(
         "download",
@@ -232,3 +232,6 @@ fn independent_state_writers_leave_one_parseable_valid_snapshot_without_staging_
         name.ends_with(".tmp") || name.contains(".corrupt-")
     }));
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

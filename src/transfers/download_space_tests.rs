@@ -9,7 +9,7 @@ use crate::protocol::{metadata::DownloadSource, test_peer};
 fn anchored_space_query_remains_usable_without_creating_output() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/download-space");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let path = scratch.path().join("output with spaces");
     std::fs::create_dir(&path).unwrap();
     let directory = OutputDirectory::open(&path).unwrap();
@@ -32,7 +32,7 @@ fn insufficient_or_unreadable_free_space_preserves_destination_and_never_preallo
     std::fs::create_dir_all(&base).unwrap();
     for query_failure in [false, true] {
         for existing in [false, true] {
-            let scratch = tempfile::tempdir_in(&base).unwrap();
+            let scratch = crate::test_support::tempdir_in(&base).unwrap();
             let destination = scratch.path().join("output with spaces").join("keep.bin");
             std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
             if existing {

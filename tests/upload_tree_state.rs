@@ -9,10 +9,10 @@ use megabasterd_cli::{
 };
 use serde_json::{Value, json};
 
-fn scratch() -> tempfile::TempDir {
+fn scratch() -> private_tempfile::TempDir {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/upload-tree-state");
     fs::create_dir_all(&base).unwrap();
-    tempfile::tempdir_in(base).unwrap()
+    private_tempfile::tempdir_in(base).unwrap()
 }
 
 #[test]
@@ -245,3 +245,6 @@ fn unknown_paths_or_missing_parents_never_invoke_the_remote_adapter() {
         "incomplete parent set cannot be acknowledged"
     );
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

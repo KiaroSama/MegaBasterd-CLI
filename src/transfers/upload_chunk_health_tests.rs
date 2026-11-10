@@ -53,7 +53,7 @@ fn each_real_connection_body_timeout_and_server_failure_debits_the_proxy_once_pe
         let base =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/upload-retry-health");
         std::fs::create_dir_all(&base).unwrap();
-        let scratch = tempfile::tempdir_in(base).unwrap();
+        let scratch = crate::test_support::tempdir_in(base).unwrap();
         let store = ProxyStore::new(scratch.path().join("pool.json"));
         let route = OnceLock::new();
         let mut waits = Vec::new();

@@ -34,7 +34,7 @@ impl Write for Capture {
 fn a_real_read_only_sink_write_failure_seals_logging_without_mutation_or_disclosure() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/logging-write");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let logs = scratch.path().join("user@example.com-SENTINEL-PW-7781");
     let logger = Arc::new(Logger::configured(&logs, 0, 0).unwrap());
     let path = logs.join(logger.name());
@@ -163,7 +163,7 @@ fn without_security_access(original: &File) -> File {
 fn a_real_security_query_failure_seals_logging_before_writing_without_an_insecure_fallback() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/logging-write");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let logs = scratch.path().join("user@example.com-SENTINEL-PW-7781");
     let logger = Arc::new(Logger::configured(&logs, 0, 0).unwrap());
     let path = logs.join(logger.name());
@@ -248,7 +248,7 @@ fn a_real_security_query_failure_seals_logging_before_writing_without_an_insecur
 fn an_initial_security_query_failure_leaves_the_created_log_empty_and_console_usable() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/logging-write");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let logs = scratch.path().join("user@example.com-SENTINEL-PW-7781");
     let mut attempts = 0;
     let mut created = None;

@@ -66,7 +66,7 @@ fn refusal(result: process::ProcessOutput, code: i32, diagnostic: &str) {
 fn actual_file_commands_reject_alias_missing_part_bad_name_empty_input_and_unsupported_thumbnail() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/file-ops-cli");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let root = scratch.path();
     let source = root.join("payload with spaces.bin");
     let bytes: Vec<_> = (0..2 * 1024 * 1024 + 5)
@@ -187,3 +187,6 @@ fn actual_file_commands_reject_alias_missing_part_bad_name_empty_input_and_unsup
             .ends_with(".tmp")
     }));
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

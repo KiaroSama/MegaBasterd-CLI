@@ -43,7 +43,7 @@ fn run(binary: &Path, cwd: &Path, home: &Path, arguments: &[&str]) -> process::P
 fn relocated_native_aliases_need_no_python_cargo_source_cwd_or_project_root_override() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/distribution");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let release = scratch.path().join("native release with spaces");
     let cwd = scratch.path().join("unrelated caller with spaces");
     let home = scratch.path().join("isolated runtime");
@@ -149,3 +149,6 @@ fn distribution_inputs_keep_the_real_gpl_grant_historical_mit_and_unicode_notice
     assert!(unicode.contains("Copyright") && unicode.contains("Unicode, Inc."));
     assert!(unicode.contains("this copyright and permission notice appear"));
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

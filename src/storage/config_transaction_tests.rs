@@ -10,7 +10,7 @@ use crate::error::Error;
 fn held_configuration_lock_refuses_every_entry_point_without_partial_writes_and_allows_retry() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/config-transactions");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     for (case, contents) in [
         None,
         Some(br#"{"version":2,"data":{"max_workers":7}}"#.as_slice()),

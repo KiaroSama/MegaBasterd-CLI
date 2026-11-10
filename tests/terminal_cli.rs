@@ -67,7 +67,7 @@ fn run_with_logging(root: &Path, args: &[&str], logging: bool) -> process::Proce
 fn unsafe_native_log_directory_disables_only_file_logging_without_disclosing_the_refused_path() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/terminal-cli");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let root = scratch.path();
     let logs = root.join("logs-user@example.com-SENTINEL-PW-4471");
     drop(megabasterd_cli::platform::secure_files::PrivateDirectory::ensure(&logs).unwrap());
@@ -153,7 +153,7 @@ fn failed_private_logging_initialization_warns_even_in_quiet_mode_without_changi
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/terminal-cli");
     fs::create_dir_all(&base).unwrap();
     for quiet in [false, true] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = private_tempfile::tempdir_in(&base).unwrap();
         let blocked = scratch
             .path()
             .join("logs-user@example.com-SENTINEL-PW-4471");
@@ -203,7 +203,7 @@ fn failed_private_logging_initialization_warns_even_in_quiet_mode_without_changi
 fn initial_logging_refusal_keeps_argument_secrets_out_of_both_output_streams_and_artifacts() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/terminal-cli");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let blocked = scratch
         .path()
         .join("logs-user@example.com-SENTINEL-PW-4471");
@@ -275,7 +275,7 @@ fn configured_invalid_proxy_probe_reports_literal_rows_without_leaking_query_cre
         ),
         ("http://127.0.0.1[/bold]x:1", "http://127.0.0.1[/bold]x:1"),
     ] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = private_tempfile::tempdir_in(&base).unwrap();
         let root = scratch.path();
         let set = run(root, &["config", "set", "smart_proxy_url", url]);
         assert_eq!(set.status.code(), Some(0));
@@ -336,7 +336,7 @@ fn configured_invalid_proxy_probe_reports_literal_rows_without_leaking_query_cre
 fn stored_configuration_markup_is_literal_through_the_actual_binary() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/terminal-cli");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     for value in ["[bold red]PWNED[/bold red]", "agent[/bold]x"] {
         let set = run(scratch.path(), &["config", "set", "user_agent", value]);
         assert_eq!(set.status.code(), Some(0));
@@ -354,7 +354,7 @@ fn stored_configuration_markup_is_literal_through_the_actual_binary() {
 fn syntactically_invalid_proxy_markup_is_refused_without_bricking_a_valid_listing() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/terminal-cli");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     for invalid in [
         "http://[bold red]PWNED[/bold red].example:8080",
         "http://evil[/bold].example:8080",
@@ -420,3 +420,6 @@ fn syntactically_invalid_proxy_markup_is_refused_without_bricking_a_valid_listin
         }
     }
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

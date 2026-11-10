@@ -514,7 +514,7 @@ mod tests {
 
     #[test]
     fn invalid_headers_refuse_before_key_derivation_or_output_creation() -> Result<()> {
-        let directory = tempfile::tempdir()?;
+        let directory = crate::test_support::tempdir()?;
         let input = directory.path().join("invalid.mbcr");
         let output = directory.path().join("output");
         for (chunk, original, expected) in [
@@ -547,7 +547,7 @@ mod tests {
     #[test]
     fn fourth_entropy_failure_after_two_chunks_preserves_input_destination_and_cleans_stage()
     -> Result<()> {
-        let directory = tempfile::tempdir()?;
+        let directory = crate::test_support::tempdir()?;
         let input = directory.path().join("src.bin");
         let output = directory.path().join("important.txt");
         let bytes = vec![b'x'; DEFAULT_CHUNK_SIZE * 3];

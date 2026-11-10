@@ -360,7 +360,7 @@ fn representative_source_hash_and_local_files_record_real_bounded_resource_sampl
     .to_owned();
     assert!(commit.len() == 40 && commit.bytes().all(|byte| byte.is_ascii_hexdigit()));
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(&base).unwrap();
+    let scratch = private_tempfile::tempdir_in(&base).unwrap();
     let mut workloads = Vec::new();
     for size in SIZES {
         let work = scratch.path().join(size.to_string());
@@ -378,7 +378,7 @@ fn representative_source_hash_and_local_files_record_real_bounded_resource_sampl
         let expected = digest(&source);
         let mut samples = BTreeMap::<&str, Vec<Value>>::new();
         for _ in 0..3 {
-            let directory = tempfile::tempdir_in(&work).unwrap();
+            let directory = private_tempfile::tempdir_in(&work).unwrap();
             let mut command = Command::new(std::env::current_exe().unwrap());
             command.args(["--exact", CASE, "--test-threads=1", "--color=never"]);
             let (result, wall) = run(command, scratch.path(), true, &source, directory.path());
@@ -409,3 +409,6 @@ fn representative_source_hash_and_local_files_record_real_bounded_resource_sampl
     serde_json::to_writer_pretty(&mut file, &report).unwrap();
     writeln!(file).unwrap();
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

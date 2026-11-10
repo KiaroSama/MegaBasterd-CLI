@@ -20,7 +20,7 @@ use megabasterd_cli::{
 };
 
 struct Fixture {
-    _scratch: tempfile::TempDir,
+    _scratch: private_tempfile::TempDir,
     paths: Paths,
     temporary: PathBuf,
     cwd: PathBuf,
@@ -30,7 +30,7 @@ impl Fixture {
     fn new() -> Self {
         let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/queue-cli");
         fs::create_dir_all(&base).unwrap();
-        let scratch = tempfile::tempdir_in(base).unwrap();
+        let scratch = private_tempfile::tempdir_in(base).unwrap();
         let root = scratch.path().join("runtime with spaces");
         let paths = Paths {
             user: root.join("User/native-v2"),
@@ -227,3 +227,6 @@ fn actual_missing_key_recovery_keeps_ciphertext_and_secrets_out_of_debug_logs() 
     );
     assert_eq!(fs::read(queue.path()).unwrap(), raw);
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

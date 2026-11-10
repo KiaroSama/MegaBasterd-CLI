@@ -13,10 +13,10 @@ use megabasterd_cli::{
 };
 use serde_json::{Value, json};
 
-fn scratch() -> tempfile::TempDir {
+fn scratch() -> private_tempfile::TempDir {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/transfer-state-store");
     std::fs::create_dir_all(&base).unwrap();
-    tempfile::tempdir_in(base).unwrap()
+    private_tempfile::tempdir_in(base).unwrap()
 }
 
 fn state(destination: &Path) -> TransferState {
@@ -292,3 +292,6 @@ fn malformed_saved_mac_cannot_replace_previously_valid_coverage() {
         2
     );
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

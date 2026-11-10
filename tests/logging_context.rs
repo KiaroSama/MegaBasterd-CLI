@@ -9,10 +9,10 @@ use megabasterd_cli::{
 };
 use serde_json::{Value, json};
 
-fn scratch() -> tempfile::TempDir {
+fn scratch() -> private_tempfile::TempDir {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/logging-context");
     fs::create_dir_all(&base).unwrap();
-    tempfile::tempdir_in(base).unwrap()
+    private_tempfile::tempdir_in(base).unwrap()
 }
 
 fn run(root: &Path, args: &[&str]) -> process::ProcessOutput {
@@ -593,3 +593,6 @@ fn public_logger_constructors_keep_unknown_command_context_and_redaction_on_ever
     }
     assert_ne!(names[0], names[1]);
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

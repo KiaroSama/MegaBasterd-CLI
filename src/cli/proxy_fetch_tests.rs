@@ -25,7 +25,7 @@ fn parsed_proxy_fetch_cancellation_preserves_the_pool_after_a_request_with_or_wi
     for headers in [false, true] {
         let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/proxy-fetch");
         fs::create_dir_all(&base).unwrap();
-        let scratch = tempfile::tempdir_in(base).unwrap();
+        let scratch = crate::test_support::tempdir_in(base).unwrap();
         let store = ProxyStore::new(Context::test_context(scratch.path()).paths.proxies());
         store
             .update(|urls| urls.push("http://existing.example:8080".into()))
@@ -105,7 +105,7 @@ fn actual_fetch_sources_preserve_partial_success_and_use_host_only_typed_diagnos
     for partial in [false, true] {
         let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/proxy-fetch");
         fs::create_dir_all(&base).unwrap();
-        let scratch = tempfile::tempdir_in(base).unwrap();
+        let scratch = crate::test_support::tempdir_in(base).unwrap();
         let paths = Context::test_context(scratch.path()).paths;
         let store = ProxyStore::new(paths.proxies());
         store
@@ -199,7 +199,7 @@ fn actual_fetch_sources_preserve_partial_success_and_use_host_only_typed_diagnos
 fn unsafe_credentialed_source_refuses_without_contact_and_keeps_only_its_host_in_diagnostics() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/proxy-fetch");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let stdout = Capture::default();
     let stderr = Capture::default();
     let ((), calls) = test_peer::with_peer(

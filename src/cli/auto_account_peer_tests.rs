@@ -62,7 +62,7 @@ fn parsed_automatic_structured_failure_keeps_successful_nodes_on_one_account_wit
 {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/auto-account-tree");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let source = scratch.path().join("tree");
     std::fs::create_dir_all(source.join("sub")).unwrap();
     std::fs::write(source.join("a.bin"), b"data").unwrap();
@@ -290,7 +290,7 @@ pub(super) fn seed_accounts(root: &Path, choices: &[(&str, &str, u64)]) {
 fn parsed_zero_byte_upload_excludes_unavailable_account_even_with_equal_zero_cached_balances() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/auto-account-peers");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let source = scratch.path().join("empty file.bin");
     std::fs::write(&source, b"").unwrap();
     seed_accounts(
@@ -427,7 +427,7 @@ fn parsed_auto_account_retries_same_file_avoids_exhausted_accounts_and_bounds_al
     ] {
         let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/auto-account-replan");
         std::fs::create_dir_all(&base).unwrap();
-        let scratch = tempfile::tempdir_in(base).unwrap();
+        let scratch = crate::test_support::tempdir_in(base).unwrap();
         let first = scratch.path().join("f1.bin");
         let second = scratch.path().join("f2.bin");
         std::fs::write(&first, b"data").unwrap();

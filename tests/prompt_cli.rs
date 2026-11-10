@@ -29,7 +29,7 @@ use megabasterd_cli::{
 const EMAIL: &str = "prompt-fixture@example.invalid";
 
 struct Fixture {
-    _scratch: tempfile::TempDir,
+    _scratch: private_tempfile::TempDir,
     paths: Paths,
     cwd: PathBuf,
     temporary: PathBuf,
@@ -41,7 +41,7 @@ impl Fixture {
     fn new() -> Self {
         let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/prompt-cli");
         fs::create_dir_all(&base).unwrap();
-        let scratch = tempfile::tempdir_in(base).unwrap();
+        let scratch = private_tempfile::tempdir_in(base).unwrap();
         let root = scratch.path().join("runtime with spaces");
         let paths = Paths {
             user: root.join("private user/native-v2"),
@@ -688,3 +688,6 @@ fn actual_binary_declined_recovery_preserves_corrupt_configuration_and_its_detec
     );
     assert_eq!(snapshot(&fixture.paths.root), before);
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

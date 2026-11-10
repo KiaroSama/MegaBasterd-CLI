@@ -43,6 +43,22 @@ fn cargo() -> Command {
     command
 }
 
+fn private_test_process(command: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: only the child's creation mask changes; umask is async-signal-safe.
+        unsafe {
+            command.pre_exec(|| {
+                libc::umask(0o077);
+                Ok(())
+            });
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = command;
+}
+
 fn source_policy(directory: &Path) -> Result<()> {
     for entry in fs::read_dir(directory)? {
         let path = entry?.path();
@@ -124,6 +140,23 @@ fn ledger() -> Result<Value> {
 }
 
 fn verify() -> Result<()> {
+    let revision = output(
+        Command::new("git")
+            .current_dir(root())
+            .args(["rev-parse", "HEAD"]),
+    )?;
+    let revision = String::from_utf8(revision.stdout)?.trim().to_owned();
+    let dirty = output(Command::new("git").current_dir(root()).args([
+        "status",
+        "--porcelain",
+        "--untracked-files=no",
+    ]))?;
+    let clean = dirty.stdout.is_empty();
+    if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
+        && (!clean || std::env::var("GITHUB_SHA").as_deref() != Ok(revision.as_str()))
+    {
+        return Err("CI must test the exact checked-out commit with a clean tracked tree".into());
+    }
     for directory in ["src", "tests", "xtask", "tools"] {
         source_policy(&root().join(directory))?;
     }
@@ -167,6 +200,7 @@ fn verify() -> Result<()> {
     let mut count = 0;
     for (index, (binary, source)) in harnesses.iter().enumerate() {
         let mut command = Command::new(binary);
+        private_test_process(&mut command);
         command
             .current_dir(root())
             .env("MEGABASTERD_USER_DIR", work.join("runtime space/User"))
@@ -188,6 +222,7 @@ fn verify() -> Result<()> {
         command.args(["--test-threads=2", "--color=never"]);
         // Remove discovery arguments before execution.
         let mut run = Command::new(binary);
+        private_test_process(&mut run);
         run.current_dir(root())
             .envs(command.get_envs().filter_map(|(k, v)| v.map(|v| (k, v))))
             .args(["--test-threads=2", "--color=never"]);
@@ -251,8 +286,45 @@ fn verify() -> Result<()> {
             .current_dir(root())
             .args(["rev-parse", "HEAD"]),
     )?;
+    if String::from_utf8(git.stdout.clone())?.trim() != revision {
+        return Err("Checkout changed while tests executed".into());
+    }
+    if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true") {
+        let dirty = output(Command::new("git").current_dir(root()).args([
+            "status",
+            "--porcelain",
+            "--untracked-files=no",
+        ]))?;
+        if !dirty.stdout.is_empty() {
+            return Err("Tracked sources changed during CI tests".into());
+        }
+    }
     let receipt = json!({"schema_version":1,"commit":String::from_utf8(git.stdout)?.trim(),"os":platform,"architecture":std::env::consts::ARCH,
-        "native_tests":count,"baseline_cases":cases.len(),"cases":cases});
+        "working_tree_clean":clean,"native_tests":count,"baseline_cases":cases.len(),"cases":cases});
+    let escape = |value: &str| {
+        value
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+    };
+    let skipped = cases
+        .iter()
+        .filter(|case| case["status"] == "other_platform")
+        .count();
+    let mut junit = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuite name=\"Migrated source contracts ({platform})\" tests=\"1416\" failures=\"0\" skipped=\"{skipped}\">\n"
+    );
+    for case in &cases {
+        let identity = case["source_id"].as_str().ok_or("Missing receipt case")?;
+        junit.push_str(&format!("<testcase name=\"{}\">", escape(identity)));
+        if case["status"] == "other_platform" {
+            junit.push_str("<skipped message=\"Not applicable on this runner\"/>");
+        }
+        junit.push_str("</testcase>\n");
+    }
+    junit.push_str("</testsuite>\n");
+    fs::write(work.join("source-contracts.xml"), junit)?;
     fs::write(
         work.join("receipt.json"),
         serde_json::to_vec_pretty(&receipt)?,

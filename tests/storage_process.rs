@@ -104,7 +104,7 @@ fn persistent_store_lock_excludes_another_process_and_reloads_after_owner_releas
         return;
     }
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(&base).unwrap();
+    let scratch = private_tempfile::tempdir_in(&base).unwrap();
     let path = scratch.path().join("private/store.json");
     let store = Store::new(&path);
     store.lock().unwrap().save(&json!({"counter":7})).unwrap();
@@ -199,7 +199,7 @@ fn destination_claim_excludes_an_independent_process_and_reuses_its_original_sid
         return;
     }
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let path = scratch.path().join("output with spaces/movie.mkv");
     let claim = Claim::acquire(&path, false, |_| Ok(false)).unwrap();
     let sidecar = claim
@@ -224,3 +224,6 @@ fn destination_claim_excludes_an_independent_process_and_reuses_its_original_sid
     assert_eq!(claim.directory.entries(4).unwrap().len(), 2);
     assert!(!path.exists());
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

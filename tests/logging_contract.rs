@@ -3,10 +3,10 @@
 use megabasterd_cli::terminal::logging::Logger;
 use serde_json::json;
 
-fn scratch() -> tempfile::TempDir {
+fn scratch() -> private_tempfile::TempDir {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/logging");
     std::fs::create_dir_all(&base).unwrap();
-    tempfile::tempdir_in(base).unwrap()
+    private_tempfile::tempdir_in(base).unwrap()
 }
 
 #[test]
@@ -173,3 +173,6 @@ fn unsafe_rotation_target_disables_file_writes_without_overwriting_it() {
             .contains("must stay disabled")
     );
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

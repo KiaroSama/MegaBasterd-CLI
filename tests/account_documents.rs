@@ -9,10 +9,10 @@ use megabasterd_cli::{
 };
 use serde_json::{Value, json};
 
-fn fixture() -> tempfile::TempDir {
+fn fixture() -> private_tempfile::TempDir {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/account-documents");
     fs::create_dir_all(&base).unwrap();
-    tempfile::tempdir_in(base).unwrap()
+    private_tempfile::tempdir_in(base).unwrap()
 }
 
 fn entry() -> Value {
@@ -277,3 +277,6 @@ fn stale_account_objects_reload_corruption_instead_of_overwriting_the_previous_c
     ));
     assert_eq!(fs::read(&path).unwrap(), b"{ broken since we loaded");
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

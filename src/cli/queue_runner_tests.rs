@@ -35,10 +35,16 @@ impl Write for Capture {
     }
 }
 
-fn fixture() -> (tempfile::TempDir, Context, Queue, Capture, Capture) {
+fn fixture() -> (
+    crate::test_support::TempDir,
+    Context,
+    Queue,
+    Capture,
+    Capture,
+) {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/queue-runner");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let mut context = Context::test_context(scratch.path());
     let stdout = Capture::default();
     let stderr = Capture::default();

@@ -20,10 +20,10 @@ impl Write for Capture {
         Ok(())
     }
 }
-fn scratch() -> tempfile::TempDir {
+fn scratch() -> private_tempfile::TempDir {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/logging-boundaries");
     std::fs::create_dir_all(&base).unwrap();
-    tempfile::tempdir_in(base).unwrap()
+    private_tempfile::tempdir_in(base).unwrap()
 }
 
 #[cfg(windows)]
@@ -527,3 +527,6 @@ fn a_regular_rotation_control_still_succeeds_after_private_handle_verification()
             .contains("Finished")
     );
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

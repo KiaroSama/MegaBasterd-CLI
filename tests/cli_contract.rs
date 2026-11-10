@@ -552,7 +552,7 @@ fn positional_value(spec: &Value, file: &Path, directory: &Path) -> OsString {
 fn required_variadic_positions_and_source_path_validation_are_preserved() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/cli-schema");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let directory = scratch.path().join("directory with spaces");
     std::fs::create_dir(&directory).unwrap();
     let file = directory.join("existing.bin");
@@ -689,3 +689,6 @@ fn nested_binary_help_and_usage_errors_preserve_machine_stdout_without_runtime_s
         assert!(!output.stderr.is_empty());
     }
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

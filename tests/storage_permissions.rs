@@ -10,12 +10,12 @@ use std::{
     path::PathBuf,
 };
 
-fn fixture() -> (tempfile::TempDir, PrivateDirectory, PathBuf) {
+fn fixture() -> (private_tempfile::TempDir, PrivateDirectory, PathBuf) {
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join(".ci-work")
         .join("private-file-tests");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::Builder::new()
+    let scratch = private_tempfile::Builder::new()
         .prefix("native-")
         .tempdir_in(base)
         .unwrap();
@@ -559,3 +559,6 @@ fn output_aliases_are_refused_without_following_targets_or_redirecting_the_ancho
     drop(directory);
     drop(private_anchor);
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 fn failed_recovery_write_removes_only_its_new_partial_copy_and_a_retry_can_preserve() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/private-commit");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let path = scratch.path().join("accounts.json");
     let original = b"{ controlled malformed account file";
     let locked = Store::new(&path).lock().unwrap();
@@ -57,7 +57,7 @@ fn replacement_errors_and_unwind_preserve_live_bytes_and_remove_the_owned_stage(
         ["state.json", "config.json", "accounts.json"].map(|name| (existing, name))
     }) {
         for mode in ["permission", "io", "validation", "canceled", "unwind"] {
-            let scratch = tempfile::tempdir_in(&base).unwrap();
+            let scratch = crate::test_support::tempdir_in(&base).unwrap();
             let path = scratch.path().join(name);
             let store = Store::new(&path);
             let locked = store.lock().unwrap();
@@ -177,7 +177,7 @@ fn transient_private_replacement_reuses_one_complete_stage_until_the_fourth_atte
         ),
     ] {
         for code in codes {
-            let scratch = tempfile::tempdir_in(&base).unwrap();
+            let scratch = crate::test_support::tempdir_in(&base).unwrap();
             let path = scratch.path().join(name);
             let locked = Store::new(&path).lock().unwrap();
             locked.write_bytes(original).unwrap();
@@ -245,7 +245,7 @@ fn transient_private_replacement_reuses_one_complete_stage_until_the_fourth_atte
 fn failed_private_commit_preserves_the_previous_session_and_removes_only_its_stage() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/private-commit");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let vault = Vault::new("synthetic commit passphrase");
     let email = "commit@example.invalid";
     let session = Session {

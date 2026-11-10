@@ -9,7 +9,7 @@ use megabasterd_cli::{platform::process, transfers::control::Control};
 fn actual_binary_sanitizes_invalid_link_errors_on_human_and_machine_surfaces() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/redaction-cli");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let temporary = scratch.path().join("private temporary");
     let cwd = scratch.path().join("unrelated working directory");
     fs::create_dir(&temporary).unwrap();
@@ -90,3 +90,6 @@ fn actual_binary_sanitizes_invalid_link_errors_on_human_and_machine_surfaces() {
         }
     }
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

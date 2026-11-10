@@ -27,10 +27,10 @@ impl Write for Capture {
         Ok(())
     }
 }
-fn scratch() -> tempfile::TempDir {
+fn scratch() -> crate::test_support::TempDir {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/watch");
     std::fs::create_dir_all(&base).unwrap();
-    tempfile::tempdir_in(base).unwrap()
+    crate::test_support::tempdir_in(base).unwrap()
 }
 fn options() -> WatchOptions {
     WatchOptions {
@@ -120,12 +120,7 @@ fn clipboard_fixture(
     for ((program, args), expected) in attempts.iter().zip(expected) {
         assert_eq!(program, Path::new(expected));
         let expected_args: &[&str] = match *expected {
-            "pwsh" | "powershell" => &[
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); Get-Clipboard -Raw -ErrorAction Stop",
-            ],
+            "preferred-clipboard" | "fallback-clipboard" => &[],
             "wl-paste" => &["-n"],
             "xclip" => &["-selection", "clipboard", "-o"],
             "pbpaste" => &[],
@@ -145,7 +140,10 @@ fn clipboard_fixture(
 #[test]
 fn missing_preferred_clipboard_backend_uses_the_next_configured_command() {
     for (commands, expected) in [
-        (WINDOWS_CLIPBOARD, &["pwsh", "powershell"][..]),
+        (
+            TEST_CLIPBOARD,
+            &["preferred-clipboard", "fallback-clipboard"][..],
+        ),
         (LINUX_CLIPBOARD, &["wl-paste", "xclip"][..]),
     ] {
         let text = clipboard_fixture(
@@ -165,7 +163,10 @@ fn missing_preferred_clipboard_backend_uses_the_next_configured_command() {
 #[test]
 fn failing_preferred_clipboard_backend_uses_the_next_configured_command() {
     for (commands, expected) in [
-        (WINDOWS_CLIPBOARD, &["pwsh", "powershell"][..]),
+        (
+            TEST_CLIPBOARD,
+            &["preferred-clipboard", "fallback-clipboard"][..],
+        ),
         (LINUX_CLIPBOARD, &["wl-paste", "xclip"][..]),
     ] {
         for failure in [
@@ -188,7 +189,7 @@ fn failing_preferred_clipboard_backend_uses_the_next_configured_command() {
 #[test]
 fn successful_preferred_clipboard_backend_returns_without_trying_another_command() {
     for (commands, expected) in [
-        (WINDOWS_CLIPBOARD, "pwsh"),
+        (TEST_CLIPBOARD, "preferred-clipboard"),
         (LINUX_CLIPBOARD, "wl-paste"),
         (MACOS_CLIPBOARD, "pbpaste"),
     ] {
@@ -209,7 +210,7 @@ fn successful_preferred_clipboard_backend_returns_without_trying_another_command
 #[test]
 fn clipboard_cancel_invalid_utf8_and_exhaustion_keep_their_existing_error_boundaries() {
     for (commands, expected) in [
-        (WINDOWS_CLIPBOARD, "pwsh"),
+        (TEST_CLIPBOARD, "preferred-clipboard"),
         (LINUX_CLIPBOARD, "wl-paste"),
         (MACOS_CLIPBOARD, "pbpaste"),
     ] {
@@ -223,7 +224,10 @@ fn clipboard_cancel_invalid_utf8_and_exhaustion_keep_their_existing_error_bounda
         ));
     }
     for (commands, expected) in [
-        (WINDOWS_CLIPBOARD, &["pwsh", "powershell"][..]),
+        (
+            TEST_CLIPBOARD,
+            &["preferred-clipboard", "fallback-clipboard"][..],
+        ),
         (LINUX_CLIPBOARD, &["wl-paste", "xclip"][..]),
         (MACOS_CLIPBOARD, &["pbpaste"][..]),
     ] {

@@ -26,7 +26,7 @@ fn merge_retains_pinned_inputs_with_a_low_soft_limit_and_refuses_an_insufficient
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let base = root.join(".ci-work/merge-capacity");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let before = limits();
     assert!(
         before.rlim_max >= 256,
@@ -125,3 +125,6 @@ fn merge_retains_pinned_inputs_with_a_low_soft_limit_and_refuses_an_insufficient
         );
     }
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

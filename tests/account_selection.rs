@@ -13,7 +13,7 @@ use megabasterd_cli::{
 fn duplicate_account_preserves_credentials_metadata_and_default_under_the_same_vault_lock() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/account-selection");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let path = scratch.path().join("private/accounts.json");
     let accounts = Accounts::new(&path);
     let vault = Vault::new("right-pass");
@@ -114,7 +114,7 @@ fn duplicate_account_preserves_credentials_metadata_and_default_under_the_same_v
 fn explicit_account_then_vault_default_then_configuration_fallback_selects_the_same_account() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/account-selection");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let path = scratch.path().join("private/accounts.json");
     // Selection needs a plausible envelope, not a KDF or decryptable credential.
     let mut envelope = b"MBV2\x0f\x08\x01".to_vec();
@@ -168,3 +168,6 @@ fn explicit_account_then_vault_default_then_configuration_fallback_selects_the_s
         assert!(accounts.resolve(None, None).is_err());
     }
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

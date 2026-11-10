@@ -67,7 +67,7 @@ fn passive_commands_cannot_explicitly_invalidate_a_cached_remote_session() {
 fn session_requires_a_passphrase_and_roundtrips_every_secret_field_encrypted() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/session-storage");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let paths = Paths {
         root: scratch.path().to_owned(),
         user: scratch.path().join("private user/native-v2"),
@@ -160,7 +160,7 @@ fn session_requires_a_passphrase_and_roundtrips_every_secret_field_encrypted() {
 fn native_session_replacement_refuses_corrupt_future_foreign_and_wrong_vault_files_unchanged() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/session-storage");
     fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let vault = Vault::new("synthetic correct passphrase");
     let account = session("current-sid");
     for (index, raw) in [
@@ -270,3 +270,6 @@ fn native_session_replacement_refuses_corrupt_future_foreign_and_wrong_vault_fil
             .ends_with(".tmp")
     }));
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

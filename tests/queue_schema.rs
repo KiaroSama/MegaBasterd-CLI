@@ -19,7 +19,7 @@ use megabasterd_cli::{
 use serde_json::{Value, json};
 
 struct Fixture {
-    _scratch: tempfile::TempDir,
+    _scratch: private_tempfile::TempDir,
     queue: Queue,
     document: Value,
     key: Vec<u8>,
@@ -30,7 +30,7 @@ impl Fixture {
     fn new() -> Self {
         let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/queue-schema");
         fs::create_dir_all(&base).unwrap();
-        let scratch = tempfile::tempdir_in(base).unwrap();
+        let scratch = private_tempfile::tempdir_in(base).unwrap();
         let queue = Queue::new(scratch.path().join("private space/queue.json"));
         queue.add(JobType::Download, &payload()).unwrap();
         let key = fs::read(queue.path().with_file_name("queue.json.key")).unwrap();
@@ -484,3 +484,6 @@ fn unknown_fields_and_versions_are_preserved_instead_of_silently_dropped() {
     after.sort();
     assert_eq!(after, before);
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

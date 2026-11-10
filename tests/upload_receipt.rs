@@ -13,7 +13,7 @@ use megabasterd_cli::{
 fn confirmed_upload_receipt_reconstructs_keys_without_a_second_registration() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/upload-receipt");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = private_tempfile::tempdir_in(base).unwrap();
     let path = scratch.path().join("private/upload.json");
     let material: Vec<u8> = (0u8..16).chain(0..8).collect();
     let vault = Vault::new("synthetic fixture passphrase");
@@ -83,7 +83,7 @@ fn confirmed_receipt_fences_side_effects_and_never_replays_completed_or_unknown_
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/upload-finalization");
     std::fs::create_dir_all(&base).unwrap();
     for completes in [false, true] {
-        let scratch = tempfile::tempdir_in(&base).unwrap();
+        let scratch = private_tempfile::tempdir_in(&base).unwrap();
         let path = scratch.path().join("private/upload.json");
         let material = [1; 24];
         let mut state = TransferState::new("upload", "binding", &path, 3, &material[..16]).unwrap();
@@ -129,3 +129,6 @@ fn confirmed_receipt_fences_side_effects_and_never_replays_completed_or_unknown_
         );
     }
 }
+
+#[path = "common/private_tempfile.rs"]
+mod private_tempfile;

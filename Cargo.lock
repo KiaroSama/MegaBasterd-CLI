@@ -2965,6 +2965,7 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "libc",
  "serde_json",
  "sha2",
 ]

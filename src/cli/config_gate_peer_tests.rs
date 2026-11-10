@@ -63,7 +63,7 @@ fn snapshot(root: &Path) -> BTreeMap<std::path::PathBuf, Vec<u8>> {
 fn config_recovery_report_reloads_current_file_instead_of_trusting_startup_status() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/config-report");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let mut context = Context::test_context(scratch.path());
     let stdout = Capture::default();
     let stderr = Capture::default();
@@ -122,7 +122,7 @@ fn config_recovery_report_reloads_current_file_instead_of_trusting_startup_statu
 fn parsed_config_migrate_normalizes_current_native_settings_and_keeps_unsafe_documents_unchanged() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/config-normalization-cli");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let mut context = Context::test_context(scratch.path());
     let stdout = Capture::default();
     let stderr = Capture::default();
@@ -193,7 +193,7 @@ fn parsed_config_migrate_normalizes_current_native_settings_and_keeps_unsafe_doc
 fn parsed_commands_refuse_corrupt_policy_before_requests_prompts_or_state_changes() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/config-gate-peers");
     std::fs::create_dir_all(&base).unwrap();
-    let scratch = tempfile::tempdir_in(base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
     let stdout = Capture::default();
     let stderr = Capture::default();
     let (_, calls) = test_peer::with_peer(

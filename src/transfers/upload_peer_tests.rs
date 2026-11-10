@@ -46,10 +46,10 @@ const TOKEN: &str = "FCCyf3QV62uAsbARFKbVd8zWyqOQXPFgEL9i";
 const SLOT: &str = "https://upload.mega.nz/native-peer-upload/slot";
 const NAME: &str = "OAD -  09v2.mkv";
 
-fn scratch() -> tempfile::TempDir {
+fn scratch() -> crate::test_support::TempDir {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/upload-peers");
     std::fs::create_dir_all(&root).unwrap();
-    tempfile::tempdir_in(root).unwrap()
+    crate::test_support::tempdir_in(root).unwrap()
 }
 
 fn source(root: &Path, size: usize) -> PathBuf {
