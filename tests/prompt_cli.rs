@@ -421,10 +421,12 @@ fn actual_binary_config_get_and_path_keep_plain_stdout_and_redact_secrets() {
     let output = fixture.run(&arguments(&["config", "path"]), b"");
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
-        std::str::from_utf8(&output.stdout)
-            .unwrap()
-            .trim_end_matches(['\r', '\n']),
-        fixture.paths.config().to_str().unwrap()
+        Path::new(
+            std::str::from_utf8(&output.stdout)
+                .unwrap()
+                .trim_end_matches(['\r', '\n'])
+        ),
+        fixture.paths.config()
     );
     assert!(
         output.stderr.is_empty(),

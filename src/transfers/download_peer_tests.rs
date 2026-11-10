@@ -431,7 +431,10 @@ fn actual_partial_download_refuses_unhonored_ranges_before_decryption_even_witho
                     false,
                 )
                 .unwrap_err();
-                assert!(matches!(error, Error::Protocol(_)), "{variant}: {error}");
+                assert!(
+                    matches!(&error, Error::Protocol(message) if message.contains("Range")),
+                    "{variant}: {error}"
+                );
                 assert_eq!(error.exit_code(), 1);
                 assert!(!destination.exists());
                 let saved = States::new(state_path(&states, &destination))

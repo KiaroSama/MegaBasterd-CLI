@@ -198,7 +198,7 @@ anchor subsequent operations; Windows DACL/file IDs and Unix nofollow/openat/
 owner/link/mode checks do not fall back to unchecked paths. File identity is
 compared while the relevant handles are live. UNC is deliberately unsupported;
 unsupported directory-sync behavior is explicit, not fabricated durability.
-On Windows, ancestor handles deny write/delete sharing while publication renames
+On Windows, read/list ancestor handles deny delete sharing while publication renames
 the exact source handle to an absolute UTF-16 destination. Overwrite uses
 `FileRenameInfoEx` with POSIX semantics so the verified, delete-shared destination
 handle remains live until replacement finishes. No-overwrite publication keeps

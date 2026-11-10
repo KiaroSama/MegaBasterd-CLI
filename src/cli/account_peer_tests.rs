@@ -376,7 +376,10 @@ fn parsed_verified_duplicate_keeps_account_bytes_and_refreshes_session_without_r
             None
         };
         if cache_failure {
-            fs::create_dir_all(paths.session(EMAIL)).unwrap();
+            drop(
+                crate::platform::secure_files::PrivateDirectory::ensure(&paths.session(EMAIL))
+                    .unwrap(),
+            );
             fs::write(
                 paths.session(EMAIL).join("precious"),
                 b"preserve this obstruction",

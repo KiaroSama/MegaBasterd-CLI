@@ -60,7 +60,10 @@ fn stalled_body_timeout_releases_actual_server_capacity_without_cancellation() {
     let (timed_out, timeout) = mpsc::sync_channel(1);
     let (finished, done) = mpsc::sync_channel(1);
     let requests = AtomicUsize::new(0);
-    let body: Vec<_> = (0..1024 * 1024).map(|index| (index % 251) as u8).collect();
+    // Exceed Windows' loopback buffering as well as the requested socket buffers.
+    let body: Vec<_> = (0..16 * 1024 * 1024)
+        .map(|index| (index % 251) as u8)
+        .collect();
     std::thread::scope(|scope| {
         let shutdown = CancelOnDrop(control.clone());
         let server_control = &control;
@@ -174,7 +177,7 @@ fn real_body_writer_preserves_offsets_and_releases_on_idle_deadline_and_cancella
         let send = tokio::net::TcpSocket::from_std_stream(socket.try_clone().unwrap());
         send.set_send_buffer_size(4096).unwrap();
         drop(send);
-        let size = if reading { 33 * 1024 } else { 1024 * 1024 };
+        let size = if reading { 33 * 1024 } else { 16 * 1024 * 1024 };
         let expected: Vec<_> = (0..size).map(|n| (n % 251) as u8).collect();
         let control = Control::new();
         let (finished, done) = mpsc::sync_channel(1);
@@ -226,7 +229,7 @@ fn real_body_writer_preserves_offsets_and_releases_on_idle_deadline_and_cancella
                 if mode == "cancel" {
                     assert!(matches!(result, Err(Error::Canceled)));
                 } else {
-                    assert!(matches!(result, Err(Error::Timeout)));
+                    assert!(matches!(result, Err(Error::Timeout)), "{mode}: {result:?}");
                     assert!(
                         !control.is_canceled(),
                         "external cancellation cannot prove a deadline"

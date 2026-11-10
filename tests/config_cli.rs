@@ -310,7 +310,7 @@ fn actual_corrupt_config_commands_refuse_mutation_but_preserve_safe_inspection()
         if words == ["get", "max_workers"] {
             assert_eq!(shown.trim(), "8");
         } else if words == ["path"] {
-            assert_eq!(shown.trim(), fixture.paths.config().to_str().unwrap());
+            assert_eq!(Path::new(shown.trim()), fixture.paths.config());
         } else {
             assert!(shown.starts_with("Key | Value"));
         }

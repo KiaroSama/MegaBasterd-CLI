@@ -213,6 +213,17 @@ pub(super) fn write_body(
     deadline: Instant,
     idle: Duration,
 ) -> Result<()> {
+    // Accepted HTTP sockets are blocking. Use nonblocking writes with our own
+    // deadlines so cancellation and idle bounds do not depend on SO_SNDTIMEO.
+    struct RestoreBlocking<'a>(&'a TcpStream);
+    impl Drop for RestoreBlocking<'_> {
+        fn drop(&mut self) {
+            let _ = self.0.set_nonblocking(false);
+        }
+    }
+    stream.set_nonblocking(true)?;
+    let blocking = RestoreBlocking(stream);
+    let mut writer = blocking.0;
     let mut idle_deadline = Instant::now().checked_add(idle).ok_or(Error::Timeout)?;
     while !bytes.is_empty() {
         control.checkpoint_until(deadline.min(idle_deadline))?;
@@ -222,8 +233,7 @@ pub(super) fn write_body(
         if remaining.is_zero() {
             return Err(Error::Timeout);
         }
-        stream.set_write_timeout(Some(remaining.min(Duration::from_millis(100))))?;
-        match stream.write(bytes) {
+        match writer.write(bytes) {
             Ok(0) => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::WriteZero,
@@ -241,7 +251,10 @@ pub(super) fn write_body(
                     std::io::ErrorKind::WouldBlock
                         | std::io::ErrorKind::TimedOut
                         | std::io::ErrorKind::Interrupted
-                ) => {}
+                ) =>
+            {
+                control.wait(remaining.min(Duration::from_millis(10)))?
+            }
             Err(_) if control.is_canceled() => return Err(Error::Canceled),
             Err(error) => return Err(error.into()),
         }
