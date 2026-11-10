@@ -31,10 +31,7 @@ fn closed(stream: &mut TcpStream) {
                 std::io::ErrorKind::ConnectionReset
                     | std::io::ErrorKind::ConnectionAborted
                     | std::io::ErrorKind::NotConnected
-            ) =>
-        {
-            ()
-        }
+            ) => {}
         other => panic!("CONNECT endpoint remained open: {other:?}"),
     }
 }
@@ -208,10 +205,7 @@ fn unfinished_connect_headers_expire_without_dialing_even_when_control_is_paused
                     if matches!(
                         error.kind(),
                         std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
-                    ) =>
-                {
-                    ()
-                }
+                    ) => {}
                 other => panic!("CONNECT header refusal did not close: {other:?}"),
             }
             assert!(response.len() < 4096, "header reply exhausted its byte cap");

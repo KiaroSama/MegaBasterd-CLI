@@ -55,10 +55,7 @@ fn pending_upload_token_cancellation_closes_without_retry_coverage_or_registrati
                         std::io::ErrorKind::UnexpectedEof
                             | std::io::ErrorKind::ConnectionReset
                             | std::io::ErrorKind::ConnectionAborted
-                    ) =>
-                {
-                    ()
-                }
+                    ) => {}
                 other => panic!("canceled upload left its receipt body open: {other:?}"),
             }
             closed.send(()).unwrap();

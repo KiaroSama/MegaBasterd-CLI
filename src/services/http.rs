@@ -135,14 +135,12 @@ pub fn bearer_matches(request: &Request, expected: Option<&str>, query_allowed: 
     {
         return equal(supplied.trim(), expected);
     }
-    if query_allowed {
-        if let Some((_, query)) = request.target.split_once('?') {
-            if let Some((_, value)) = url::form_urlencoded::parse(query.as_bytes())
-                .find(|(key, _)| matches!(key.as_ref(), "token" | "access_token"))
-            {
-                return equal(&value, expected);
-            }
-        }
+    if query_allowed
+        && let Some((_, query)) = request.target.split_once('?')
+        && let Some((_, value)) = url::form_urlencoded::parse(query.as_bytes())
+            .find(|(key, _)| matches!(key.as_ref(), "token" | "access_token"))
+    {
+        return equal(&value, expected);
     }
     false
 }
@@ -243,10 +241,7 @@ pub(super) fn write_body(
                     std::io::ErrorKind::WouldBlock
                         | std::io::ErrorKind::TimedOut
                         | std::io::ErrorKind::Interrupted
-                ) =>
-            {
-                ()
-            }
+                ) => {}
             Err(_) if control.is_canceled() => return Err(Error::Canceled),
             Err(error) => return Err(error.into()),
         }

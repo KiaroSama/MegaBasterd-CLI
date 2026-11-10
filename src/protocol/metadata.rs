@@ -11,6 +11,10 @@ use crate::error::{Error, Result};
 use crate::transfers::planner::{Job, plan};
 
 #[derive(Clone)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "One metadata value per transfer; keep owned secret-bearing state together."
+)]
 pub enum DownloadSource {
     Public,
     Folder,

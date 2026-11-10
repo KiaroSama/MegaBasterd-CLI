@@ -226,7 +226,7 @@ fn folder_filters_use_full_unicode_folding_scalar_wildcards_and_literal_braces()
         ("a.mkv", "[!z-a].*", true),
         // Independent Python oracle: removing a reversed range can expose a negation marker.
         ("c", "[b-a!]", true),
-        ("!", "[b-!!]", false),
+        ("!", "[b-!!]", true),
         ("c", "[b-!!]", true),
     ] {
         let candidate = job(name, &format!("Show/{name}"));

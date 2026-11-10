@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use megabasterd_cli::terminal::output::Output;
 
 #[test]

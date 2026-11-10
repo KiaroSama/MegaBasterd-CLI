@@ -315,10 +315,7 @@ fn streamed_chunk_larger_than_its_range_closes_without_writing_plaintext_or_retr
                             std::io::ErrorKind::UnexpectedEof
                                 | std::io::ErrorKind::ConnectionReset
                                 | std::io::ErrorKind::ConnectionAborted
-                        ) =>
-                    {
-                        ()
-                    }
+                        ) => {}
                     other => panic!("overlong chunk left its connection open: {other:?}"),
                 }
                 closed.send(()).unwrap();

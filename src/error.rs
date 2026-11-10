@@ -177,8 +177,8 @@ pub(crate) fn retryable_http(error: &reqwest::Error) -> bool {
                 return true;
             }
         }
-        if let Some(error) = cause.downcast_ref::<std::io::Error>() {
-            if matches!(
+        if let Some(error) = cause.downcast_ref::<std::io::Error>()
+            && matches!(
                 error.kind(),
                 ErrorKind::UnexpectedEof
                     | ErrorKind::TimedOut
@@ -187,9 +187,9 @@ pub(crate) fn retryable_http(error: &reqwest::Error) -> bool {
                     | ErrorKind::ConnectionRefused
                     | ErrorKind::BrokenPipe
                     | ErrorKind::Interrupted
-            ) {
-                return true;
-            }
+            )
+        {
+            return true;
         }
         source = cause.source();
     }

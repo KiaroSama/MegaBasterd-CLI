@@ -67,8 +67,8 @@ fn repeated_command_contexts_warn_once_per_ignored_key_but_repeat_invalid_value_
         let mut combined = String::new();
         for log in logs {
             let text = fs::read_to_string(log).unwrap();
-            assert!(text.contains(" UTC] [INFO] [RUNTIME] Started"));
-            assert!(text.contains(" UTC] [INFO] [RUNTIME] Finished"));
+            assert!(text.contains(" UTC] [INFO] [RUNTIME] run=") && text.contains(" Started "));
+            assert!(text.contains(" UTC] [INFO] [RUNTIME] run=") && text.contains(" Finished "));
             warnings_per_run.push(text.matches("[WARNING]").count());
             combined.push_str(&text);
         }
@@ -153,7 +153,13 @@ fn repeated_command_contexts_warn_once_per_ignored_key_but_repeat_invalid_value_
         None,
     )
     .unwrap();
-    assert_eq!(result.status.code(), Some(0));
+    assert_eq!(
+        result.status.code(),
+        Some(0),
+        "{} {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
     let stdout = String::from_utf8(result.stdout).unwrap();
     assert!(
         stdout.contains("1 passed") && stdout.contains("0 failed") && stdout.contains("0 ignored")

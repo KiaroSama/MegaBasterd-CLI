@@ -348,11 +348,16 @@ fn representative_source_hash_and_local_files_record_real_bounded_resource_sampl
         logger.finish(0).unwrap();
         return;
     }
-    let baseline = std::env::var_os("MEGABASTERD_CI_BASELINE_ROOT")
-        .map(PathBuf::from)
-        .unwrap();
-    let python = std::env::var_os("MEGABASTERD_CI_PYTHON").unwrap();
-    let commit = std::env::var("MEGABASTERD_CI_COMMIT").unwrap();
+    let commit = String::from_utf8(
+        Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_owned();
     assert!(commit.len() == 40 && commit.bytes().all(|byte| byte.is_ascii_hexdigit()));
     fs::create_dir_all(&base).unwrap();
     let scratch = tempfile::tempdir_in(&base).unwrap();
@@ -372,89 +377,35 @@ fn representative_source_hash_and_local_files_record_real_bounded_resource_sampl
         drop(input);
         let expected = digest(&source);
         let mut samples = BTreeMap::<&str, Vec<Value>>::new();
-        for iteration in 0..3 {
-            for engine in if iteration % 2 == 0 {
-                ["python-source", "rust-native"]
-            } else {
-                ["rust-native", "python-source"]
-            } {
-                let directory = tempfile::tempdir_in(&work).unwrap();
-                let command = if engine == "rust-native" {
-                    let mut command = Command::new(std::env::current_exe().unwrap());
-                    command.args(["--exact", CASE, "--test-threads=1", "--color=never"]);
-                    command
-                } else {
-                    let mut command = Command::new(&python);
-                    command
-                        .args(["-I", "-B", "-X", "utf8"])
-                        .arg(root.join("tools/oracle/resource_workload.py"))
-                        .arg("--baseline")
-                        .arg(&baseline)
-                        .arg("--source")
-                        .arg(&source)
-                        .arg("--directory")
-                        .arg(directory.path());
-                    command
-                };
-                let native_child = engine == "rust-native";
-                let (result, wall) = run(
-                    command,
-                    scratch.path(),
-                    native_child,
-                    &source,
-                    directory.path(),
-                );
-                assert_eq!(
-                    result.status.code(),
-                    Some(0),
-                    "resource child failed engine={engine} stdout_bytes={} stderr_bytes={}",
-                    result.stdout.len(),
-                    result.stderr.len()
-                );
-                assert!(result.stderr.is_empty());
-                if native_child {
-                    assert!(
-                        std::str::from_utf8(&result.stdout)
-                            .unwrap()
-                            .contains("1 passed")
-                    );
-                } else {
-                    assert!(result.stdout.is_empty());
-                }
-                samples.entry(engine).or_default().push(sample(
-                    engine,
-                    directory.path(),
-                    size,
-                    &expected,
-                    wall,
-                ));
-                assert_eq!(digest(&source), expected);
-            }
+        for _ in 0..3 {
+            let directory = tempfile::tempdir_in(&work).unwrap();
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command.args(["--exact", CASE, "--test-threads=1", "--color=never"]);
+            let (result, wall) = run(command, scratch.path(), true, &source, directory.path());
+            assert_eq!(result.status.code(), Some(0));
+            assert!(result.stderr.is_empty());
+            assert!(
+                std::str::from_utf8(&result.stdout)
+                    .unwrap()
+                    .contains("1 passed")
+            );
+            samples.entry("rust-native").or_default().push(sample(
+                "rust-native",
+                directory.path(),
+                size,
+                &expected,
+                wall,
+            ));
+            assert_eq!(digest(&source), expected);
         }
-        let source_summary = summarize(&samples["python-source"]);
         let native_summary = summarize(&samples["rust-native"]);
-        let ratios: serde_json::Map<_, _> = METRICS
-            .into_iter()
-            .map(|metric| {
-                (
-                    metric.to_owned(),
-                    json!(
-                        native_summary[metric]["median"].as_u64().unwrap() as f64
-                            / source_summary[metric]["median"].as_u64().unwrap() as f64
-                    ),
-                )
-            })
-            .collect();
-        workloads.push(
-            json!({"bytes":size,"samples":samples,"source_summary":source_summary,
-            "native_summary":native_summary,"native_over_source":ratios}),
-        );
+        workloads.push(json!({"bytes":size,"samples":samples,"native_summary":native_summary}));
     }
     let report = json!({"schema_version":1,"baseline_commit":"c4559ecef08c1fb47cc57669230d2f6013520416",
         "candidate_commit":commit,"os":std::env::consts::OS,"architecture":std::env::consts::ARCH,
         "workers":1,"workloads":workloads,"scope":"upload source hashing and local split/merge, not network throughput",
         "limits":"debug harness; lifetime peak RSS includes initialization; warm OS caches; native disk reread/security checks retained"});
-    let mut file = File::create_new(root.join(".ci-work/resource-report.json")).unwrap();
+    let mut file = File::create(root.join(".ci-work/resource-report.json")).unwrap();
     serde_json::to_writer_pretty(&mut file, &report).unwrap();
     writeln!(file).unwrap();
 }

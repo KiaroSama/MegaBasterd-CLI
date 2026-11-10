@@ -114,19 +114,18 @@ impl TransferState {
                 "Upload registration marker has no final token".into(),
             ));
         }
-        if let Some(handle) = &self.registered_handle {
-            if self.kind != "upload"
+        if let Some(handle) = &self.registered_handle
+            && (self.kind != "upload"
                 || !self.registration_started
                 || handle.len() != 8
                 || !handle
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-                || self.completed.len() != count
-            {
-                return Err(Error::Corrupt(
-                    "Confirmed upload receipt has invalid node identity or coverage".into(),
-                ));
-            }
+                || self.completed.len() != count)
+        {
+            return Err(Error::Corrupt(
+                "Confirmed upload receipt has invalid node identity or coverage".into(),
+            ));
         }
         if (self.finalization_started && self.registered_handle.is_none())
             || (self.finalization_completed && !self.finalization_started)

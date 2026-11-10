@@ -7,11 +7,11 @@ use crate::error::{Error, Result};
 pub const MAX_PROMPT_BYTES: usize = 64 * 1024;
 
 pub fn line(question: &str) -> Result<Option<String>> {
-    if io::stdin().is_terminal() {
-        if let Some(control) = crate::platform::signals::current()? {
-            return super::prompt_input::read(question, false, &control)
-                .map(|answer| answer.map(|answer| answer.to_string()));
-        }
+    if io::stdin().is_terminal()
+        && let Some(control) = crate::platform::signals::current()?
+    {
+        return super::prompt_input::read(question, false, &control)
+            .map(|answer| answer.map(|answer| answer.to_string()));
     }
     line_with_style_io(
         question,
@@ -64,11 +64,11 @@ pub fn secret(question: &str, supplied: Option<&str>) -> Result<Zeroizing<String
 }
 
 pub fn optional_secret(question: &str) -> Result<Zeroizing<String>> {
-    if io::stdin().is_terminal() {
-        if let Some(control) = crate::platform::signals::current()? {
-            return super::prompt_input::read(question, true, &control)
-                .map(|answer| answer.unwrap_or_default());
-        }
+    if io::stdin().is_terminal()
+        && let Some(control) = crate::platform::signals::current()?
+    {
+        return super::prompt_input::read(question, true, &control)
+            .map(|answer| answer.unwrap_or_default());
     }
     optional_secret_with(
         question,
@@ -104,16 +104,16 @@ fn optional_secret_with(
 }
 
 pub fn confirm(question: &str, default: bool) -> Result<bool> {
-    if io::stdin().is_terminal() {
-        if let Some(control) = crate::platform::signals::current()? {
-            return confirm_controlled(
-                question,
-                default,
-                &control,
-                &mut io::stderr().lock(),
-                super::theme::stderr_color(),
-            );
-        }
+    if io::stdin().is_terminal()
+        && let Some(control) = crate::platform::signals::current()?
+    {
+        return confirm_controlled(
+            question,
+            default,
+            &control,
+            &mut io::stderr().lock(),
+            super::theme::stderr_color(),
+        );
     }
     confirm_with_style_io(
         question,

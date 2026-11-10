@@ -149,10 +149,7 @@ mod tests {
                 if matches!(
                     error.kind(),
                     io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted
-                ) =>
-            {
-                ()
-            }
+                ) => {}
             result => panic!("excess refusal retained an unbounded socket: {result:?}"),
         }
         // Force only the private closer deadlines, not a guessed sleep, then prove every owner retires.

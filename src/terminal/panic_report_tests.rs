@@ -143,7 +143,7 @@ fn actual_panics_keep_sanitized_origin_and_trace_only_in_the_private_log() {
     let main = include_str!("../main.rs");
     assert!(main.contains("megabasterd_cli::terminal::panic_report::install();"));
     let cli = include_str!("../cli/mod.rs");
-    assert!(cli.contains("panic_report::catch(|| dispatch(&mut context, command))"));
+    assert!(cli.contains("panic_report::catch(|| dispatch(context, command))"));
     assert!(cli.contains("panic_report::record("));
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/panic-capture");
     fs::create_dir_all(&base).unwrap();

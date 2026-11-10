@@ -210,16 +210,16 @@ pub fn execute(
                         }
                     }
                 })();
-                if let Err(error) = result { if let Ok(mut errors) = errors.lock() { errors.push(error); } }
+                if let Err(error) = result && let Ok(mut errors) = errors.lock() { errors.push(error); }
             }));
         }
         for thread in threads {
-            if thread.join().is_err() {
-                if let Ok(mut errors) = errors.lock() {
-                    errors.push(Error::protocol(
-                        "Upload orchestration worker was interrupted",
-                    ));
-                }
+            if thread.join().is_err()
+                && let Ok(mut errors) = errors.lock()
+            {
+                errors.push(Error::protocol(
+                    "Upload orchestration worker was interrupted",
+                ));
             }
         }
         Ok(())
@@ -256,6 +256,10 @@ pub fn execute(
     Ok(if closed? { 0 } else { 1 })
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Explicit transfer state and cancellation dependencies at this boundary."
+)]
 fn run_one(
     context: &Context,
     command: &Upload,
@@ -398,6 +402,10 @@ fn reconcile(context: &Context, cloud: &mut Cloud, ledger: &QuotaLedger) -> Resu
     Ok(())
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Explicit transfer state and cancellation dependencies at this boundary."
+)]
 fn structured(
     context: &Context,
     command: &Upload,

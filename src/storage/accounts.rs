@@ -100,10 +100,9 @@ impl Accounts {
                 .label
                 .as_deref()
                 .filter(|label| !label.trim().is_empty())
+                && !labels.insert(label.trim().to_lowercase())
             {
-                if !labels.insert(label.trim().to_lowercase()) {
-                    return Err(Error::Corrupt("Account labels are ambiguous".into()));
-                }
+                return Err(Error::Corrupt("Account labels are ambiguous".into()));
             }
             if [account.quota_total, account.quota_used]
                 .into_iter()

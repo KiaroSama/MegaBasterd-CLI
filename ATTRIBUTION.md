@@ -26,8 +26,7 @@ A source tree for another commit is not the matching source for a binary.
 Earlier versions were distributed under the MIT License. Those existing grants
 are not revoked by this change. Their notice is preserved in
 [licenses/MIT-historical.txt](licenses/MIT-historical.txt); preserve it when
-redistributing that code or substantial portions of it. During the migration,
-the retained Python implementation continues to carry that historical grant.
+redistributing that code or substantial portions of it. Historical source remains available in Git with that grant.
 
 ## References and dependencies
 
@@ -49,8 +48,7 @@ licenses. Do not remove original notices when adapting or redistributing code.
 The pinned Unicode 14 full case-fold mapping in the native folder-filter engine
 is generated from the retained Python 3.11.9 Unicode database. Unicode data is
 copyright Unicode, Inc.; the applicable permission notice is preserved in
-[licenses/Unicode-3.0.txt](licenses/Unicode-3.0.txt). Regeneration tooling and the
-independent wildcard oracle record the exact Unicode/runtime versions.
+[licenses/Unicode-3.0.txt](licenses/Unicode-3.0.txt). The retained independent wildcard vectors record the exact Unicode/runtime versions.
 
 ## Test fixtures
 

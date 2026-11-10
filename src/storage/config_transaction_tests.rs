@@ -97,7 +97,7 @@ fn held_configuration_lock_refuses_every_entry_point_without_partial_writes_and_
         assert!(warnings.is_empty());
         let document: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(document["version"], super::STORE_VERSION);
+        assert_eq!(document["version"], crate::storage::files::STORE_VERSION);
         assert_eq!(document["data"]["max_workers"], 9);
         assert_eq!(
             fs::read_dir(path.parent().unwrap()).unwrap().count(),

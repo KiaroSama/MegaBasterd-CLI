@@ -27,7 +27,7 @@ pub fn unpack_file_key(words: &[u32]) -> Result<FileKey> {
         .try_into()
         .map_err(|_| Error::invalid("File key must have eight uint32 words"))?;
     let mut aes_key = Zeroizing::new([0; 16]);
-    for (i, output) in aes_key.chunks_exact_mut(4).enumerate() {
+    for (i, output) in aes_key.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         output.copy_from_slice(&(words[i] ^ words[i + 4]).to_be_bytes());
     }
     let mut nonce = [0; 8];
@@ -121,11 +121,13 @@ pub fn stringhash(value: &str, key_words: &[u32]) -> Result<String> {
     Ok(a32_to_str(&[final_words[0], final_words[2]]))
 }
 
+pub type PasswordLinkKeys = (Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>);
+
 pub fn derive_password_link_keys(
     password: &str,
     salt: &[u8],
     algorithm: u8,
-) -> Result<(Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>)> {
+) -> Result<PasswordLinkKeys> {
     if !matches!(algorithm, 1 | 2) || salt.len() != 32 {
         return Err(Error::invalid(
             "Protected link requires algorithm 1 or 2 and a 32-byte salt",

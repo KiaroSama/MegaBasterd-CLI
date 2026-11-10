@@ -82,6 +82,11 @@ fn repeated_and_concurrent_corrupt_loads_keep_one_verified_copy_per_distinct_con
                         .unwrap()
                         .to_string_lossy()
                         .starts_with("config.json.corrupt-")
+                        && !path
+                            .file_name()
+                            .unwrap()
+                            .to_string_lossy()
+                            .ends_with(".lock")
                 })
                 .collect();
             copies.sort();

@@ -15,10 +15,7 @@ fn closed(stream: &mut impl Read) {
                 std::io::ErrorKind::UnexpectedEof
                     | std::io::ErrorKind::ConnectionReset
                     | std::io::ErrorKind::ConnectionAborted
-            ) =>
-        {
-            ()
-        }
+            ) => {}
         other => panic!("expired-ticket response remained open: {other:?}"),
     }
 }

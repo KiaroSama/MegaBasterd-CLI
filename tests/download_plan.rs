@@ -222,7 +222,7 @@ fn hostile_folder_components_stay_inside_the_output_root_without_planning_side_e
             .unwrap()
             .map(|entry| entry.unwrap().path())
             .collect();
-        assert_eq!(siblings, [output.clone()]);
+        assert_eq!(siblings, std::slice::from_ref(&output));
     }
 }
 

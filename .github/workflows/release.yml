@@ -1,27 +1,8 @@
-name: Native Build and Validation
-
+name: Release Build
 on:
   workflow_dispatch:
-    inputs:
-      retirement_approvals:
-        description: 'Optional owner-reviewed retirement JSON bound to this commit and canonical ledger'
-        required: false
-        type: string
-        default: ''
-
 permissions:
   contents: read
-
-concurrency:
-  group: native-rust-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   native:
-    # This existing manual entrypoint is already registered on the default branch.
-    # The local reusable workflow resolves at this exact dispatched candidate commit.
     uses: ./.github/workflows/ci.yml
-    with:
-      retirement_approvals: ${{ inputs.retirement_approvals }}
-  dependencies:
-    uses: ./.github/workflows/audit.yml

@@ -413,7 +413,7 @@ pub fn merge_parts(
             require_unchanged(file, metadata)?;
         }
         drop(refs);
-        for ((name, file), (identity, _)) in names.iter().zip(parts.into_iter()).zip(snapshots) {
+        for ((name, file), (identity, _)) in names.iter().zip(parts).zip(snapshots) {
             drop(file);
             remove_original(&directory, name, &identity)?;
         }

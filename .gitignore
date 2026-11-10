@@ -196,3 +196,6 @@ explain-AI.md
 *.rs.bk
 *.rlib
 *.profraw
+
+# Native CI distributions
+/dist/

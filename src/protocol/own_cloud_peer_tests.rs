@@ -131,7 +131,7 @@ fn mkdir_rename_move_delete_preserve_keys_and_refresh_the_actual_remote_listing(
                         assert_eq!(rewrapped.len(), 32);
                         assert_eq!(rewrapped, file_key);
                         assert_eq!(
-                            wire::decrypt_attributes(&attribute_bytes, &file_aes).unwrap(),
+                            wire::decrypt_attributes(&attribute_bytes, &file_aes[..]).unwrap(),
                             json!({"n":"after.bin"})
                         );
                         assert!(

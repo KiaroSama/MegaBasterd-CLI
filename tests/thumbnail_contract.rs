@@ -71,6 +71,7 @@ fn publication_requires_overwrite_and_refuses_input_aliases() -> Result<()> {
     let alias = directory.path().join("alias.jpg");
     fs::hard_link(&source, &alias)?;
     assert!(create_thumbnail(&source, &alias, true, None, &control).is_err());
+    fs::remove_file(&alias)?;
     let output = directory.path().join("thumbnail.jpg");
     fs::write(&output, b"precious")?;
     assert!(create_thumbnail(&source, &output, false, None, &control).is_err());

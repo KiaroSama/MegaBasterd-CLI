@@ -342,6 +342,10 @@ fn decode_credential(value: &str) -> Result<Zeroizing<String>> {
     Ok(Zeroizing::new(value.to_owned()))
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Explicit transfer state and cancellation dependencies at this boundary."
+)]
 pub(super) fn send(
     method: &Method,
     url: &Url,
@@ -507,13 +511,7 @@ fn request(
         }
         request = request.header(name.as_str(), value.as_bytes());
     }
-    use ureq::AsSendBody;
-    let mut bytes = body.unwrap_or_default();
-    let body = if body.is_some() {
-        bytes.as_body()
-    } else {
-        ureq::SendBody::none()
-    };
+    let body = body.map_or_else(Vec::new, <[u8]>::to_vec);
     let request = request
         .header("accept-encoding", "identity")
         .header("connection", "close")

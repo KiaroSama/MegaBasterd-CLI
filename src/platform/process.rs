@@ -116,12 +116,12 @@ pub fn run_command(
     if timeout.is_zero() {
         return Err(Error::Timeout);
     }
-    if let Some(file) = &input {
-        if !file.metadata()?.is_file() {
-            return Err(Error::invalid(
-                "External process input is not a regular file",
-            ));
-        }
+    if let Some(file) = &input
+        && !file.metadata()?.is_file()
+    {
+        return Err(Error::invalid(
+            "External process input is not a regular file",
+        ));
     }
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     command.stdin(input.map_or_else(Stdio::null, Stdio::from));

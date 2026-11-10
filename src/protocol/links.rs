@@ -87,10 +87,10 @@ pub fn parse_link(input: &str) -> Result<ParsedLink> {
         return Err(Error::invalid("Link exceeds the supported envelope size"));
     }
     let mut text = input.trim();
-    if let Ok(url) = url::Url::parse(text) {
-        if matches!(url.host_str(), Some("mega.nz" | "mega.co.nz")) {
-            text = text.trim_end_matches('/');
-        }
+    if let Ok(url) = url::Url::parse(text)
+        && matches!(url.host_str(), Some("mega.nz" | "mega.co.nz"))
+    {
+        text = text.trim_end_matches('/');
     }
     if let Some(m) = pattern(r"^https?://mega(?:\.co)?\.nz/#P!(.+)$")?.captures(text) {
         let mut result = ParsedLink::new(LinkType::PasswordProtected);
@@ -161,13 +161,14 @@ pub fn parse_link(input: &str) -> Result<ParsedLink> {
         result.key = Some(m[2].to_owned());
         return Ok(result);
     }
-    if let Some(m) = pattern(r"^https?://([^/]+)/!([A-Za-z0-9_\-]+)$")?.captures(text) {
-        if !text.contains("mega.nz") && !text.contains("mega.co.nz") {
-            let mut result = ParsedLink::new(LinkType::Megacrypter);
-            result.crypter_server = Some(m[1].to_owned());
-            result.crypter_token = Some(m[2].to_owned());
-            return Ok(result);
-        }
+    if let Some(m) = pattern(r"^https?://([^/]+)/!([A-Za-z0-9_\-]+)$")?.captures(text)
+        && !text.contains("mega.nz")
+        && !text.contains("mega.co.nz")
+    {
+        let mut result = ParsedLink::new(LinkType::Megacrypter);
+        result.crypter_server = Some(m[1].to_owned());
+        result.crypter_token = Some(m[2].to_owned());
+        return Ok(result);
     }
     Err(Error::invalid(
         "Not a recognizable MEGA or supported container link",

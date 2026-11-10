@@ -7,6 +7,9 @@ Python runtime bridge is included in the native implementation.
 
 <div align="center">
 
+[![Rust CI](https://github.com/KiaroSama/MegaBasterd-CLI/actions/workflows/ci.yml/badge.svg)](https://github.com/KiaroSama/MegaBasterd-CLI/actions/workflows/ci.yml)
+[![Coverage](https://github.com/KiaroSama/MegaBasterd-CLI/actions/workflows/tests.yml/badge.svg)](https://github.com/KiaroSama/MegaBasterd-CLI/actions/workflows/tests.yml)
+[![Dependency audit](https://github.com/KiaroSama/MegaBasterd-CLI/actions/workflows/audit.yml/badge.svg)](https://github.com/KiaroSama/MegaBasterd-CLI/actions/workflows/audit.yml)
 [![License GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-238636)](LICENSE)
 [![Rust edition 2024](https://img.shields.io/badge/Rust-edition%202024-238636)](Cargo.toml)
 [![Rust toolchain 1.99.1](https://img.shields.io/badge/Rust-1.99.1-238636)](rust-toolchain.toml)
@@ -22,75 +25,39 @@ Python runtime bridge is included in the native implementation.
 
 </div>
 
-> **Migration candidate, not a verified release.** The native source targets
-> Windows x64, Linux x64 and macOS Intel/Apple Silicon. Compilation, native CI,
-> signed release artifacts and practical replacement validation are still pending.
-> No native compatibility or passing-test claim is made from source inspection.
-> The retained `Run.ps1` currently launches the previous Python application; it
-> has not yet been switched to the native binary. Do not remove a working
-> installation or its data on the strength of this candidate.
+The application, tests and CI driver are implemented in Rust. The three native
+commands are `mb`, `mbcli` and `megabasterd-cli`. No interpreter or script launcher
+is required. CI builds Linux x64, Windows x64, macOS Intel and macOS Apple Silicon
+on every push and pull request.
 
 ## Installation
 
-### Native prebuilt application
-
-Native binaries are intended to be built and tested in
-[the manual native workflow](.github/workflows/release.yml), not on the user's
-machine. That existing entrypoint calls the native matrix at the same candidate
-commit. After successful native checks it prepares allowlisted project source and
-locked dependency sources, then rebuilds optimized compiler intermediates from
-both extracted source archives with an initially empty Cargo cache and frozen
-resolution. Relocated startup checks use those rebuilt aliases; Windows also
-checks the packaged PowerShell launcher, literal arguments and exit codes from an
-unrelated working directory. The intermediate
-also preserves package-associated dependency license/notice files and a hashed
-index; all locked packages are included conservatively, not just the linked subset.
-Missing notice files fail the preparation step. A separate job checks dependency/
-license policy. Legal completeness still needs review. These stages are written but unexecuted; they
-are not a verified complete source bundle or signed runtime release, and the
-unsigned intermediates are not uploaded or offered for installation.
-There is **no verified native package available from this migration candidate yet**. Check [Releases](https://github.com/KiaroSama/MegaBasterd-CLI/releases)
-for an explicitly native release; older Python packages are not native builds.
-
-When a verified native release is available:
-
-1. Choose the archive for your actual OS and architecture, not the CI runner's
-   architecture. Do not use a Linux binary as a Windows installation.
-2. Download that archive and its matching source/version, checksums and signing
-   metadata. Verify the signature against the approved publisher and the archive
-   hash before extracting. A checksum alone does not establish publisher identity.
-3. Extract to a writable application directory. Keep the three command aliases
-   together and add that directory to `PATH` if desired. Do not install over a
-   working version until its replacement has passed practical verification.
-4. Run `mb --version`, followed by `mb --help`. No Python, pip, Cargo or compiler
-   is required to run a native binary. Preserve your old user data separately;
-   the native application intentionally uses a new storage namespace.
-
-No guessed asset filename, unsigned installer or download-and-execute command is
-provided here. Final artifact naming, signing and installation verification are
-release gates, not completed work.
-
-### Build from source (contributors)
-
-The checked-in toolchain is Rust **1.99.1**, edition **2024**. Native builds need
-the corresponding system linker/SDK: MSVC tools on Windows, Xcode Command Line
-Tools on macOS, or a supported native C toolchain on Linux. The TLS dependencies
-can compile native code. Dependencies are fixed by `Cargo.lock`.
+Download the artifact matching your OS and architecture from a successful
+[Rust CI run](https://github.com/KiaroSama/MegaBasterd-CLI/actions/workflows/ci.yml).
+Each artifact contains the three command aliases, `SHA256SUMS`, license notices
+and the matching Rust source package. Extract the commands together, verify the
+checksums and add the directory to `PATH`. Build artifacts are unsigned;
+[Releases](https://github.com/KiaroSama/MegaBasterd-CLI/releases) is the destination
+for published versions.
 
 ```bash
-cargo build --locked --release --bins
+mb --version
+mb --help
 ```
 
-Cargo writes build output under `target/` by default; this can be large. The
-migration's release builds and full test matrix belong in hosted CI instead.
-The source-build command is documented, **not yet verified for this candidate**.
-The resulting commands share one dispatcher: `mb`, `mbcli`, `megabasterd-cli`.
-The manual native workflow also defines a separate locked full-graph dependency,
-license and source-policy audit. Native jobs preserve vendored files and portable
-Cargo configuration before their extracted-source rebuild. Cargo's offline mode
-is not an OS network sandbox or proof of byte-reproducible builds. Neither the
-audit nor a native rebuild has been verified yet; signed runtime packages remain
-pending.
+### Build from source
+
+Install Rust **1.99.1** and a native linker: MSVC Build Tools on Windows, Xcode
+Command Line Tools on macOS, or a C toolchain on Linux for native dependencies.
+`rust-toolchain.toml` pins Rust; `Cargo.lock` pins dependencies.
+
+```bash
+cargo build --locked --release --bins -p megabasterd-cli
+```
+
+Binaries are written to `target/release/` (`.exe` on Windows). A compiler is needed
+only when building from source. See [CONTRIBUTING.md](CONTRIBUTING.md) for testing,
+coverage and packaging commands.
 
 ### Optional integrations
 
@@ -107,7 +74,7 @@ required; a headless host need not have one.
 
 ## Usage
 
-After installing a verified native binary:
+After installing a native binary:
 
 ```bash
 mb --help
@@ -141,7 +108,7 @@ the keyboard listener.
 The native schema retains **55 leaf commands: 16 root commands and 39 commands
 inside six groups**. All are listed below; see [the option reference](docs/COMMANDS.md)
 for flags, defaults and limitations. Append `--help` to any command for its
-actual executable help once a native build is available.
+actual executable help.
 
 ### Transfers, public links and cloud files
 
@@ -295,11 +262,18 @@ state inspection, not an instruction to repeat it.
 ## Development and verification
 
 [CONTRIBUTING.md](CONTRIBUTING.md) describes the native CI/tooling boundary.
-Native CI is manually dispatched and targets Windows, Linux and both macOS
-architectures. Source-oracle fixtures are offline development assets, not a Python
-runtime dependency. A source assertion ledger distinguishes missing, written and
-actually executed behavior; helper tests alone do not prove a complete rewrite.
-No candidate suite or platform matrix is reported passing before execution.
+Rust CI runs formatting, Clippy/type checking, dependency auditing, the native
+test matrix and Release builds. The previous 76% line-coverage gate is retained
+with LLVM coverage. The assertion ledger retains all **1,416 baseline test
+definitions across 164 modules**, including language-specific replacements.
+Rust tests combine several related assertions in one test function; the ledger
+counts source contracts rather than pretending the two harnesses collect the
+same number of parameter-expanded cases. CI verifies every applicable mapping
+against tests actually discovered and passed on each platform.
+
+[Upstream changes](docs/UPSTREAM.md) records the reviewed MegaBasterd commit and
+which changes are implemented, already present, or specific to its desktop GUI.
+[Migration notes](docs/MIGRATION.md) explain the storage and interface changes.
 
 See [commands](docs/COMMANDS.md), [usage](docs/USAGE.md),
 [configuration](docs/CONFIG.md), [architecture](docs/ARCHITECTURE.md) and

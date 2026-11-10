@@ -1,6 +1,5 @@
 use super::{args::Config, context::Context};
 use crate::error::{Error, Result};
-use crate::storage::config::Config as Settings;
 use crate::terminal::{prompts, redaction::sanitize};
 
 pub fn dispatch(context: &Context, command: Config) -> Result<()> {
@@ -115,14 +114,4 @@ fn display_settings(context: &Context) -> Result<serde_json::Value> {
             .to_string_lossy()
     );
     Ok(sanitize(&settings, false))
-}
-
-pub fn validate_settings(settings: &Settings) -> Result<()> {
-    let (_, warnings) = Settings::from_value(settings.value()?)?;
-    if !warnings.is_empty() {
-        return Err(Error::Corrupt(
-            "Configuration contains unusable values".into(),
-        ));
-    }
-    Ok(())
 }

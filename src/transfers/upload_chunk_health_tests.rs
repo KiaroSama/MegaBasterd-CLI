@@ -124,6 +124,6 @@ fn each_real_connection_body_timeout_and_server_failure_debits_the_proxy_once_pe
         one_debit(pool, proxy);
         assert_eq!(calls.len(), 5);
         assert_eq!(waits, [2, 4, 8, 16]);
-        assert_eq!(store.list().unwrap(), [proxy.clone()]);
+        assert_eq!(store.list().unwrap(), std::slice::from_ref(proxy));
     }
 }

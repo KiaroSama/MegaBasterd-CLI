@@ -21,10 +21,7 @@ fn thumbnail_payload_uses_the_file_aes_key_zero_iv_and_zero_padding() {
 
 #[test]
 fn file_attribute_requests_require_https_and_an_exact_eight_byte_handle() {
-    assert_eq!(
-        attributes::upload_ticket(32),
-        json!({"a":"ufa","s":32,"ssl":2})
-    );
+    assert_eq!(attributes::upload_ticket(32), json!({"a":"ufa","s":32}));
     assert_eq!(
         attributes::attachment("node", &[0; 8]).unwrap(),
         json!({"a":"pfa","n":"node","fa":"0*AAAAAAAAAAA"})

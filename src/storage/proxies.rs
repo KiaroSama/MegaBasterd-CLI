@@ -44,6 +44,53 @@ pub fn canonical_proxy(value: &str) -> Result<String> {
     Ok(validate_proxy(value)?.to_string())
 }
 
+/// Import MegaBasterd's host:port@base64-user:base64-password list entries.
+/// Split credentials before interpreting '/' so base64 authentication is never truncated.
+pub fn import_proxy(value: &str) -> Result<String> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    if value.chars().any(char::is_control) {
+        return Err(Error::invalid("Proxy entry contains control characters"));
+    }
+    let value = value.trim();
+    let address = value.split_once("://").map_or(value, |(_, rest)| rest);
+    let Some((host, credentials)) = address.split_once('@') else {
+        validate_proxy(value)?;
+        return Ok(value.to_owned());
+    };
+    // URL-style authentication already has an unambiguous parser; legacy entries start
+    // with an actual host:port, not a username and a potentially numeric password.
+    if validate_proxy(credentials).is_ok() {
+        validate_proxy(value)?;
+        return Ok(value.to_owned());
+    }
+    let (user, password) = credentials
+        .split_once(':')
+        .ok_or_else(|| Error::invalid("Invalid legacy proxy credentials"))?;
+    let decode = |value: &str| -> Result<String> {
+        String::from_utf8(
+            STANDARD
+                .decode(value)
+                .map_err(|_| Error::invalid("Invalid base64 proxy credentials"))?,
+        )
+        .map_err(|_| Error::invalid("Proxy credentials are not UTF-8"))
+    };
+    let user = decode(user)?;
+    let password = decode(password)?;
+    if user.chars().chain(password.chars()).any(char::is_control) {
+        return Err(Error::invalid(
+            "Proxy credentials contain control characters",
+        ));
+    }
+    let scheme = value.split_once("://").map_or("http", |(scheme, _)| scheme);
+    let host = host.split('/').next().unwrap_or_default();
+    let mut url = validate_proxy(&format!("{scheme}://{host}"))?;
+    url.set_username(&user)
+        .map_err(|_| Error::invalid("Invalid proxy username"))?;
+    url.set_password(Some(&password))
+        .map_err(|_| Error::invalid("Invalid proxy password"))?;
+    Ok(url.to_string())
+}
+
 fn validate_urls(urls: &[String]) -> Result<()> {
     if urls.len() > 10_000 || urls.iter().any(|value| validate_proxy(value).is_err()) {
         return Err(Error::Corrupt(
@@ -313,10 +360,10 @@ impl Routing {
             validate_proxy(proxy)?;
             return Ok((Some(canonical_proxy(proxy)?), None));
         }
-        if let Some(pool) = &self.pool {
-            if let Some(picked) = pool.pick()? {
-                return Ok((Some(canonical_proxy(&picked)?), Some(picked)));
-            }
+        if let Some(pool) = &self.pool
+            && let Some(picked) = pool.pick()?
+        {
+            return Ok((Some(canonical_proxy(&picked)?), Some(picked)));
         }
         if self.force {
             return Err(Error::protocol(

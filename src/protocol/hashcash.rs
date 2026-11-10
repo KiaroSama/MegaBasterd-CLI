@@ -77,7 +77,7 @@ impl Challenge {
         let mut digest = Sha256::new();
         digest.update(nonce);
         let mut batch = [0u8; 48 * 256];
-        for token in batch.chunks_exact_mut(48) {
+        for token in batch.as_chunks_mut::<48>().0 {
             token.copy_from_slice(&self.token)
         }
         for _ in 0..1024 {

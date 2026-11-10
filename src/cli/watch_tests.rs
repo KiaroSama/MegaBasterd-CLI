@@ -334,7 +334,7 @@ fn corrupt_queue_at_start_or_enqueue_fails_cleanly_and_preserves_the_original_by
         );
         let error = result.unwrap_err();
         assert_eq!(error.exit_code(), 1);
-        assert!(error.to_string().to_ascii_lowercase().contains("corrupt"));
+        assert_eq!(error.code(), "storage_corrupt");
         assert!(stdout.text().is_empty());
         assert!(!stderr.text().contains("Queued "));
         if during_enqueue {

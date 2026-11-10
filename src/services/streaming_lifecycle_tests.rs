@@ -42,10 +42,7 @@ fn cancel_stalled_cdn_body_reaps_stream_workers_closes_upstream_and_releases_lis
                         std::io::ErrorKind::UnexpectedEof
                             | std::io::ErrorKind::ConnectionReset
                             | std::io::ErrorKind::ConnectionAborted
-                    ) =>
-                {
-                    ()
-                }
+                    ) => {}
                 result => panic!("stream shutdown left its CDN socket open: {result:?}"),
             }
         },

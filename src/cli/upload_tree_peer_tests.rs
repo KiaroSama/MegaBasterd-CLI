@@ -190,7 +190,7 @@ fn retry_reuses_remote_tree_and_file_receipts_without_repeating_successful_share
                     result.unwrap();
                     assert_eq!(progress.snapshot(item).unwrap().status, Status::Complete);
                 } else {
-                    assert!(matches!(result, Err(Error::Mega { code: -11, .. })));
+                    assert!(matches!(result, Err(Error::Transfer(_))), "{result:?}");
                     assert_ne!(progress.snapshot(item).unwrap().status, Status::Complete);
                 }
             }

@@ -384,6 +384,9 @@ fn actual_binary_corrupt_config_blocks_commands_but_preserves_inspection_and_exp
 #[test]
 fn actual_binary_config_get_and_path_keep_plain_stdout_and_redact_secrets() {
     let fixture = Fixture::new();
+    ConfigStore::new(fixture.paths.config())
+        .set("log_level", "WARNING")
+        .unwrap();
     for (key, value, expected) in [
         ("max_workers", "10", "10\n"),
         ("default_account", "null-value", "null-value\n"),
@@ -408,7 +411,11 @@ fn actual_binary_config_get_and_path_keep_plain_stdout_and_redact_secrets() {
                 .replace("\r\n", "\n"),
             expected
         );
-        assert!(output.stderr.is_empty());
+        assert!(
+            output.stderr.is_empty(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     let output = fixture.run(&arguments(&["config", "path"]), b"");
     assert_eq!(output.status.code(), Some(0));
@@ -418,7 +425,11 @@ fn actual_binary_config_get_and_path_keep_plain_stdout_and_redact_secrets() {
             .trim_end_matches(['\r', '\n']),
         fixture.paths.config().to_str().unwrap()
     );
-    assert!(output.stderr.is_empty());
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]

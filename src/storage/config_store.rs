@@ -64,12 +64,11 @@ impl ConfigStore {
             Ok(locked) => locked,
             Err(error @ Error::Busy(_)) => {
                 // An unlocked snapshot can diagnose damage, never supply usable settings.
-                if let Ok(Some(bytes)) = self.store.diagnostic_bytes() {
-                    if let Err(Error::Corrupt(reason)) =
+                if let Ok(Some(bytes)) = self.store.diagnostic_bytes()
+                    && let Err(Error::Corrupt(reason)) =
                         decode_document::<serde_json::Value>(&bytes).and_then(Self::validate_root)
-                    {
-                        return Err(Self::corruption(reason, false));
-                    }
+                {
+                    return Err(Self::corruption(reason, false));
                 }
                 return Err(error);
             }

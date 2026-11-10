@@ -1,24 +1,18 @@
-name: Native Dependency Audit
-
+name: Dependency Audit
 on:
+  push:
+  pull_request:
   workflow_dispatch:
-  workflow_call:
-
+  schedule:
+    - cron: '0 6 * * 1'
 permissions:
   contents: read
-
 jobs:
   cargo-policy:
-    name: Locked Cargo advisories, licenses and sources
     runs-on: ubuntu-26.04
-    timeout-minutes: 30
-    env:
-      HOOKMAKER_MAX_TEST_WORKERS: '2'
+    timeout-minutes: 20
     steps:
-      - name: Checkout exact candidate
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Bounded pinned full-graph audit
-        timeout-minutes: 28
-        run: python3 -I tools/ci/dependency_audit.py
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - run: rustup toolchain install 1.99.1 --profile minimal --no-self-update
+      - run: cargo install cargo-deny --version 0.20.2 --locked
+      - run: cargo deny --locked check advisories licenses sources

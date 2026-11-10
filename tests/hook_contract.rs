@@ -10,7 +10,7 @@ use std::{ffi::OsString, path::Path};
 #[test]
 fn transferred_path_is_one_literal_argument_and_configured_arguments_are_preserved() {
     let path = OsString::from("directory with spaces/file;$(untrusted).bin");
-    let (program, arguments) = command_args("notify --flag", &[path.clone()]).unwrap();
+    let (program, arguments) = command_args("notify --flag", std::slice::from_ref(&path)).unwrap();
     assert_eq!(program, OsString::from("notify"));
     assert_eq!(arguments, vec![OsString::from("--flag"), path]);
     assert!(command_args("", &[]).is_err());

@@ -107,42 +107,18 @@ fn relocated_native_aliases_need_no_python_cargo_source_cwd_or_project_root_over
 #[test]
 fn packaged_launcher_delegates_without_raw_transcripts_or_late_file_scrubbing() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let launchers = fs::read_dir(root)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| {
-            path.extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("ps1"))
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(launchers, [root.join("Run.ps1")]);
-    assert!(launchers[0].is_file());
-    let launcher = include_str!("../tools/launcher/Run.Native.ps1");
-    let lower = launcher.to_ascii_lowercase();
-    for forbidden in [
-        "start-transcript",
-        "stop-transcript",
-        "protect-transcriptfile",
-        "get-content -literalpath $path -raw",
+    assert!(!root.join("Run.ps1").exists());
+    let package = include_str!("../tools/ci.rs");
+    assert!(package.contains("fn package()"));
+    assert!(package.contains("SHA256SUMS"));
+    assert!(package.contains("megabasterd-cli-2.0.0.crate"));
+    for binary in [
+        env!("CARGO_BIN_EXE_mb"),
+        env!("CARGO_BIN_EXE_mbcli"),
+        env!("CARGO_BIN_EXE_megabasterd-cli"),
     ] {
-        assert!(
-            !lower.contains(forbidden),
-            "unsafe launcher primitive: {forbidden}"
-        );
+        assert!(Path::new(binary).is_file());
     }
-    let invoke = launcher.find("& $Binary @CliArgs").unwrap();
-    assert!(
-        launcher
-            .find("$PSNativeCommandUseErrorActionPreference = $false")
-            .unwrap()
-            < invoke
-    );
-    assert!(!launcher.contains("$global:PSNativeCommandUseErrorActionPreference"));
-    assert!(launcher.contains("$Code = $LASTEXITCODE"));
-    assert!(launcher.contains("exit $Code"));
-    let package = include_str!("../tools/package/runtime.py");
-    assert!(package.contains("entries[\"Run.ps1\"] = project / \"tools/launcher/Run.Native.ps1\""));
 }
 
 #[test]

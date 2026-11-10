@@ -7,7 +7,6 @@ use image::GenericImageView;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::attributes::{Attachment, attach};
 use crate::crypto::{keys, wire};
 use crate::error::Error;
 use crate::protocol::{
@@ -16,6 +15,7 @@ use crate::protocol::{
     cloud::Cloud,
     test_peer::{self, Response},
 };
+use crate::services::attributes::{Attachment, attach};
 use crate::transfers::control::Control;
 
 const PNG: &[u8] = include_bytes!("../../tests/fixtures/media/1x1-green.png");
@@ -92,8 +92,8 @@ fn real_png_thumbnail_is_encrypted_uploaded_and_attached_only_after_exact_handle
                 assert_eq!(commands.as_array().unwrap().len(), 1);
                 match commands[0]["a"].as_str().unwrap() {
                     "ufa" => {
-                        assert_eq!(commands[0]["ssl"], 2);
-                        assert_eq!(commands[0].as_object().unwrap().len(), 3);
+                        assert!(commands[0].get("ssl").is_none());
+                        assert_eq!(commands[0].as_object().unwrap().len(), 2);
                         let url = url::Url::parse(&format!("https://{}", request.headers["host"]))
                             .unwrap();
                         Some(api_reply(
@@ -202,4 +202,61 @@ fn rejected_attachment_and_unsupported_or_canceled_inputs_never_claim_success() 
         },
     );
     assert!(calls.is_empty());
+}
+
+#[test]
+fn upstream_thumbnail_retry_is_bounded_and_keeps_nonretryable_failures_and_cancellation_final() {
+    use crate::transfers::control::Control;
+    use std::{cell::Cell, time::Duration};
+    let calls = Cell::new(0);
+    let mut waits = Vec::new();
+    let value = super::retry_upload(
+        &Control::new(),
+        || {
+            calls.set(calls.get() + 1);
+            if calls.get() < 3 {
+                Err(Error::mega(-3))
+            } else {
+                Ok(42)
+            }
+        },
+        |delay| {
+            waits.push(delay);
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(value, 42);
+    assert_eq!(waits, [Duration::from_secs(1), Duration::from_secs(2)]);
+    calls.set(0);
+    let error = super::retry_upload::<()>(
+        &Control::new(),
+        || {
+            calls.set(calls.get() + 1);
+            Err(Error::Timeout)
+        },
+        |_| Ok(()),
+    )
+    .unwrap_err();
+    assert!(matches!(error, Error::Timeout));
+    assert_eq!(calls.get(), 5);
+    calls.set(0);
+    assert!(
+        super::retry_upload::<()>(
+            &Control::new(),
+            || {
+                calls.set(calls.get() + 1);
+                Err(Error::protocol("invalid attribute handle"))
+            },
+            |_| panic!("malformed responses must not be retried")
+        )
+        .is_err()
+    );
+    assert_eq!(calls.get(), 1);
+    let control = Control::new();
+    control.cancel();
+    assert!(matches!(
+        super::retry_upload::<()>(&control, || panic!("sent after cancellation"), |_| Ok(())),
+        Err(Error::Canceled)
+    ));
 }

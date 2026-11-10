@@ -125,7 +125,7 @@ fn crypt_blocks(data: &[u8], key: &[u8], encrypt: bool, chained: bool) -> Result
     let cipher = AesBlock::new(key)?;
     let mut output = Vec::with_capacity(data.len());
     let mut previous = Zeroizing::new([0; 16]);
-    for input in data.chunks_exact(16) {
+    for input in data.as_chunks::<16>().0 {
         let mut block = Zeroizing::new([0; 16]);
         block.copy_from_slice(input);
         if encrypt {

@@ -118,11 +118,11 @@ pub fn install() {
                 backtrace: Backtrace::force_capture(),
             };
             let _ = CAPTURE.try_with(|capture| {
-                if let Ok(mut capture) = capture.try_borrow_mut() {
-                    if let Some(slot) = capture.as_mut() {
-                        slot.report = Some(report);
-                        slot.busy = false;
-                    }
+                if let Ok(mut capture) = capture.try_borrow_mut()
+                    && let Some(slot) = capture.as_mut()
+                {
+                    slot.report = Some(report);
+                    slot.busy = false;
                 }
             });
         } else {
@@ -135,13 +135,12 @@ pub fn install() {
 }
 
 pub(crate) fn record(diagnostic: &str, logger: Option<&Logger>, output: &Output) {
-    if let Some(logger) = logger {
-        if logger
+    if let Some(logger) = logger
+        && logger
             .write("ERROR", "PANIC", diagnostic, &serde_json::json!({}))
             .is_err()
-        {
-            let _ = output.logging_warning(logger);
-        }
+    {
+        let _ = output.logging_warning(logger);
     }
 }
 

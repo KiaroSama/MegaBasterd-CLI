@@ -108,7 +108,12 @@ impl<'a> Input<'a> {
                         }
                     }
                     Ok(())
-                })).unwrap_or_else(|_| Err(Error::protocol("Transfer keyboard listener was interrupted")));
+                }))
+                .unwrap_or_else(|_| {
+                    Err(Error::protocol(
+                        "Transfer keyboard listener was interrupted",
+                    ))
+                });
                 if result.is_err() {
                     control.cancel();
                 }

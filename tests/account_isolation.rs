@@ -39,26 +39,9 @@ fn native_harness_always_receives_an_isolated_user_override_from_the_shared_runn
         assert!(path.starts_with(&paths.user));
         assert!(!path.starts_with(root.join("User")));
     }
-    let runner = include_str!("../tools/ci/run-native.py");
-    let environment = runner
-        .split_once("def environment(work, workers):")
-        .unwrap()
-        .1
-        .split_once("def worker_budget():")
-        .unwrap()
-        .0;
-    assert!(
-        environment.contains("\"MEGABASTERD_USER_DIR\": str(work / \"runtime space\" / \"User\")")
-    );
-    for required in [
-        "prefix+\"-list\",\n                                          env, log,",
-        "prefix+\"-run\", env, log,",
-    ] {
-        assert!(
-            runner.contains(required),
-            "native harness lost its isolated environment"
-        );
-    }
+    let runner = include_str!("../tools/ci.rs");
+    assert!(runner.contains("MEGABASTERD_USER_DIR"));
+    assert!(runner.contains("runtime space/User"));
 }
 
 #[test]

@@ -179,10 +179,7 @@ fn parsed_account_batches_preserve_cache_and_distinguish_probe_cancel_from_logou
                                 std::io::ErrorKind::UnexpectedEof
                                     | std::io::ErrorKind::ConnectionReset
                                     | std::io::ErrorKind::ConnectionAborted
-                            ) =>
-                        {
-                            ()
-                        }
+                            ) => {}
                         result => {
                             panic!("canceled account request retained its socket: {result:?}")
                         }

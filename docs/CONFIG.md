@@ -1,8 +1,8 @@
 # Native Configuration Reference
 
-The Rust candidate uses **fresh, versioned native storage**. It does not read or
+The Rust implementation uses **fresh, versioned native storage**. It does not read or
 rewrite Python-era configuration/accounts/queues. This reference describes
-source behavior; native runtime verification is still pending.
+the native storage and command behavior checked in CI.
 
 ```bash
 mb config path
@@ -194,4 +194,4 @@ a damaged store is not permission to silently clear the proxy routing policy.
 
 Preserve these as user/application data. Old-runtime cleanup never authorizes
 removing credentials, outputs, queue data or operational logs. The native
-candidate has not yet passed native CI/practical migration verification.
+storage uses its own native format; old personal stores are never overwritten.

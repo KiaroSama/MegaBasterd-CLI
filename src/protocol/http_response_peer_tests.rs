@@ -47,10 +47,7 @@ fn direct_http_cancels_pending_headers_and_body_without_waiting_for_the_request_
                             std::io::ErrorKind::UnexpectedEof
                                 | std::io::ErrorKind::ConnectionReset
                                 | std::io::ErrorKind::ConnectionAborted
-                        ) =>
-                    {
-                        ()
-                    }
+                        ) => {}
                     result => {
                         panic!("canceled client did not close its upstream socket: {result:?}")
                     }

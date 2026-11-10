@@ -196,6 +196,10 @@ impl Shared {
 #[path = "upload_acceptance_tests.rs"]
 mod acceptance_tests;
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Explicit transfer state and cancellation dependencies at this boundary."
+)]
 pub fn upload(
     cloud: &mut Cloud,
     source: &Path,
@@ -396,22 +400,20 @@ pub fn upload(
                             progress.update(item, completed, false)?;
                         }
                     };
-                    if let Err(error) = run() {
-                        if let Ok(mut s) = shared.lock() {
-                            if s.error.is_none() {
-                                s.error = Some(error);
-                            }
-                        }
+                    if let Err(error) = run()
+                        && let Ok(mut s) = shared.lock()
+                        && s.error.is_none()
+                    {
+                        s.error = Some(error);
                     }
                 }));
             }
             for thread in threads {
-                if thread.join().is_err() {
-                    if let Ok(mut state) = shared.lock() {
-                        if state.error.is_none() {
-                            state.error = Some(Error::protocol("Upload worker was interrupted"));
-                        }
-                    }
+                if thread.join().is_err()
+                    && let Ok(mut state) = shared.lock()
+                    && state.error.is_none()
+                {
+                    state.error = Some(Error::protocol("Upload worker was interrupted"));
                 }
             }
         });

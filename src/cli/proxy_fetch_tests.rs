@@ -61,10 +61,7 @@ fn parsed_proxy_fetch_cancellation_preserves_the_pool_after_a_request_with_or_wi
                             std::io::ErrorKind::UnexpectedEof
                                 | std::io::ErrorKind::ConnectionReset
                                 | std::io::ErrorKind::ConnectionAborted
-                        ) =>
-                    {
-                        ()
-                    }
+                        ) => {}
                     other => panic!("canceled fetch did not close its socket: {other:?}"),
                 }
             },

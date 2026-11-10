@@ -2,7 +2,7 @@
 // Unicode data notice: licenses/Unicode-3.0.txt. Do not regenerate with another Unicode version.
 
 #[rustfmt::skip]
-const FOLD: [(char, &str); 1530] = [
+static FOLD: [(char, &str); 1530] = [
     ('\u{41}', "\u{61}"), ('\u{42}', "\u{62}"), ('\u{43}', "\u{63}"), ('\u{44}', "\u{64}"),
     ('\u{45}', "\u{65}"), ('\u{46}', "\u{66}"), ('\u{47}', "\u{67}"), ('\u{48}', "\u{68}"),
     ('\u{49}', "\u{69}"), ('\u{4a}', "\u{6a}"), ('\u{4b}', "\u{6b}"), ('\u{4c}', "\u{6c}"),

@@ -28,10 +28,10 @@ impl Transport {
             self.control.checkpoint().map_err(failure)?;
             safe_target(&url).map_err(failure)?;
             #[cfg(test)]
-            if let Some(address) = self.test_peer {
-                if url.host_str() != Some("testserver.com") || url.port() != Some(address.port()) {
-                    return Err(failure(Error::invalid("Test peer destination changed")));
-                }
+            if let Some(address) = self.test_peer
+                && (url.host_str() != Some("testserver.com") || url.port() != Some(address.port()))
+            {
+                return Err(failure(Error::invalid("Test peer destination changed")));
             }
             let (proxy, picked) = self.routing.select().map_err(failure)?;
             let pinned = proxy_backend(&url, proxy.as_deref()).map_err(failure)?;

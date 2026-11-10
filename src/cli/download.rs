@@ -66,6 +66,10 @@ fn resolver<'a>(api: &'a Api, command: &'a Download, context: &'a Context) -> Re
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Explicit transfer state and cancellation dependencies at this boundary."
+)]
 fn prepare(
     context: &Context,
     api: &mut Api,
@@ -397,16 +401,16 @@ fn execute_with(
                         }
                     }
                 };
-                if let Err(error) = run() { if let Ok(mut errors) = worker_errors.lock() { errors.push(error); } }
+                if let Err(error) = run() && let Ok(mut errors) = worker_errors.lock() { errors.push(error); }
             }));
         }
         for worker in workers {
-            if worker.join().is_err() {
-                if let Ok(mut errors) = worker_errors.lock() {
-                    errors.push(Error::protocol(
-                        "Download orchestration worker was interrupted",
-                    ));
-                }
+            if worker.join().is_err()
+                && let Ok(mut errors) = worker_errors.lock()
+            {
+                errors.push(Error::protocol(
+                    "Download orchestration worker was interrupted",
+                ));
             }
         }
         Ok(())

@@ -92,10 +92,7 @@ fn scenario(case: Case, through_proxy: bool) {
                     std::io::ErrorKind::UnexpectedEof
                         | std::io::ErrorKind::ConnectionReset
                         | std::io::ErrorKind::ConnectionAborted
-                ) =>
-            {
-                ()
-            }
+                ) => {}
             other => panic!("API response socket remained open: {other:?}"),
         }
         closed.try_send(()).unwrap();
@@ -206,10 +203,7 @@ fn fork_preserves_timeout_and_sid_but_isolates_sequence_session_and_live_connect
                         std::io::ErrorKind::UnexpectedEof
                             | std::io::ErrorKind::ConnectionReset
                             | std::io::ErrorKind::ConnectionAborted
-                    ) =>
-                {
-                    ()
-                }
+                    ) => {}
                 other => panic!("fork retained a live request connection: {other:?}"),
             }
             closed.try_send(()).unwrap();
