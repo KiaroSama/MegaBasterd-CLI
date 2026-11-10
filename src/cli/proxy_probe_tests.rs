@@ -70,8 +70,8 @@ fn parsed_proxy_probe_includes_configured_urls_and_reports_yes_no_with_safe_reas
             .contains("1/2 reachable")
     );
     // A successful TCP probe closes its socket immediately, without a protocol request.
-    live.set_nonblocking(true).unwrap();
-    let (mut accepted, _) = live.accept().unwrap();
+    let (mut accepted, _) =
+        crate::protocol::test_peer::accept_ready(&live, Duration::from_secs(1)).unwrap();
     accepted
         .set_read_timeout(Some(Duration::from_secs(1)))
         .unwrap();
@@ -108,8 +108,8 @@ fn parsed_proxy_probe_includes_configured_urls_and_reports_yes_no_with_safe_reas
         ProxyStore::new(context.paths.proxies()).list().unwrap(),
         [raw]
     );
-    let (mut accepted, _) = live.accept().unwrap();
-    accepted.set_nonblocking(false).unwrap();
+    let (mut accepted, _) =
+        crate::protocol::test_peer::accept_ready(&live, Duration::from_secs(1)).unwrap();
     accepted
         .set_read_timeout(Some(Duration::from_secs(1)))
         .unwrap();

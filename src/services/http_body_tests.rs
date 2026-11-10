@@ -216,11 +216,10 @@ fn real_body_writer_preserves_offsets_and_releases_on_idle_deadline_and_cancella
         let reading = mode == "reading";
         let paused = mode.starts_with("paused-");
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
         let mut client = client(address);
-        let (mut socket, _) = listener.accept().unwrap();
-        socket.set_nonblocking(false).unwrap();
+        let (mut socket, _) =
+            crate::protocol::test_peer::accept_ready(&listener, Duration::from_secs(2)).unwrap();
         let send = tokio::net::TcpSocket::from_std_stream(socket.try_clone().unwrap());
         send.set_send_buffer_size(4096).unwrap();
         drop(send);

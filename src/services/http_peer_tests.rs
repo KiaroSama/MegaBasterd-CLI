@@ -104,7 +104,6 @@ fn unexpected_accept_failure_reaps_handlers_closes_sockets_and_releases_the_list
 fn distinct_peer_admission_keeps_global_capacity_and_drop_retires_all_peer_entries() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
-    listener.set_nonblocking(true).unwrap();
     let state = Arc::new(Mutex::new(Active {
         sockets: HashMap::new(),
         peers: HashMap::new(),
@@ -118,8 +117,8 @@ fn distinct_peer_admission_keeps_global_capacity_and_drop_retires_all_peer_entri
         client
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
-        let (socket, _) = listener.accept().unwrap();
-        socket.set_nonblocking(false).unwrap();
+        let (socket, _) =
+            crate::protocol::test_peer::accept_ready(&listener, Duration::from_secs(2)).unwrap();
         let mut active = state.lock().unwrap();
         assert!(active.can_accept(first, 4, 2));
         active.sockets.insert(id, socket.try_clone().unwrap());
@@ -173,7 +172,8 @@ fn distinct_peer_admission_keeps_global_capacity_and_drop_retires_all_peer_entri
     for last in 2u8..8 {
         let peer: IpAddr = format!("127.0.0.{last}").parse().unwrap();
         let client = TcpStream::connect_timeout(&address, Duration::from_secs(2)).unwrap();
-        let (socket, _) = listener.accept().unwrap();
+        let (socket, _) =
+            crate::protocol::test_peer::accept_ready(&listener, Duration::from_secs(2)).unwrap();
         let id = u64::from(last);
         {
             let mut active = state.lock().unwrap();
