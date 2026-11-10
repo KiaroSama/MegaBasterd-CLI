@@ -24,6 +24,7 @@ fn actual_binary_sanitizes_invalid_link_errors_on_human_and_machine_surfaces() {
         let mut command = Command::new(env!("CARGO_BIN_EXE_mb"));
         command.current_dir(&cwd).env_clear();
         for name in [
+            "LLVM_PROFILE_FILE",
             "PATH",
             "SystemRoot",
             "WINDIR",

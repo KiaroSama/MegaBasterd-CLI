@@ -7,7 +7,7 @@ use std::{
     error::Error,
     fs,
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -161,14 +161,18 @@ fn verify() -> Result<()> {
         source_policy(&root().join(directory))?;
     }
     let ledger = ledger()?;
-    let built = output(cargo().args([
-        "test",
-        "--locked",
-        "--workspace",
-        "--all-targets",
-        "--no-run",
-        "--message-format=json",
-    ]))?;
+    let built = output(
+        cargo()
+            .args([
+                "test",
+                "--locked",
+                "--workspace",
+                "--all-targets",
+                "--no-run",
+                "--message-format=json-render-diagnostics",
+            ])
+            .stderr(Stdio::inherit()),
+    )?;
     let mut harnesses = BTreeMap::new();
     for line in String::from_utf8(built.stdout)?.lines() {
         let Ok(message) = serde_json::from_str::<Value>(line) else {
@@ -197,6 +201,7 @@ fn verify() -> Result<()> {
     fs::create_dir_all(work.join("runtime space/User"))?;
     fs::create_dir_all(work.join("results"))?;
     let mut passed = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut failures = Vec::new();
     let mut count = 0;
     for (index, (binary, source)) in harnesses.iter().enumerate() {
         let mut command = Command::new(binary);
@@ -219,32 +224,41 @@ fn verify() -> Result<()> {
             .filter_map(|x| x.strip_suffix(": test"))
             .map(str::to_owned)
             .collect();
-        command.args(["--test-threads=2", "--color=never"]);
         // Remove discovery arguments before execution.
         let mut run = Command::new(binary);
         private_test_process(&mut run);
         run.current_dir(root())
             .envs(command.get_envs().filter_map(|(k, v)| v.map(|v| (k, v))))
             .args(["--test-threads=2", "--color=never"]);
-        let result = output(&mut run)?;
+        let result = run.output()?;
         let text = String::from_utf8(result.stdout)?;
-        fs::write(work.join(format!("results/{index}.txt")), &text)?;
+        let diagnostics = String::from_utf8_lossy(&result.stderr);
+        fs::write(
+            work.join(format!("results/{index}.txt")),
+            format!("{source}\n{text}{diagnostics}"),
+        )?;
         let actual: BTreeSet<_> = text
             .lines()
             .filter_map(|line| line.strip_prefix("test ")?.strip_suffix(" ... ok"))
             .map(str::to_owned)
             .collect();
-        if actual != discovered {
-            return Err(format!(
-                "Discovered tests did not all pass (including ignored tests): {source}"
-            )
-            .into());
+        if !result.status.success() || actual != discovered {
+            eprintln!("{source}: {}\n{text}{diagnostics}", result.status);
+            failures.push(source.as_str());
+            continue;
         }
         println!("{source}: {} passed", actual.len());
         count += actual.len();
         if !actual.is_empty() {
             passed.insert(source.clone(), actual);
         }
+    }
+    if !failures.is_empty() {
+        return Err(format!(
+            "Native tests failed or were ignored in: {}",
+            failures.join(", ")
+        )
+        .into());
     }
     let platform = std::env::consts::OS;
     let mut cases = Vec::new();
@@ -454,6 +468,34 @@ fn package() -> Result<()> {
         }
     }
     fs::write(destination.join("SHA256SUMS"), hashes)?;
+    // Actions' outer ZIP normalizes Unix permissions. A tar payload retains the
+    // executable modes of the actual native aliases across artifact download.
+    let target = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        ("windows", "x86_64") => "x86_64-pc-windows-msvc",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        _ => return Err("Unsupported native distribution target".into()),
+    };
+    let archives = root().join(".ci-work/distribution");
+    fs::create_dir_all(&archives)?;
+    let name = format!("megabasterd-cli-2.0.0-{target}.tar.gz");
+    let archive = archives.join(&name);
+    output(
+        Command::new("tar")
+            .arg("-czf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(&destination)
+            .arg("."),
+    )?;
+    fs::write(
+        archives.join(format!("{name}.sha256")),
+        format!(
+            "{}  {name}\n",
+            hex::encode(Sha256::digest(fs::read(archive)?))
+        ),
+    )?;
     Ok(())
 }
 

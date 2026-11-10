@@ -19,6 +19,7 @@ fn run(root: &Path, args: &[&str]) -> process::ProcessOutput {
     let mut command = Command::new(env!("CARGO_BIN_EXE_mb"));
     command.current_dir(root).env_clear();
     for key in [
+        "LLVM_PROFILE_FILE",
         "PATH",
         "SystemRoot",
         "WINDIR",

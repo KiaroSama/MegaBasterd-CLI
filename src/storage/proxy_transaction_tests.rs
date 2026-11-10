@@ -123,6 +123,7 @@ fn overlapping_proxy_processes_refuse_contention_then_reload_before_retry() {
         let mut command = Command::new(std::env::current_exe().unwrap());
         command.current_dir(scratch.path()).env_clear();
         for key in [
+            "LLVM_PROFILE_FILE",
             "PATH",
             "SystemRoot",
             "WINDIR",

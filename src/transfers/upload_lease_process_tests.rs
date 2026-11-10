@@ -17,6 +17,7 @@ fn child(root: &Path, source: &Path, states: &Path, address: std::net::SocketAdd
     let mut command = Command::new(std::env::current_exe().unwrap());
     command.current_dir(root).env_clear();
     for key in [
+        "LLVM_PROFILE_FILE",
         "PATH",
         "SystemRoot",
         "WINDIR",

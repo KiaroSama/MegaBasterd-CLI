@@ -151,6 +151,7 @@ fn actual_panics_keep_sanitized_origin_and_trace_only_in_the_private_log() {
     let mut command = Command::new(std::env::current_exe().unwrap());
     command.env_clear().current_dir(scratch.path());
     for key in [
+        "LLVM_PROFILE_FILE",
         "PATH",
         "SystemRoot",
         "WINDIR",

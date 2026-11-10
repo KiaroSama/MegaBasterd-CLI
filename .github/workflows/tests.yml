@@ -21,12 +21,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - run: rustup toolchain install 1.99.1 --profile minimal --component llvm-tools-preview --no-self-update
-      - run: cargo install cargo-llvm-cov --locked
+      - run: cargo install cargo-llvm-cov --version 0.9.1 --locked
       - run: cargo xtask media
       - name: Preserve the 76 percent coverage gate
         run: |
           umask 077
-          cargo llvm-cov --locked --workspace --all-targets --ignore-filename-regex 'xtask/|tests/|_tests.rs' --fail-under-lines 76 --lcov --output-path lcov.info -- --test-threads=2
+          cargo llvm-cov --locked --workspace --all-targets --ignore-filename-regex 'xtask/|tools/|tests/|_tests.rs' --fail-under-lines 76 --lcov --output-path lcov.info -- --test-threads=2
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:

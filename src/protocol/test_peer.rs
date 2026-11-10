@@ -194,10 +194,26 @@ pub(crate) fn respond(stream: &mut impl Write, response: Response, keep_alive: b
         head.push_str(&format!("{key}: {value}\r\n"));
     }
     assert!(head.len() < MAX_HEADERS);
-    stream.write_all(head.as_bytes()).unwrap();
-    stream.write_all(b"\r\n").unwrap();
-    stream.write_all(&response.body).unwrap();
-    stream.flush().unwrap();
+    let sent = (|| -> io::Result<()> {
+        stream.write_all(head.as_bytes())?;
+        stream.write_all(b"\r\n")?;
+        stream.write_all(&response.body)?;
+        stream.flush()
+    })();
+    // Refusal/cancellation tests deliberately close after validating headers,
+    // possibly before the peer finishes its body. Keep every other I/O failure
+    // visible; callers still assert the exact requests and resulting state.
+    if let Err(error) = sent {
+        assert!(
+            matches!(
+                error.kind(),
+                io::ErrorKind::BrokenPipe
+                    | io::ErrorKind::ConnectionReset
+                    | io::ErrorKind::ConnectionAborted
+            ),
+            "TLS response failed: {error}"
+        );
+    }
 }
 
 /// Two owned request handlers permit real transfer-overlap assertions without another TLS stack.

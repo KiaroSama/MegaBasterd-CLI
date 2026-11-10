@@ -45,6 +45,7 @@ fn child(queue: &Queue, mode: &str, index: usize, test: &str) -> OwnedChild {
     fs::create_dir_all(&temporary).unwrap();
     command.current_dir(directory).env_clear();
     for key in [
+        "LLVM_PROFILE_FILE",
         "PATH",
         "SystemRoot",
         "WINDIR",

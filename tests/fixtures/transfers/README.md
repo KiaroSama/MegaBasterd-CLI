@@ -4,7 +4,7 @@ These are public test-only data, not user files, account keys or signing materia
 The vectors were generated from the retained Python baseline at commit
 `c4559ecef08c1fb47cc57669230d2f6013520416`, using Python 3.11.9 and
 PyCryptodome 3.23.0. Exact source SHA256 values are recorded in `vectors.json`
-and checked before loading either source module.
+and identify the historical modules used during generation.
 
 The plaintext is defined independently of the Rust implementation:
 `byte(i) = (13*i + 7) % 256`. Sizes 0, 17 and 131089 exercise an empty file,
@@ -20,32 +20,19 @@ recovered plaintext with the independent SHA256 expectations; upload keys are
 random, so its wire ciphertext is not expected to equal these fixed-key files.
 Synthetic tests do not prove live MEGA/account behavior or real-media codecs.
 
-## Regeneration
+## Provenance and native verification
 
-`tools/oracle/transfer_fixture.py` is offline tooling only, never the Rust
-application's runtime or a Python bridge. Run it with the pinned existing
-Python interpreter and `-I`, supplying these arguments:
+The historical generator is preserved at
+[`6eb6155:tools/oracle/transfer_fixture.py`](https://github.com/KiaroSama/MegaBasterd-CLI/blob/6eb6155/tools/oracle/transfer_fixture.py).
+It has been removed from the current Rust-only source tree. The recorded source
+hashes and independent expectations remain frozen; do not regenerate expected
+ciphertext from the Rust code under test.
 
-- `--source-root`: a source checkout matching the recorded source hashes.
-- `--provenance`: the existing `tests/fixtures/crypto-vectors.json`.
-- `--output`: a new empty fixture directory.
-- `--check`: compare an existing fixture directory byte-for-byte without overwriting.
-
-Generation never overwrites an existing file: identical bytes are accepted,
-and differing bytes fail. The check requires every file to exist and reuses the same
-source algorithm to validate every ciphertext plus the UTF-8 JSON document.
-It creates a unique UTF-8 UTC diagnostic log in `Logs/oracle/`, never imports
-the CLI, accesses accounts or performs network requests. Run under the owning
-project's bounded runner; no package installation is needed. After old-source
-retirement, use a read-only historical checkout with the same hashes.
-
-## Execution evidence and limits
-
-The source-only generation returned child exit 0. Its first guarded run
-reported and terminated a surviving descendant; a later non-overwriting
-verification completed cleanly (exit 0, no surviving child). Both receipts are
-kept privately. No Rust compilation, native test or CI success is inferred
-from fixture generation or formatting.
+`cargo test --locked --lib transfers::download_peer_tests` and
+`cargo test --locked --lib transfers::upload_peer_tests` exercise these vectors
+through the native transfer implementation. `cargo xtask verify` runs those
+tests as part of the complete suite and records the actual commit/results.
+The fixtures require no historical interpreter during normal builds or CI.
 
 Own generator and fixtures: GPL-3.0-or-later; historical source rights remain
 as recorded in `ATTRIBUTION.md` and `licenses/MIT-historical.txt`.
