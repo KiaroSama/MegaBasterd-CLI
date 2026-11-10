@@ -1,7 +1,7 @@
 //! Rust-only CI driver. Each receipt is derived from actual libtest discovery and execution.
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::io::Write;
+use std::io::{BufRead, Read, Write};
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
@@ -35,6 +35,38 @@ fn output(command: &mut Command) -> Result<Output> {
         .into());
     }
     Ok(result)
+}
+
+/// Keep libtest's progress visible while retaining its exact output for the receipt.
+fn test_output(command: &mut Command) -> Result<Output> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let stdout = child.stdout.take().ok_or("Missing test stdout")?;
+    let mut stderr = child.stderr.take().ok_or("Missing test stderr")?;
+    std::thread::scope(|scope| {
+        let diagnostics = scope.spawn(move || -> std::io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            stderr.read_to_end(&mut bytes)?;
+            Ok(bytes)
+        });
+        let mut captured = Vec::new();
+        for line in std::io::BufReader::new(stdout).split(b'\n') {
+            let line = line?;
+            std::io::stdout().write_all(&line)?;
+            std::io::stdout().write_all(b"\n")?;
+            captured.extend_from_slice(&line);
+            captured.push(b'\n');
+        }
+        Ok(Output {
+            status: child.wait()?,
+            stdout: captured,
+            stderr: diagnostics
+                .join()
+                .map_err(|_| "Test stderr reader panicked")??,
+        })
+    })
 }
 
 fn cargo() -> Command {
@@ -230,7 +262,8 @@ fn verify() -> Result<()> {
         run.current_dir(root())
             .envs(command.get_envs().filter_map(|(k, v)| v.map(|v| (k, v))))
             .args(["--test-threads=2", "--color=never"]);
-        let result = run.output()?;
+        println!("Running {source}: {} discovered tests", discovered.len());
+        let result = test_output(&mut run)?;
         let text = String::from_utf8(result.stdout)?;
         let diagnostics = String::from_utf8_lossy(&result.stderr);
         fs::write(
