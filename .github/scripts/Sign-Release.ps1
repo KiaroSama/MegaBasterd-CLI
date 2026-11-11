@@ -61,7 +61,15 @@ try {
             # Empty-password transport is confined to a mode-700 one-job scratch directory.
             & /bin/chmod 700 $temp; Assert-NativeExit
             $transport = Join-Path $temp 'transport.p12'
-            [IO.File]::WriteAllBytes($transport,$certificate.Export([Security.Cryptography.X509Certificates.X509ContentType]::Pfx,''))
+            # Apple's importer requires the legacy PKCS12 PBE/MAC encoding. This
+            # is only an empty-password transport in a mode-700 disposable folder;
+            # protected custody and the native SHA256 signatures stay unchanged.
+            $transportBytes = $certificate.ExportPkcs12([Security.Cryptography.X509Certificates.Pkcs12ExportPbeParameters]::Pkcs12TripleDesSha1,'')
+            $roundtrip = [Security.Cryptography.X509Certificates.X509CertificateLoader]::LoadPkcs12($transportBytes,'',$flags)
+            try {
+                if (-not $roundtrip.HasPrivateKey -or $roundtrip.Thumbprint -cne $certificate.Thumbprint) { throw 'PKCS12 native transport recovery failed.' }
+            } finally { $roundtrip.Dispose() }
+            [IO.File]::WriteAllBytes($transport,$transportBytes)
             & /bin/chmod 600 $transport; Assert-NativeExit
             & /usr/bin/security create-keychain -p '' $keychain; Assert-NativeExit
             & /usr/bin/security unlock-keychain -p '' $keychain; Assert-NativeExit

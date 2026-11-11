@@ -5,7 +5,9 @@ The native version continues `refactor/rust-cli-rewrite` at
 counterparts of `6eb6155` and `c4559ec`, with identical source trees. Frozen
 fixture provenance retains the original generation IDs. The executable commands and
 55 command leaves are preserved. Application code, tests, packaging and the CI
-driver now use Rust. YAML/TOML/JSON files are configuration or test data.
+driver now use Rust. YAML/TOML/JSON files are configuration or test data. CI-only
+Python compares immutable historical function bodies, and isolated PowerShell scripts
+sign release artifacts; neither is an application runtime bridge.
 
 ## User data
 

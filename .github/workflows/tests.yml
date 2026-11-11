@@ -13,10 +13,26 @@ jobs:
       MEGABASTERD_USER_DIR: ${{ github.workspace }}/.ci-work/runtime space/User
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ac8347dfd92c088cc69f97dd7231c8d7a5d764bd
+          path: .ci-work/baseline
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            src/megabasterd_cli/core/crypter.py
+            src/megabasterd_cli/core/upload_identity.py
+            src/megabasterd_cli/core/splitter.py
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        id: source-python
+        with:
+          python-version: '3.13'
       - run: rustup toolchain install 1.99.1 --profile minimal --component llvm-tools-preview --no-self-update
       - run: cargo install cargo-llvm-cov --version 0.9.1 --locked
       - run: cargo xtask media
       - name: Preserve the 76 percent coverage gate
+        env:
+          MEGABASTERD_CI_PYTHON: ${{ steps.source-python.outputs.python-path }}
         run: |
           umask 077
           cargo llvm-cov --locked --workspace --all-targets --ignore-filename-regex 'xtask/|tools/|tests/|_tests.rs' --fail-under-lines 76 --lcov --output-path lcov.info -- --test-threads=2

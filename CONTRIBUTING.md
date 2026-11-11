@@ -21,8 +21,10 @@ supplied through `MEGABASTERD_FFMPEG` when running targeted tests.
 
 `cargo xtask verify` builds every test harness, discovers its tests, executes all
 of them, rejects ignored/missing results and checks every applicable parity
-mapping. It supplies an isolated `MEGABASTERD_USER_DIR` under `.ci-work/`. No live
-MEGA credentials are needed: bounded local TLS peers exercise the real wire paths.
+mapping. Each harness has a 180-second wall limit, bounded captured output and
+owned process-group/Windows-job cleanup, inside the 60-minute native job. It supplies
+an isolated `MEGABASTERD_USER_DIR` under `.ci-work/`. No live MEGA credentials are
+needed: bounded local TLS peers exercise the real wire paths.
 The test profile optimizes cryptographic dependencies so KDF tests remain practical.
 For a narrow edit use `cargo test --locked --test NAME`; tests involving discovered
 user paths require the same isolated user override.
@@ -60,6 +62,20 @@ The accompanying `source-contracts.xml` reports those same preserved identities
 in JUnit format; it is assertion-mapping evidence, not a second test execution. Platform-specific
 cases must execute on their applicable native runner; they are not claimed as
 passing elsewhere.
+
+## Representative source comparison
+
+CI checks out three immutable, hash-verified Python baseline leaves into
+`.ci-work/baseline` and supplies `MEGABASTERD_CI_PYTHON` from its test-only Python
+3.13 setup. `tests/resource_contract.rs` takes three samples per engine and input
+size, checks actual hash/split/merge outputs, and records median/min/max plus
+native/source ratios in `.ci-work/resource-report.json`. This is local-file and
+transfer-preparation evidence, not network throughput. The native debug harness,
+warm filesystem caches and stronger disk-integrity checks limit comparisons.
+
+For an equivalent local test, use that exact baseline checkout and set
+`MEGABASTERD_CI_PYTHON` to an absolute compatible Python path. The application and
+release binaries do not use Python; this helper runs only as a CI comparison oracle.
 
 ## Distribution
 
