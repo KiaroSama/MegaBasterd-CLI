@@ -1,0 +1,238 @@
+name: Gitleaks
+
+on:
+  push:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  workflow_dispatch:
+  schedule:
+    - cron: '53 4 * * 0'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gitleaks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gitleaks:
+    name: Gitleaks secret scan
+    if: github.event_name != 'push' || github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Protect scan diagnostics
+        shell: bash
+        run: |
+          python3 -I - <<'PYTHON'
+          import datetime
+          import os
+          import sys
+
+          LEVELS = {"INFO", "WARNING", "ERROR", "DEBUG"}
+
+          def log(level, message):
+              if level not in LEVELS:
+                  raise ValueError("Unsupported log level")
+              timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+              print(f"{timestamp} [{level}] {message}", flush=True)
+
+          if os.environ.get("RUNNER_DEBUG") == "1":
+              log("ERROR", "Disable Actions step debug logging before scanning; checkout debug output can disclose commit contents.")
+              sys.exit(1)
+          log("INFO", "Diagnostic privacy guard passed.")
+          PYTHON
+
+      - name: Check out the complete Git history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Scan Git history with the verified Gitleaks CLI
+        shell: bash
+        run: |
+          python3 -I - <<'PYTHON'
+          import datetime
+          import hashlib
+          import html
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          import subprocess
+          import sys
+          import tarfile
+          import tempfile
+          import urllib.request
+
+
+          VERSION = "8.30.1"
+          ARCHIVE_SHA256 = "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+          DOWNLOAD_URL = (
+              f"https://github.com/gitleaks/gitleaks/releases/download/v{VERSION}/"
+              f"gitleaks_{VERSION}_linux_x64.tar.gz"
+          )
+          LEVELS = {"INFO", "WARNING", "ERROR", "DEBUG"}
+
+
+          class ScanFailure(Exception):
+              pass
+
+
+          def log(level, message):
+              if level not in LEVELS:
+                  raise ValueError("Unsupported log level")
+              timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+              print(f"{timestamp} [{level}] {message}", flush=True)
+
+
+          def require(condition, message):
+              if not condition:
+                  raise ScanFailure(message)
+
+
+          def safe_cell(value):
+              return html.escape(str(value), quote=True).replace("|", "&#124;").replace("\n", " ").replace("\r", " ")
+
+
+          def write_summary(findings, scope):
+              summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+              if not summary_path:
+                  return
+              lines = ["## Gitleaks", "", f"Scanner: **{VERSION}**", "", f"Scope: **{scope}**", ""]
+              lines.extend(["Rules: Pinned built-in Gitleaks rules with standard exclusions. Full history describes revision coverage, not universal byte or credential coverage.", ""])
+              if not findings:
+                  lines.append("No matching secrets were found in the scanned Git history.")
+              else:
+                  lines.extend([
+                      f"**{len(findings)} potential secrets detected.** Review the locations below; rotate any real exposed credentials.",
+                      "", "Secret values, source snippets, and commit messages are never included in this summary.",
+                      "", "| Rule | File | Line | Commit |", "| --- | --- | --- | --- |",
+                  ])
+                  for finding in findings[:200]:
+                      cells = [finding.get("RuleID", ""), finding.get("File", ""), finding.get("StartLine", ""), finding.get("Commit", "")]
+                      lines.append("| " + " | ".join(f"<code>{safe_cell(value)}</code>" for value in cells) + " |")
+                  if len(findings) > 200:
+                      lines.extend(["", f"Showing 200 of {len(findings)} findings. Repeat the same version locally for the complete report."])
+              with open(summary_path, "a", encoding="utf-8") as output:
+                  output.write("\n".join(lines) + "\n")
+
+
+          def main():
+              workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+              git_directory = workspace / ".git"
+              require(git_directory.is_dir(), "The complete Git checkout is unavailable.")
+              event_name = os.environ["GITHUB_EVENT_NAME"]
+              require(event_name in {"push", "pull_request", "schedule", "workflow_dispatch"}, "Unsupported workflow event.")
+              log("INFO", "Starting the repository secret scan.")
+              log("DEBUG", f"Using checksum-pinned Gitleaks {VERSION}; repository contents are not executed.")
+              with tempfile.TemporaryDirectory(prefix="gitleaks-", dir=os.environ["RUNNER_TEMP"]) as directory:
+                  temporary = Path(directory)
+                  archive_path = temporary / "gitleaks.tar.gz"
+                  with urllib.request.urlopen(DOWNLOAD_URL, timeout=60) as response:
+                      archive_path.write_bytes(response.read())
+                  require(hashlib.sha256(archive_path.read_bytes()).hexdigest() == ARCHIVE_SHA256, "The Gitleaks download checksum does not match the pinned release.")
+                  binary = temporary / "gitleaks"
+                  with tarfile.open(archive_path, "r:gz") as archive:
+                      member = archive.getmember("gitleaks")
+                      require(member.isfile(), "The verified archive does not contain the expected executable.")
+                      binary.write_bytes(archive.extractfile(member).read())
+                  binary.chmod(0o700)
+                  version = subprocess.run([str(binary), "version"], capture_output=True, text=True, timeout=15)
+                  require(version.returncode == 0 and version.stdout.strip() == VERSION, "The Gitleaks executable version could not be verified.")
+                  log("INFO", "Verified the scanner version and download checksum.")
+
+                  # Use the pinned built-in rules, without repository-controlled suppression files.
+                  config_path = temporary / "scanner.toml"
+                  config_path.write_text("[extend]\nuseDefault = true\n", encoding="utf-8")
+                  log_options = "--full-history --diff-filter=uxdb --no-ext-diff --no-textconv -m"
+                  scope = "All fetched branches and tags, including full history and merge diffs"
+                  if event_name == "pull_request":
+                      with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as event_file:
+                          pull_request = json.load(event_file)["pull_request"]
+                      base = pull_request["base"]["sha"]
+                      head = pull_request["head"]["sha"]
+                      for revision in (base, head):
+                          require(isinstance(revision, str) and re.fullmatch(r"[0-9a-fA-F]{40}", revision), "The pull request revision is invalid.")
+                          revision_check = subprocess.run(["git", "-C", str(git_directory), "cat-file", "-e", revision + "^{commit}"], capture_output=True, timeout=15)
+                          require(revision_check.returncode == 0, "A pull request revision is missing from the full checkout.")
+                      log_options += f" {base}..{head}"
+                      scope = "Commits introduced by this pull request, including merge diffs"
+                  else:
+                      log_options += " --all"
+                  log("DEBUG", f"Scan scope: {scope}.")
+                  # Record the status of the actual Git-history child; Gitleaks can hide it.
+                  real_git = shutil.which("git")
+                  require(real_git is not None, "The Git executable is unavailable.")
+                  status_path = temporary / "git-status"
+                  git_wrapper = temporary / "git"
+                  git_wrapper.write_text(
+                      f"#!{Path(sys.executable).resolve()} -I\n"
+                      "import datetime, os, subprocess, sys\n"
+                      "from pathlib import Path\n"
+                      "LEVELS = {'INFO', 'WARNING', 'ERROR', 'DEBUG'}\n"
+                      "def log(level, message):\n"
+                      "    if level not in LEVELS:\n"
+                      "        raise ValueError('Unsupported log level')\n"
+                      "    timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')\n"
+                      "    print(f'{timestamp} [{level}] {message}', file=sys.stderr, flush=True)\n"
+                      "history = len(sys.argv) > 3 and sys.argv[3] == 'log'\n"
+                      "try:\n"
+                      "    result = subprocess.run([os.environ['GITLEAKS_REAL_GIT'], *sys.argv[1:]])\n"
+                      "    if history:\n"
+                      "        Path(os.environ['GITLEAKS_GIT_STATUS']).write_text(str(result.returncode), encoding='utf-8')\n"
+                      "    if history and result.returncode != 0:\n"
+                      "        log('ERROR', 'The Git-history child did not complete successfully.')\n"
+                      "    raise SystemExit(result.returncode)\n"
+                      "except Exception:\n"
+                      "    log('ERROR', 'The verified Git child could not complete.')\n"
+                      "    raise SystemExit(1)\n",
+                      encoding="utf-8",
+                  )
+                  git_wrapper.chmod(0o700)
+                  scan_environment = os.environ.copy()
+                  scan_environment.update({
+                      "PATH": str(temporary) + os.pathsep + os.environ.get("PATH", ""),
+                      "GITLEAKS_REAL_GIT": str(Path(real_git).resolve()),
+                      "GITLEAKS_GIT_STATUS": str(status_path),
+                  })
+                  report_path = temporary / "findings.json"
+                  command = [
+                      str(binary), "git", str(git_directory),
+                      "--config", str(config_path), "--gitleaks-ignore-path", str(temporary),
+                      "--ignore-gitleaks-allow", "--redact=100", "--no-banner", "--no-color",
+                      "--log-level=error", "--exit-code=2",
+                      "--report-format=json", "--report-path", str(report_path),
+                      "--log-opts=" + log_options,
+                  ]
+                  # Keep scanner output private: commit messages may contain secrets despite redaction.
+                  result = subprocess.run(command, capture_output=True, text=True, timeout=930, env=scan_environment)
+                  require(result.returncode in (0, 2), f"Gitleaks failed with exit code {result.returncode}; no clean result was recorded.")
+                  # Gitleaks can log Git-reader errors while returning zero with an empty report.
+                  require(not result.stdout.strip() and not result.stderr.strip(), "Gitleaks reported scanner errors; no clean result was recorded.")
+                  require(status_path.is_file() and status_path.read_text(encoding="utf-8") == "0", "The Git-history child did not confirm successful completion; no clean result was recorded.")
+                  require(report_path.is_file(), "Gitleaks did not produce a complete report.")
+                  findings = json.loads(report_path.read_text(encoding="utf-8"))
+                  require(isinstance(findings, list) and all(isinstance(item, dict) for item in findings), "The scanner report format is invalid.")
+                  require((result.returncode == 2) == bool(findings), "The scanner result and report disagree.")
+                  write_summary(findings, scope)
+                  if findings:
+                      log("WARNING", f"Detected {len(findings)} potential secrets. Review the redacted locations in the job summary.")
+                      return 1
+                  log("INFO", "The scan completed successfully; no matching secrets were detected.")
+                  return 0
+
+
+          if __name__ == "__main__":
+              try:
+                  sys.exit(main())
+              except ScanFailure as error:
+                  log("ERROR", str(error))
+                  sys.exit(1)
+              except Exception as error:
+                  log("ERROR", f"The scan could not complete ({type(error).__name__}); no clean result was recorded.")
+                  sys.exit(1)
+          PYTHON
