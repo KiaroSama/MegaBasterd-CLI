@@ -58,21 +58,22 @@ try {
             }
             & (Join-Path $PSScriptRoot 'Test-WindowsSignature.ps1') -Path (Join-Path $directoryPath 'mb.exe') -Scratch $temp
         } elseif ($IsMacOS) {
-            # Native PEM import avoids Apple's empty-password PKCS12 ambiguity.
-            # Private transport exists only in mode-700 scratch, never argv/logs.
+            # A nonempty PUBLIC transport password makes PKCS12 export an encrypted
+            # key bag, avoiding Apple's empty-password import ambiguity. It is NOT
+            # secret custody: mode-700/600 scratch and deletion protect this file.
             & /bin/chmod 700 $temp; Assert-NativeExit
-            $transport = Join-Path $temp 'transport.key'
-            $publicPath = Join-Path $temp 'owner.cer'
-            $rsa = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($certificate)
-            try { [IO.File]::WriteAllText($transport,$rsa.ExportRSAPrivateKeyPem(),[Text.UTF8Encoding]::new($false)) }
-            finally { $rsa.Dispose() }
-            [IO.File]::WriteAllBytes($publicPath,$public)
+            $transport = Join-Path $temp 'transport.p12'
+            $transportPassword = 'disposable-native-transport'
+            $transportBytes = $certificate.ExportPkcs12([Security.Cryptography.X509Certificates.Pkcs12ExportPbeParameters]::Pkcs12TripleDesSha1,$transportPassword)
+            [IO.File]::WriteAllBytes($transport,$transportBytes)
             & /bin/chmod 600 $transport; Assert-NativeExit
             & /usr/bin/security create-keychain -p '' $keychain; Assert-NativeExit
             & /usr/bin/security unlock-keychain -p '' $keychain; Assert-NativeExit
-            & /usr/bin/security import $transport -k $keychain -f openssl -t priv -T /usr/bin/codesign | Out-Null; Assert-NativeExit
-            & /usr/bin/security import $publicPath -k $keychain -f x509 -t cert | Out-Null; Assert-NativeExit
+            & /usr/bin/security import $transport -k $keychain -P $transportPassword -T /usr/bin/codesign | Out-Null; Assert-NativeExit
             & /usr/bin/security set-key-partition-list -S 'apple-tool:,apple:,codesign:' -s -k '' $keychain | Out-Null; Assert-NativeExit
+            $identities = & /usr/bin/security find-identity -p codesigning $keychain
+            Assert-NativeExit
+            if (($identities -join "`n") -notmatch [regex]::Escape($certificate.Thumbprint)) { throw 'Imported owner key and certificate did not form a native signing identity.' }
             $requirement = '=certificate leaf = H"'+$certificate.Thumbprint+'"'
             foreach ($name in $names) {
                 $path = Join-Path $directoryPath $name

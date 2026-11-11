@@ -51,9 +51,11 @@ without modifying a trusted-root store. Only success or the exact untrusted-root
 chain result is eligible; other errors fail. A changed PE payload or different owner
 must be rejected. Neither the hosted runner nor the user's machine gains root trust.
 The macOS runner uses an isolated temporary keychain and removes it in cleanup.
-Its mode-700 scratch directory contains a mode-600 native PEM key transport plus
-the public certificate. This avoids Apple's ambiguous empty-password PKCS#12
-import and never places private key material in process arguments. The transport
+Its mode-700 scratch directory contains a mode-600 PKCS#12 transport with a
+nonsecret, fixed transport password. Unlike an empty password, this produces an
+encrypted key bag that Apple's importer accepts; the password is not a security
+boundary. The protected directory and deletion are mandatory. Private key material
+and the real custody password never appear in process arguments. The transport
 is never published or cached and is deleted with the keychain; protected recovery
 custody and native SHA-256 signatures are unchanged.
 
