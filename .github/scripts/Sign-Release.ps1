@@ -46,6 +46,8 @@ function Sign-Detached([string]$Path) {
 }
 $temp = Join-Path $env:RUNNER_TEMP ('mbcli-sign-'+[Guid]::NewGuid().ToString('N'))
 $keychain = Join-Path $temp 'owner.keychain-db'
+$previousKeychains = @()
+$keychainSearchChanged = $false
 try {
     if ($Stage -eq 'Binaries') {
         [IO.Directory]::CreateDirectory($temp) | Out-Null
@@ -69,6 +71,10 @@ try {
             & /bin/chmod 600 $transport; Assert-NativeExit
             & /usr/bin/security create-keychain -p '' $keychain; Assert-NativeExit
             & /usr/bin/security unlock-keychain -p '' $keychain; Assert-NativeExit
+            $previousKeychains = @(& /usr/bin/security list-keychains -d user | ForEach-Object { $_.Trim().Trim('"') })
+            Assert-NativeExit
+            & /usr/bin/security list-keychains -d user -s @previousKeychains $keychain; Assert-NativeExit
+            $keychainSearchChanged = $true
             & /usr/bin/security import $transport -k $keychain -P $transportPassword -T /usr/bin/codesign | Out-Null; Assert-NativeExit
             & /usr/bin/security set-key-partition-list -S 'apple-tool:,apple:,codesign:' -s -k '' $keychain | Out-Null; Assert-NativeExit
             $identities = & /usr/bin/security find-identity -p codesigning $keychain
@@ -107,7 +113,13 @@ try {
     }
     Write-Output ('Owner signature verified: '+$Stage+'; public certificate SHA256='+$expected+'; private trust only; no notarization.')
 } finally {
-    if ($IsMacOS -and (Test-Path -LiteralPath $keychain)) { & /usr/bin/security delete-keychain $keychain | Out-Null }
-    if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force }
-    $certificate.Dispose()
+    $cleanupFailed = $false
+    try {
+        if ($keychainSearchChanged) { & /usr/bin/security list-keychains -d user -s @previousKeychains; if ($LASTEXITCODE -ne 0) { $cleanupFailed = $true } }
+        if ($IsMacOS -and (Test-Path -LiteralPath $keychain)) { & /usr/bin/security delete-keychain $keychain | Out-Null; if ($LASTEXITCODE -ne 0) { $cleanupFailed = $true } }
+    } finally {
+        try { if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force } }
+        finally { $certificate.Dispose() }
+    }
+    if ($cleanupFailed) { throw 'Native signing keychain cleanup failed.' }
 }
