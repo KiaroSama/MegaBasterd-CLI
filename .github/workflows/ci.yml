@@ -108,6 +108,7 @@ jobs:
         with:
           name: linux-media-${{ github.sha }}
           path: .ci-work/media-linux.tar.gz*
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 2
       - name: Run native unit, integration, process and regression tests
