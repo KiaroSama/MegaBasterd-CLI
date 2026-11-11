@@ -9,6 +9,7 @@ use crate::storage::proxies::Pool;
 fn options(wait: u64, attempts: u32) -> DownloadOptions {
     DownloadOptions {
         workers: 1,
+        max_parallel_verifications: 1,
         verify: false,
         overwrite: false,
         resume: true,

@@ -41,6 +41,31 @@ fn configuration_defaults_and_typed_updates_preserve_cli_contract() {
 }
 
 #[test]
+fn disk_verification_limit_defaults_to_one_and_rejects_invalid_updates() {
+    let mut config = Config::default();
+    assert_eq!(config.value().unwrap()["max_parallel_verifications"], 1);
+    for accepted in ["1", "2", "32"] {
+        config
+            .set_text("max_parallel_verifications", accepted)
+            .unwrap();
+        let expected: u32 = accepted.parse().unwrap();
+        assert_eq!(
+            config.value().unwrap()["max_parallel_verifications"],
+            expected
+        );
+    }
+    let before = config.value().unwrap();
+    for rejected in ["0", "33", "-1", "true", "1.5"] {
+        assert!(
+            config
+                .set_text("max_parallel_verifications", rejected)
+                .is_err()
+        );
+        assert_eq!(config.value().unwrap(), before);
+    }
+}
+
+#[test]
 fn malformed_values_warn_without_printing_secret_values() {
     let (config, warnings) = Config::from_value(json!({
         "max_workers": 0, "upload_workers": 2, "speed_limit_kbps": -1,

@@ -7,9 +7,9 @@ Python runtime bridge is included in the native implementation.
 
 <div align="center">
 
-[![Rust CI](https://github.com/KiaroSama/MegaBasterd-CLI/actions/workflows/ci.yml/badge.svg)](https://github.com/KiaroSama/MegaBasterd-CLI/actions/workflows/ci.yml)
-[![Coverage](https://github.com/KiaroSama/MegaBasterd-CLI/actions/workflows/tests.yml/badge.svg)](https://github.com/KiaroSama/MegaBasterd-CLI/actions/workflows/tests.yml)
-[![Dependency audit](https://github.com/KiaroSama/MegaBasterd-CLI/actions/workflows/audit.yml/badge.svg)](https://github.com/KiaroSama/MegaBasterd-CLI/actions/workflows/audit.yml)
+[![Native validation](https://github.com/KiaroSama/MegaBasterd-CLI/actions/workflows/release.yml/badge.svg?branch=main&event=workflow_dispatch)](https://github.com/KiaroSama/MegaBasterd-CLI/actions/workflows/release.yml)
+[![Coverage gate](https://img.shields.io/badge/Line%20coverage-gate%20at%2076%25-238636)](.github/workflows/tests.yml)
+[![Dependency policy](https://img.shields.io/badge/Dependency%20policy-cargo--deny-238636)](.github/workflows/audit.yml)
 [![License GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-238636)](LICENSE)
 [![Rust edition 2024](https://img.shields.io/badge/Rust-edition%202024-238636)](Cargo.toml)
 [![Rust toolchain 1.99.1](https://img.shields.io/badge/Rust-1.99.1-238636)](rust-toolchain.toml)
@@ -27,13 +27,13 @@ Python runtime bridge is included in the native implementation.
 
 The application, tests and CI driver are implemented in Rust. The three native
 commands are `mb`, `mbcli` and `megabasterd-cli`. No interpreter or script launcher
-is required. CI builds Linux x64, Windows x64, macOS Intel and macOS Apple Silicon
-on pushes to `main`/`develop` and every pull request.
+is required. Manual CI builds Linux x64, Windows x64, macOS Intel and macOS
+Apple Silicon at the exact commit of the selected ref.
 
 ## Installation
 
 Download the artifact matching your OS and architecture from a successful
-[Rust CI run](https://github.com/KiaroSama/MegaBasterd-CLI/actions/workflows/ci.yml).
+[native validation run](https://github.com/KiaroSama/MegaBasterd-CLI/actions/workflows/release.yml).
 Unpack the artifact's ZIP, then extract its `.tar.gz` payload; the tar archive
 preserves executable permissions on Linux and macOS. It contains the three
 command aliases, `SHA256SUMS`, license notices and the matching Rust source

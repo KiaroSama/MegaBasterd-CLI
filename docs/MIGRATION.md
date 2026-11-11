@@ -1,7 +1,9 @@
 # Rust 2.x migration
 
 The native version continues `refactor/rust-cli-rewrite` at
-`6eb6155`, based on the Python baseline `c4559ec`. The executable commands and
+`b3c6933`, based on source baseline `ac8347d`. These are the identity-repaired
+counterparts of `6eb6155` and `c4559ec`, with identical source trees. Frozen
+fixture provenance retains the original generation IDs. The executable commands and
 55 command leaves are preserved. Application code, tests, packaging and the CI
 driver now use Rust. YAML/TOML/JSON files are configuration or test data.
 

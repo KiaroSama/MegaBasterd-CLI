@@ -1,8 +1,17 @@
-name: Release Build
+name: Native Validation and Build
 on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: native-validation-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   native:
     uses: ./.github/workflows/ci.yml
+  lint:
+    uses: ./.github/workflows/lint.yml
+  coverage:
+    uses: ./.github/workflows/tests.yml
+  dependencies:
+    uses: ./.github/workflows/audit.yml

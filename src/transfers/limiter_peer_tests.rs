@@ -30,6 +30,7 @@ fn two_downloads_and_two_uploads_acquire_the_same_supplied_limiter() {
     let progress = Progress::new(false);
     let options = DownloadOptions {
         workers: 1,
+        max_parallel_verifications: 1,
         verify: true,
         overwrite: false,
         resume: true,

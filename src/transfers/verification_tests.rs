@@ -12,6 +12,54 @@ impl Drop for CancelOnDrop {
 }
 
 #[test]
+fn configured_disk_gate_admits_two_and_cancels_the_third_until_release() {
+    let gate = Gate {
+        active: Mutex::new(0),
+        changed: Condvar::new(),
+    };
+    let first = gate.acquire(&Control::new(), 2).unwrap();
+    let waiting = Control::new();
+    let (admitted, result) = mpsc::sync_channel(1);
+    let (release, released) = mpsc::sync_channel(1);
+    std::thread::scope(|scope| {
+        let _cancel_on_panic = CancelOnDrop(waiting.clone());
+        let gate = &gate;
+        let worker_control = waiting.clone();
+        let worker = scope.spawn(move || {
+            let second = gate.acquire(&worker_control, 2);
+            admitted.send(second.is_ok()).unwrap();
+            if second.is_ok() {
+                released.recv_timeout(Duration::from_secs(3)).unwrap();
+            }
+        });
+        let outcome = result.recv_timeout(Duration::from_secs(2));
+        if outcome.is_err() {
+            waiting.cancel();
+        } else {
+            assert_eq!(*gate.active.lock().unwrap(), 2);
+            release.send(()).unwrap();
+        }
+        worker.join().unwrap();
+        assert_eq!(outcome, Ok(true));
+    });
+    let second = gate.acquire(&Control::new(), 2).unwrap();
+    let canceled = Control::new();
+    canceled.cancel();
+    assert!(matches!(gate.acquire(&canceled, 2), Err(Error::Canceled)));
+    drop(first);
+    let replacement = gate.acquire(&Control::new(), 2).unwrap();
+    assert_eq!(*gate.active.lock().unwrap(), 2);
+    drop((second, replacement));
+    assert_eq!(*gate.active.lock().unwrap(), 0);
+    for invalid in [0, 33] {
+        assert!(matches!(
+            gate.acquire(&Control::new(), invalid),
+            Err(Error::Invalid(_))
+        ));
+    }
+}
+
+#[test]
 fn one_disk_permit_waits_cancellably_and_release_allows_the_next_verification() {
     let first = permit(&Control::new()).unwrap();
     let canceled = Control::new();

@@ -138,6 +138,7 @@ fn command_download_policy_and_worker_forks_preserve_every_native_option() {
     let scratch = fixture();
     let mut context = Context::test_context(scratch.path());
     context.config.max_workers = 3;
+    context.config.max_parallel_verifications = 2;
     context.config.verify_integrity = false;
     context.config.auto_resume = false;
     context.config.keep_state_files_on_error = false;
@@ -156,6 +157,7 @@ fn command_download_policy_and_worker_forks_preserve_every_native_option() {
     let DownloadOptions {
         workers,
         verify,
+        max_parallel_verifications,
         overwrite,
         resume,
         keep_state,
@@ -163,6 +165,7 @@ fn command_download_policy_and_worker_forks_preserve_every_native_option() {
         quota_attempts,
     } = DownloadOptions::from_config(&context.config, None, false, false).unwrap();
     assert_eq!((workers, quota_wait, quota_attempts), (3, 7, 9));
+    assert_eq!(max_parallel_verifications, 2);
     assert!(!verify && !overwrite && !resume && !keep_state);
     context.config.verify_integrity = true;
     let overrides = DownloadOptions::from_config(&context.config, Some(5), true, true).unwrap();

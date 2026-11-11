@@ -7,8 +7,11 @@
 - Complete the `refactor/rust-cli-rewrite` checkpoint as a native Rust application,
   including all three command aliases, tests and CI tooling; remove Python,
   PowerShell, C# and C project sources and their packaging configuration.
-- Build and test Linux x64, Windows x64 and macOS Intel/Apple Silicon on every
-  push and PR; publish CI artifacts with source and SHA-256 checksums.
+- Build and test Linux x64, Windows x64 and macOS Intel/Apple Silicon in one
+  manually dispatched validation batch; publish CI artifacts with source and SHA-256 checksums.
+- Add `max_parallel_verifications` (default 1, range 1–32) for cancellable,
+  process-wide final download verification.
+- Update the locked rustix dependency to 1.1.6 for RUSTSEC-2026-0486.
 - Preserve formatting, type checking, dependency audit and 76% line coverage;
   retain all 1,416 baseline contract identities with executed native mappings.
 - Fix compilation failures found in the checkpoint and port relevant upstream

@@ -15,8 +15,8 @@ struct Gate {
 }
 static GATE: OnceLock<Gate> = OnceLock::new();
 
-struct Permit(&'static Gate);
-impl Drop for Permit {
+struct Permit<'a>(&'a Gate);
+impl Drop for Permit<'_> {
     fn drop(&mut self) {
         if let Ok(mut active) = self.0.active.lock() {
             *active = active.saturating_sub(1);
@@ -25,28 +25,43 @@ impl Drop for Permit {
     }
 }
 
-fn permit(control: &Control) -> Result<Permit> {
-    let gate = GATE.get_or_init(|| Gate {
-        active: Mutex::new(0),
-        changed: Condvar::new(),
-    });
-    let mut active = gate.active.lock().map_err(poisoned)?;
-    while *active >= 1 {
+impl Gate {
+    fn acquire(&self, control: &Control, limit: u32) -> Result<Permit<'_>> {
+        if !(1..=32).contains(&limit) {
+            return Err(Error::invalid(
+                "Parallel verifications must be between 1 and 32",
+            ));
+        }
+        let mut active = self.active.lock().map_err(poisoned)?;
+        while *active >= limit as usize {
+            if control.is_canceled() {
+                return Err(Error::Canceled);
+            }
+            // Cancellation is a separate condition; bounded waits avoid a busy spin.
+            active = self
+                .changed
+                .wait_timeout(active, Duration::from_millis(100))
+                .map_err(poisoned)?
+                .0;
+        }
         if control.is_canceled() {
             return Err(Error::Canceled);
         }
-        // Cancellation is a separate condition; bounded condvar waits avoid a busy spin.
-        active = gate
-            .changed
-            .wait_timeout(active, Duration::from_millis(100))
-            .map_err(poisoned)?
-            .0;
+        *active += 1;
+        Ok(Permit(self))
     }
-    if control.is_canceled() {
-        return Err(Error::Canceled);
-    }
-    *active += 1;
-    Ok(Permit(gate))
+}
+
+fn gate() -> &'static Gate {
+    GATE.get_or_init(|| Gate {
+        active: Mutex::new(0),
+        changed: Condvar::new(),
+    })
+}
+
+#[cfg(test)]
+fn permit(control: &Control) -> Result<Permit<'static>> {
+    gate().acquire(control, 1)
 }
 
 /// Saved coverage is only a hint: bytes on the held file decide which chunks may be skipped.
@@ -80,7 +95,17 @@ pub fn validate_completed(
 }
 
 pub fn verify(file: &mut File, size: u64, key: &keys::FileKey, control: &Control) -> Result<()> {
-    let _permit = permit(control)?;
+    verify_with_limit(file, size, key, control, 1)
+}
+
+pub fn verify_with_limit(
+    file: &mut File,
+    size: u64,
+    key: &keys::FileKey,
+    control: &Control,
+    limit: u32,
+) -> Result<()> {
+    let _permit = gate().acquire(control, limit)?;
     if file.metadata()?.len() != size {
         return Err(Error::integrity(
             "Downloaded file size differs from metadata",
