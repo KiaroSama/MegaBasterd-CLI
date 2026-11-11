@@ -73,6 +73,9 @@ try {
             & /usr/bin/security set-key-partition-list -S 'apple-tool:,apple:,codesign:' -s -k '' $keychain | Out-Null; Assert-NativeExit
             $identities = & /usr/bin/security find-identity -p codesigning $keychain
             Assert-NativeExit
+            Write-Output ($identities -join "`n")
+            & /usr/bin/security find-identity -v -p codesigning $keychain
+            Assert-NativeExit
             if (($identities -join "`n") -notmatch [regex]::Escape($certificate.Thumbprint)) { throw 'Imported owner key and certificate did not form a native signing identity.' }
             $requirement = '=certificate leaf = H"'+$certificate.Thumbprint+'"'
             foreach ($name in $names) {
