@@ -84,6 +84,17 @@ fn relocated_native_aliases_need_no_python_cargo_source_cwd_or_project_root_over
             String::from_utf8(empty.stderr).unwrap(),
             "[ERROR] No command provided. Use mb --help in noninteractive mode.\n"
         );
+        let identity = run(
+            &binary,
+            &cwd,
+            &home,
+            &["--no-log-file", "-v", "config", "get", "max_workers"],
+        );
+        assert_eq!(identity.status.code(), Some(0));
+        assert_eq!(identity.stdout, b"8\n");
+        let diagnostic = String::from_utf8(identity.stderr).unwrap();
+        assert!(diagnostic.contains(env!("CARGO_PKG_AUTHORS")));
+        assert!(diagnostic.contains(env!("MBCLI_SOURCE_COMMIT")));
         let setting = run(
             &binary,
             &cwd,

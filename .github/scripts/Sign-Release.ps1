@@ -58,22 +58,20 @@ try {
             }
             & (Join-Path $PSScriptRoot 'Test-WindowsSignature.ps1') -Path (Join-Path $directoryPath 'mb.exe') -Scratch $temp
         } elseif ($IsMacOS) {
-            # Empty-password transport is confined to a mode-700 one-job scratch directory.
+            # Native PEM import avoids Apple's empty-password PKCS12 ambiguity.
+            # Private transport exists only in mode-700 scratch, never argv/logs.
             & /bin/chmod 700 $temp; Assert-NativeExit
-            $transport = Join-Path $temp 'transport.p12'
-            # Apple's importer requires the legacy PKCS12 PBE/MAC encoding. This
-            # is only an empty-password transport in a mode-700 disposable folder;
-            # protected custody and the native SHA256 signatures stay unchanged.
-            $transportBytes = $certificate.ExportPkcs12([Security.Cryptography.X509Certificates.Pkcs12ExportPbeParameters]::Pkcs12TripleDesSha1,'')
-            $roundtrip = [Security.Cryptography.X509Certificates.X509CertificateLoader]::LoadPkcs12($transportBytes,'',$flags)
-            try {
-                if (-not $roundtrip.HasPrivateKey -or $roundtrip.Thumbprint -cne $certificate.Thumbprint) { throw 'PKCS12 native transport recovery failed.' }
-            } finally { $roundtrip.Dispose() }
-            [IO.File]::WriteAllBytes($transport,$transportBytes)
+            $transport = Join-Path $temp 'transport.key'
+            $publicPath = Join-Path $temp 'owner.cer'
+            $rsa = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($certificate)
+            try { [IO.File]::WriteAllText($transport,$rsa.ExportRSAPrivateKeyPem(),[Text.UTF8Encoding]::new($false)) }
+            finally { $rsa.Dispose() }
+            [IO.File]::WriteAllBytes($publicPath,$public)
             & /bin/chmod 600 $transport; Assert-NativeExit
             & /usr/bin/security create-keychain -p '' $keychain; Assert-NativeExit
             & /usr/bin/security unlock-keychain -p '' $keychain; Assert-NativeExit
-            & /usr/bin/security import $transport -k $keychain -P '' -T /usr/bin/codesign | Out-Null; Assert-NativeExit
+            & /usr/bin/security import $transport -k $keychain -f openssl -t priv -T /usr/bin/codesign | Out-Null; Assert-NativeExit
+            & /usr/bin/security import $publicPath -k $keychain -f x509 -t cert | Out-Null; Assert-NativeExit
             & /usr/bin/security set-key-partition-list -S 'apple-tool:,apple:,codesign:' -s -k '' $keychain | Out-Null; Assert-NativeExit
             $requirement = '=certificate leaf = H"'+$certificate.Thumbprint+'"'
             foreach ($name in $names) {
