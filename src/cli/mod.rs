@@ -144,9 +144,11 @@ pub(crate) fn execute(cli: Cli) -> i32 {
         let _ = context.output.message(
             "INFO",
             &format!(
-                "MegaBasterd-CLI {} ({})",
+                "MegaBasterd-CLI {} ({}); publisher: {}; source: {}",
                 env!("CARGO_PKG_VERSION"),
-                std::env::consts::OS
+                std::env::consts::OS,
+                env!("CARGO_PKG_AUTHORS"),
+                env!("MBCLI_SOURCE_COMMIT")
             ),
         );
     }

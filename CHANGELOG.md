@@ -11,6 +11,8 @@
   manually dispatched validation batch; publish CI artifacts with source and SHA-256 checksums.
 - Add `max_parallel_verifications` (default 1, range 1–32) for cancellable,
   process-wide final download verification.
+- Embed Windows publisher, product, version and source-commit resources before
+  owner signing and verify metadata on all three command aliases.
 - Update the locked rustix dependency to 1.1.6 for RUSTSEC-2026-0486.
 - Restore measured source/native local-file resource comparisons and enforce an
   owned process-group/job deadline for each native CI harness.

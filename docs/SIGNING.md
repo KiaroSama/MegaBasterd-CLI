@@ -40,17 +40,22 @@ and macOS binaries carry native code signatures. Linux archives use detached CMS
 
 The manual release workflow forwards only two dedicated protected inputs to the
 packaging step. Ordinary tests and source packages never contain private signing
-material. Native signing occurs before member checksums; detached signing occurs
+material. Windows PE resources carry the publisher, product, version and exact source commit;
+the native CI checks all three aliases before signing. On every platform,
+`mb --no-log-file -v config get max_workers` reports the embedded publisher and
+source commit on stderr; stdout remains the setting value. Native signing occurs before
+member checksums; detached signing occurs
 after archive creation. A final archive cannot be relabeled from unsigned bytes.
 Windows verification checks the native payload signature and pinned owner certificate
 without modifying a trusted-root store. Only success or the exact untrusted-root
 chain result is eligible; other errors fail. A changed PE payload or different owner
 must be rejected. Neither the hosted runner nor the user's machine gains root trust.
 The macOS runner uses an isolated temporary keychain and removes it in cleanup.
-Its mode-700 scratch directory contains a mode-600, empty-password PKCS#12
-transport using Apple's compatible legacy PBE/MAC encoding. That transport is
-never published or cached and is deleted with the keychain; protected recovery
-custody and native SHA-256 signatures do not use that compatibility encoding.
+Its mode-700 scratch directory contains a mode-600 native PEM key transport plus
+the public certificate. This avoids Apple's ambiguous empty-password PKCS#12
+import and never places private key material in process arguments. The transport
+is never published or cached and is deleted with the keychain; protected recovery
+custody and native SHA-256 signatures are unchanged.
 
 The release process verifies tamper rejection and native signatures. The owner
 retains an exportable protected recovery key outside published artifacts. No public

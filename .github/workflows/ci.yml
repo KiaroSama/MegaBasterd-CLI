@@ -87,6 +87,10 @@ jobs:
         env:
           MEGABASTERD_CI_PYTHON: ${{ steps.source-python.outputs.python-path }}
         run: cargo xtask verify
+      - name: Verify Windows embedded release metadata
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./.github/scripts/Verify-Metadata.ps1 -Directory target/release -SourceCommit $env:GITHUB_SHA
       - name: Package binaries, source and checksums
         env:
           MBCLI_SIGN_RELEASE: ${{ inputs.owner_signing && '1' || '0' }}
