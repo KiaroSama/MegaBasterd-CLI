@@ -603,7 +603,18 @@ fn media() -> Result<()> {
         let archive = work.join(name);
         output(
             Command::new("curl")
-                .args(["--fail", "--location", "--max-time", "180", "--output"])
+                .args([
+                    "--fail",
+                    "--location",
+                    "--max-time",
+                    "180",
+                    "--retry",
+                    "2",
+                    "--retry-all-errors",
+                    "--retry-max-time",
+                    "60",
+                    "--output",
+                ])
                 .arg(&archive)
                 .arg(url),
         )?;
