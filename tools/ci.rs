@@ -465,7 +465,6 @@ fn package() -> Result<()> {
     let source = output(cargo().args([
         "package",
         "--locked",
-        "--allow-dirty",
         "--no-verify",
         "-p",
         "megabasterd-cli",

@@ -43,7 +43,9 @@ packaging step. Ordinary tests and source packages never contain private signing
 material. Windows PE resources carry the publisher, product, version and exact source commit;
 the native CI checks all three aliases before signing. On every platform,
 `mb --no-log-file -v config get max_workers` reports the embedded publisher and
-source commit on stderr; stdout remains the setting value. Native signing occurs before
+source commit on stderr; stdout remains the setting value. Cargo refuses dirty
+source-package inputs; the corresponding source archive must carry a clean
+`.cargo_vcs_info.json` for that exact commit. Native signing occurs before
 member checksums; detached signing occurs
 after archive creation. A final archive cannot be relabeled from unsigned bytes.
 Windows verification checks the native payload signature and pinned owner certificate

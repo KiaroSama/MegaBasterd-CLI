@@ -77,7 +77,7 @@ jobs:
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy --no-self-update
       - name: Check actual native architecture
         run: |
-          rustc -vV | tee rust-version.txt
+          rustc -vV
           rustc -vV | grep -Fx 'host: ${{ matrix.target }}'
       - name: Verify Apple owner-signing adapter before compilation
         if: runner.os == 'macOS' && inputs.owner_signing
