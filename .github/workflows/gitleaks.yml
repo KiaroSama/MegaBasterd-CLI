@@ -148,7 +148,7 @@ jobs:
                   # Use the pinned built-in rules, without repository-controlled suppression files.
                   config_path = temporary / "scanner.toml"
                   config_path.write_text("[extend]\nuseDefault = true\n", encoding="utf-8")
-                  log_options = "--full-history --diff-filter=uxdb --no-ext-diff --no-textconv -m"
+                  log_options = "--full-history --diff-filter=uxdb --no-ext-diff --no-textconv --ignore-submodules=all -m"
                   scope = "All fetched branches and tags, including full history and merge diffs"
                   if event_name == "pull_request":
                       with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as event_file:
