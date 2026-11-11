@@ -15,7 +15,9 @@ cargo xtask package
 
 `cargo xtask media` obtains a checksum-pinned FFmpeg/ffprobe 9.0.2 pair for real
 MP4/WebM decoding tests. On Unix it builds a minimal test-only toolchain; on
-Windows it extracts the pinned public binary pair. Nothing installs media tools
+Windows it extracts the pinned public binary pair. The immutable download retries
+at most twice within a 60-second retry window, retaining TLS and SHA-256 verification;
+each transfer is bounded to 180 seconds. Nothing installs media tools
 into the user's application or system. A local compatible FFmpeg pair can also be
 supplied through `MEGABASTERD_FFMPEG` when running targeted tests.
 
