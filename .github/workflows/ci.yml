@@ -83,6 +83,20 @@ jobs:
         run: cargo build --locked --release --bins -p megabasterd-cli
       - name: Install media test prerequisites
         run: cargo xtask media
+      - name: Bundle verified Linux media tools for coverage reuse
+        if: runner.os == 'Linux'
+        run: |
+          tar -czf .ci-work/media-linux.tar.gz -C .ci-work/media/bin ffmpeg ffprobe
+          cd .ci-work
+          sha256sum media-linux.tar.gz > media-linux.tar.gz.sha256
+      - name: Upload same-commit Linux media tools
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: linux-media-${{ github.sha }}
+          path: .ci-work/media-linux.tar.gz*
+          if-no-files-found: error
+          retention-days: 2
       - name: Run native unit, integration, process and regression tests
         env:
           MEGABASTERD_CI_PYTHON: ${{ steps.source-python.outputs.python-path }}
