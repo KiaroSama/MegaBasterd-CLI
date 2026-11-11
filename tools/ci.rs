@@ -485,6 +485,17 @@ fn package() -> Result<()> {
         root().join("target/package/megabasterd-cli-2.0.0.crate"),
         destination.join("megabasterd-cli-2.0.0.crate"),
     )?;
+    let signed = std::env::var("MBCLI_SIGN_RELEASE").as_deref() == Ok("1");
+    let signing_script = root().join(".github/scripts/Sign-Release.ps1");
+    if signed {
+        output(
+            Command::new("pwsh")
+                .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-File"])
+                .arg(&signing_script)
+                .args(["-Stage", "Binaries", "-Directory"])
+                .arg(&destination),
+        )?;
+    }
     let mut hashes = String::new();
     let mut files = Vec::new();
     distribution_files(&destination, &mut files)?;
@@ -529,6 +540,15 @@ fn package() -> Result<()> {
             hex::encode(Sha256::digest(fs::read(archive)?))
         ),
     )?;
+    if signed {
+        output(
+            Command::new("pwsh")
+                .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-File"])
+                .arg(signing_script)
+                .args(["-Stage", "Archives", "-Directory"])
+                .arg(&archives),
+        )?;
+    }
     Ok(())
 }
 

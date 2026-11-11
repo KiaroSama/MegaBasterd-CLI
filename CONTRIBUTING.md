@@ -65,8 +65,12 @@ passing elsewhere.
 
 `cargo xtask package` uses already-built Release binaries. Artifacts include
 all three aliases, SHA256SUMS, project licensing and the matching Cargo source
-package. Do not describe unsigned CI artifacts as signed releases. Published
-binaries need matching Corresponding Source and applicable dependency notices.
+package. The manual root enables dedicated owner signing through two protected
+inputs, available only during packaging. Windows Authenticode and macOS codesign
+use the project-specific self-signed certificate; detached CMS signs each archive.
+Private trust is explicit, with no public-CA or Apple notarization claim. Unsigned
+older artifacts are not signed releases. See [signing verification](docs/SIGNING.md).
+Published binaries need matching Corresponding Source and applicable dependency notices.
 Keep credentials, logs, caches, generated media tools and user data out of Git
 and out of release archives.
 

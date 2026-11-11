@@ -1,0 +1,104 @@
+# Owner-approved private-trust signing; never claims public CA trust or notarization.
+param([Parameter(Mandatory)][ValidateSet('Binaries','Archives')][string]$Stage,
+      [Parameter(Mandatory)][string]$Directory)
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$expected = 'f3347ef7108b0024c794aa6b01da997264846a27bbf8df726c954444d5f89575'
+if ([string]::IsNullOrEmpty($env:MBCLI_RELEASE_PFX_BASE64) -or [string]::IsNullOrEmpty($env:MBCLI_RELEASE_PFX_PASSWORD)) {
+    throw 'Dedicated owner signing inputs are required for release packaging.'
+}
+$directoryPath = [IO.Path]::GetFullPath($Directory)
+if (-not (Test-Path -LiteralPath $directoryPath -PathType Container)) { throw 'Package directory is missing.' }
+$flags = [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable
+if ($IsWindows) { $flags = $flags -bor [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet }
+$certificate = [Security.Cryptography.X509Certificates.X509CertificateLoader]::LoadPkcs12(
+    [Convert]::FromBase64String($env:MBCLI_RELEASE_PFX_BASE64),$env:MBCLI_RELEASE_PFX_PASSWORD,$flags)
+$public = $certificate.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+$actual = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($public)).ToLowerInvariant()
+if ($actual -cne $expected -or -not $certificate.HasPrivateKey -or $certificate.NotAfter -le [DateTime]::UtcNow) {
+    throw 'Release certificate identity, expiry or private key is invalid.'
+}
+function Assert-NativeExit { if ($LASTEXITCODE -ne 0) { throw 'Native signing or verification command failed.' } }
+function Sign-Detached([string]$Path) {
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    $content = [Security.Cryptography.Pkcs.ContentInfo]::new($bytes)
+    $cms = [Security.Cryptography.Pkcs.SignedCms]::new($content,$true)
+    $signer = [Security.Cryptography.Pkcs.CmsSigner]::new($certificate)
+    $signer.IncludeOption = [Security.Cryptography.X509Certificates.X509IncludeOption]::EndCertOnly
+    $signer.DigestAlgorithm = [Security.Cryptography.Oid]::new('2.16.840.1.101.3.4.2.1')
+    $cms.ComputeSignature($signer,$true)
+    $encoded = $cms.Encode()
+    $verify = [Security.Cryptography.Pkcs.SignedCms]::new($content,$true)
+    $verify.Decode($encoded)
+    $verify.CheckSignature($true)
+    if ($verify.SignerInfos.Count -ne 1 -or $verify.SignerInfos[0].Certificate.Thumbprint -cne $certificate.Thumbprint) {
+        throw 'Detached signature signer mismatch.'
+    }
+    $changed = [byte[]]::new($bytes.Length + 1)
+    [Array]::Copy($bytes,$changed,$bytes.Length)
+    $changed[$changed.Length-1] = 1
+    $tamper = [Security.Cryptography.Pkcs.SignedCms]::new([Security.Cryptography.Pkcs.ContentInfo]::new($changed),$true)
+    $tamper.Decode($encoded)
+    $rejected = $false
+    try { $tamper.CheckSignature($true) } catch [Security.Cryptography.CryptographicException] { $rejected = $true }
+    if (-not $rejected) { throw 'Tampered content was not rejected.' }
+    [IO.File]::WriteAllBytes($Path+'.p7s',$encoded)
+}
+$temp = Join-Path $env:RUNNER_TEMP ('mbcli-sign-'+[Guid]::NewGuid().ToString('N'))
+$keychain = Join-Path $temp 'owner.keychain-db'
+$rootStore = $null
+$addedTrust = $false
+try {
+    if ($Stage -eq 'Binaries') {
+        [IO.Directory]::CreateDirectory($temp) | Out-Null
+        $names = @('mb','mbcli','megabasterd-cli')
+        if ($IsWindows) {
+            # Trust is scoped to this disposable hosted runner and removed in finally.
+            $rootStore = [Security.Cryptography.X509Certificates.X509Store]::new('Root','CurrentUser')
+            $rootStore.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            $existing = $rootStore.Certificates.Find([Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,$certificate.Thumbprint,$false)
+            if ($existing.Count -eq 0) { $rootStore.Add([Security.Cryptography.X509Certificates.X509Certificate2]::new($public)); $addedTrust=$true }
+            foreach ($name in $names) {
+                $path = Join-Path $directoryPath ($name+'.exe')
+                $result = Set-AuthenticodeSignature -FilePath $path -Certificate $certificate -HashAlgorithm SHA256 -IncludeChain Signer
+                $verify = Get-AuthenticodeSignature -FilePath $path
+                if ($result.Status -ne 'Valid' -or $verify.Status -ne 'Valid' -or $verify.SignerCertificate.Thumbprint -cne $certificate.Thumbprint) {
+                    throw 'Authenticode verification failed.'
+                }
+            }
+        } elseif ($IsMacOS) {
+            # Empty-password transport is confined to a mode-700 one-job scratch directory.
+            & /bin/chmod 700 $temp; Assert-NativeExit
+            $transport = Join-Path $temp 'transport.p12'
+            [IO.File]::WriteAllBytes($transport,$certificate.Export([Security.Cryptography.X509Certificates.X509ContentType]::Pfx,''))
+            & /bin/chmod 600 $transport; Assert-NativeExit
+            & /usr/bin/security create-keychain -p '' $keychain; Assert-NativeExit
+            & /usr/bin/security unlock-keychain -p '' $keychain; Assert-NativeExit
+            & /usr/bin/security import $transport -k $keychain -P '' -T /usr/bin/codesign | Out-Null; Assert-NativeExit
+            & /usr/bin/security set-key-partition-list -S 'apple-tool:,apple:,codesign:' -s -k '' $keychain | Out-Null; Assert-NativeExit
+            foreach ($name in $names) {
+                $path = Join-Path $directoryPath $name
+                & /usr/bin/codesign --force --sign $certificate.Thumbprint --keychain $keychain --timestamp=none $path; Assert-NativeExit
+                & /usr/bin/codesign --verify --strict --verbose=2 $path; Assert-NativeExit
+            }
+        }
+        [IO.File]::WriteAllBytes((Join-Path $directoryPath 'OWNER-CERTIFICATE.cer'),$public)
+        Copy-Item -LiteralPath (Join-Path (Get-Location) 'docs/SIGNING.md') -Destination (Join-Path $directoryPath 'SIGNING.md')
+        $metadata = @{certificate_sha256=$expected; subject=$certificate.Subject; private_trust=$true; public_ca_trusted=$false; apple_notarized=$false; source_commit=(git rev-parse HEAD).Trim()}
+        [IO.File]::WriteAllText((Join-Path $directoryPath 'SIGNING.json'),($metadata | ConvertTo-Json),[Text.UTF8Encoding]::new($false))
+    } else {
+        $archives = @(Get-ChildItem -LiteralPath $directoryPath -Filter '*.tar.gz' -File)
+        if ($archives.Count -ne 1) { throw 'Expected exactly one release archive.' }
+        Sign-Detached $archives[0].FullName
+        [IO.File]::WriteAllBytes((Join-Path $directoryPath 'OWNER-CERTIFICATE.cer'),$public)
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Verify-Release.ps1') -Destination (Join-Path $directoryPath 'Verify-Release.ps1')
+        & (Join-Path $PSScriptRoot 'Verify-Release.ps1') -Archive $archives[0].FullName -Certificate (Join-Path $directoryPath 'OWNER-CERTIFICATE.cer')
+    }
+    Write-Output ('Owner signature verified: '+$Stage+'; public certificate SHA256='+$expected+'; private trust only; no notarization.')
+} finally {
+    if ($addedTrust -and $null -ne $rootStore) { $rootStore.Remove([Security.Cryptography.X509Certificates.X509Certificate2]::new($public)) }
+    if ($null -ne $rootStore) { $rootStore.Dispose() }
+    if ($IsMacOS -and (Test-Path -LiteralPath $keychain)) { & /usr/bin/security delete-keychain $keychain | Out-Null }
+    if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force }
+    $certificate.Dispose()
+}
