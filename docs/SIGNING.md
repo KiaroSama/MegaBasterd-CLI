@@ -50,7 +50,9 @@ Windows verification checks the native payload signature and pinned owner certif
 without modifying a trusted-root store. Only success or the exact untrusted-root
 chain result is eligible; other errors fail. A changed PE payload or different owner
 must be rejected. Neither the hosted runner nor the user's machine gains root trust.
-The macOS runner uses an isolated temporary keychain and removes it in cleanup.
+The macOS runner uses an isolated temporary keychain, temporarily adds it to the
+runner's keychain search list, restores the previous list and removes it in cleanup.
+This does not install a trusted root or change certificate trust policy.
 Its mode-700 scratch directory contains a mode-600 PKCS#12 transport with a
 nonsecret, fixed transport password. Unlike an empty password, this produces an
 encrypted key bag that Apple's importer accepts; the password is not a security
