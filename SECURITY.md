@@ -23,7 +23,7 @@ Include:
 | Version | Supported |
 | --- | --- |
 | 1.x historical Python implementation | Superseded by the native rewrite |
-| 2.x Rust | Current development branch; report the exact commit and platform |
+| 2.x Rust | Supported native series; report the exact version, commit and platform |
 
 Identify which implementation, OS/architecture and exact source commit a report
 concerns. Do not infer native security assurance from tests of an older implementation.
