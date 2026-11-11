@@ -54,7 +54,7 @@ in CI on Linux, Windows, macOS Intel and macOS Apple Silicon.
 
 ## Other branches
 
-The new PR includes the Rust checkpoint in its ancestry. The obsolete Python
-Black-update branch is superseded because the Python toolchain has been removed.
-Remote branch cleanup is recorded in this PR; no change is merged into `main`
-by this work.
+The migration preserves the Rust checkpoint in its ancestry. The old Python
+Black-update proposal does not apply to the native application. Branch cleanup
+must preserve unique or unverified work; removing a runtime does not authorize
+deleting unrelated branches or historical source.
