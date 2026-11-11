@@ -42,8 +42,10 @@ The manual release workflow forwards only two dedicated protected inputs to the
 packaging step. Ordinary tests and source packages never contain private signing
 material. Native signing occurs before member checksums; detached signing occurs
 after archive creation. A final archive cannot be relabeled from unsigned bytes.
-The hosted Windows runner temporarily trusts the exact owner certificate for
-verification and removes that trust afterward; the user's machine is not changed.
+Windows verification checks the native payload signature and pinned owner certificate
+without modifying a trusted-root store. Only success or the exact untrusted-root
+chain result is eligible; other errors fail. A changed PE payload or different owner
+must be rejected. Neither the hosted runner nor the user's machine gains root trust.
 The macOS runner uses an isolated temporary keychain and removes it in cleanup.
 
 The release process verifies tamper rejection and native signatures. The owner
