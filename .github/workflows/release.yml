@@ -9,6 +9,11 @@ concurrency:
 jobs:
   native:
     uses: ./.github/workflows/ci.yml
+    with:
+      owner_signing: true
+    secrets:
+      MBCLI_RELEASE_PFX_BASE64: ${{ secrets.MBCLI_RELEASE_PFX_BASE64 }}
+      MBCLI_RELEASE_PFX_PASSWORD: ${{ secrets.MBCLI_RELEASE_PFX_PASSWORD }}
   lint:
     uses: ./.github/workflows/lint.yml
   coverage:

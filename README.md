@@ -38,9 +38,13 @@ Unpack the artifact's ZIP, then extract its `.tar.gz` payload; the tar archive
 preserves executable permissions on Linux and macOS. It contains the three
 command aliases, `SHA256SUMS`, license notices and the matching Rust source
 package. Verify the archive's `.sha256` file and keep the commands together when
-adding the directory to `PATH`. Build artifacts are unsigned;
-[Releases](https://github.com/KiaroSama/MegaBasterd-CLI/releases) is the destination
-for published versions.
+adding the directory to `PATH`. The manual release batch uses this project's
+dedicated self-signed owner certificate for Windows Authenticode, macOS code
+signing and detached CMS archive signatures. This is private trust, not public-CA
+trust or Apple notarization; operating-system warnings may remain. Verify the
+archive before extraction using [SIGNING.md](docs/SIGNING.md).
+[Releases](https://github.com/KiaroSama/MegaBasterd-CLI/releases) contains published
+versions; unsigned artifacts from older runs are not signed releases.
 
 ```bash
 mb --version

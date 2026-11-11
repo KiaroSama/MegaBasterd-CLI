@@ -2,6 +2,16 @@ name: Rust CI
 
 on:
   workflow_call:
+    inputs:
+      owner_signing:
+        type: boolean
+        required: false
+        default: false
+    secrets:
+      MBCLI_RELEASE_PFX_BASE64:
+        required: false
+      MBCLI_RELEASE_PFX_PASSWORD:
+        required: false
 
 permissions:
   contents: read
@@ -60,6 +70,10 @@ jobs:
       - name: Run native unit, integration, process and regression tests
         run: cargo xtask verify
       - name: Package binaries, source and checksums
+        env:
+          MBCLI_SIGN_RELEASE: ${{ inputs.owner_signing && '1' || '0' }}
+          MBCLI_RELEASE_PFX_BASE64: ${{ secrets.MBCLI_RELEASE_PFX_BASE64 }}
+          MBCLI_RELEASE_PFX_PASSWORD: ${{ secrets.MBCLI_RELEASE_PFX_PASSWORD }}
         run: cargo xtask package
       - name: Save native Cargo cache
         if: always() && steps.cache.outputs.cache-hit != 'true'
