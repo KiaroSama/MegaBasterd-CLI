@@ -1,7 +1,7 @@
 //! Rust-only CI driver. Each receipt is derived from actual libtest discovery and execution.
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::io::{BufRead, Read, Write};
+use std::io::Write;
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
@@ -37,35 +37,22 @@ fn output(command: &mut Command) -> Result<Output> {
     Ok(result)
 }
 
-/// Keep libtest's progress visible while retaining its exact output for the receipt.
-fn test_output(command: &mut Command) -> Result<Output> {
-    let mut child = command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    let stdout = child.stdout.take().ok_or("Missing test stdout")?;
-    let mut stderr = child.stderr.take().ok_or("Missing test stderr")?;
-    std::thread::scope(|scope| {
-        let diagnostics = scope.spawn(move || -> std::io::Result<Vec<u8>> {
-            let mut bytes = Vec::new();
-            stderr.read_to_end(&mut bytes)?;
-            Ok(bytes)
-        });
-        let mut captured = Vec::new();
-        for line in std::io::BufReader::new(stdout).split(b'\n') {
-            let line = line?;
-            std::io::stdout().write_all(&line)?;
-            std::io::stdout().write_all(b"\n")?;
-            captured.extend_from_slice(&line);
-            captured.push(b'\n');
-        }
-        Ok(Output {
-            status: child.wait()?,
-            stdout: captured,
-            stderr: diagnostics
-                .join()
-                .map_err(|_| "Test stderr reader panicked")??,
-        })
+/// Reuse the application's bounded group/job owner; a stuck harness cannot
+/// consume the entire outer CI job or leave descendants holding output pipes.
+fn test_output(command: Command, timeout: std::time::Duration) -> Result<Output> {
+    let result = megabasterd_cli::platform::process::run_command(
+        command,
+        timeout,
+        8 * 1024 * 1024,
+        1024 * 1024,
+        &megabasterd_cli::transfers::control::Control::new(),
+        None,
+    )?;
+    std::io::stdout().write_all(&result.stdout)?;
+    Ok(Output {
+        status: result.status,
+        stdout: result.stdout,
+        stderr: result.stderr,
     })
 }
 
@@ -250,20 +237,23 @@ fn verify() -> Result<()> {
         if media.is_file() {
             command.env("MEGABASTERD_FFMPEG", media);
         }
-        let listed = output(command.args(["--list", "--format=terse"]))?;
-        let discovered: BTreeSet<_> = String::from_utf8(listed.stdout)?
-            .lines()
-            .filter_map(|x| x.strip_suffix(": test"))
-            .map(str::to_owned)
-            .collect();
-        // Remove discovery arguments before execution.
+        command.args(["--list", "--format=terse"]);
         let mut run = Command::new(binary);
         private_test_process(&mut run);
         run.current_dir(root())
             .envs(command.get_envs().filter_map(|(k, v)| v.map(|v| (k, v))))
             .args(["--test-threads=2", "--color=never"]);
+        let listed = test_output(command, std::time::Duration::from_secs(180))?;
+        if !listed.status.success() {
+            return Err("Harness discovery failed".into());
+        }
+        let discovered: BTreeSet<_> = String::from_utf8(listed.stdout)?
+            .lines()
+            .filter_map(|x| x.strip_suffix(": test"))
+            .map(str::to_owned)
+            .collect();
         println!("Running {source}: {} discovered tests", discovered.len());
-        let result = test_output(&mut run)?;
+        let result = test_output(run, std::time::Duration::from_secs(180))?;
         let text = String::from_utf8(result.stdout)?;
         let diagnostics = String::from_utf8_lossy(&result.stderr);
         fs::write(
@@ -684,6 +674,10 @@ fn media() -> Result<()> {
     println!("Verified FFmpeg/ffprobe 9.0.2: {}", executable.display());
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "ci_tests.rs"]
+mod tests;
 
 fn main() -> Result<()> {
     match std::env::args().nth(1).as_deref() {

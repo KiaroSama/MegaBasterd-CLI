@@ -2966,6 +2966,7 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "libc",
+ "megabasterd-cli",
  "serde_json",
  "sha2",
 ]

@@ -47,6 +47,10 @@ without modifying a trusted-root store. Only success or the exact untrusted-root
 chain result is eligible; other errors fail. A changed PE payload or different owner
 must be rejected. Neither the hosted runner nor the user's machine gains root trust.
 The macOS runner uses an isolated temporary keychain and removes it in cleanup.
+Its mode-700 scratch directory contains a mode-600, empty-password PKCS#12
+transport using Apple's compatible legacy PBE/MAC encoding. That transport is
+never published or cached and is deleted with the keychain; protected recovery
+custody and native SHA-256 signatures do not use that compatibility encoding.
 
 The release process verifies tamper rejection and native signatures. The owner
 retains an exportable protected recovery key outside published artifacts. No public

@@ -45,6 +45,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Checkout immutable source comparison leaves
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ac8347dfd92c088cc69f97dd7231c8d7a5d764bd
+          path: .ci-work/baseline
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            src/megabasterd_cli/core/crypter.py
+            src/megabasterd_cli/core/upload_identity.py
+            src/megabasterd_cli/core/splitter.py
+      - name: Prepare source-comparison interpreter only
+        id: source-python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
       - name: Restore native Cargo cache
         id: cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -68,6 +84,8 @@ jobs:
       - name: Install media test prerequisites
         run: cargo xtask media
       - name: Run native unit, integration, process and regression tests
+        env:
+          MEGABASTERD_CI_PYTHON: ${{ steps.source-python.outputs.python-path }}
         run: cargo xtask verify
       - name: Package binaries, source and checksums
         env:

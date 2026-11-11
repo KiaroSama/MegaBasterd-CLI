@@ -399,10 +399,51 @@ fn representative_source_hash_and_local_files_record_real_bounded_resource_sampl
             ));
             assert_eq!(digest(&source), expected);
         }
+        let python = std::env::var_os("MEGABASTERD_CI_PYTHON")
+            .unwrap_or_else(|| panic!("The CI source-comparison interpreter is required"));
+        let baseline = root.join(".ci-work/baseline");
+        for _ in 0..3 {
+            let directory = private_tempfile::tempdir_in(&work).unwrap();
+            let mut command = Command::new(&python);
+            command
+                .args(["-I", "-B", "-X", "utf8"])
+                .arg(root.join(".github/scripts/resource_workload.py"))
+                .arg("--baseline")
+                .arg(&baseline)
+                .arg("--source")
+                .arg(&source)
+                .arg("--directory")
+                .arg(directory.path());
+            let (result, wall) = run(command, scratch.path(), false, &source, directory.path());
+            assert_eq!(result.status.code(), Some(0), "Source comparison failed");
+            assert!(result.stdout.is_empty() && result.stderr.is_empty());
+            samples.entry("python-source").or_default().push(sample(
+                "python-source",
+                directory.path(),
+                size,
+                &expected,
+                wall,
+            ));
+            assert_eq!(digest(&source), expected);
+        }
         let native_summary = summarize(&samples["rust-native"]);
-        workloads.push(json!({"bytes":size,"samples":samples,"native_summary":native_summary}));
+        let source_summary = summarize(&samples["python-source"]);
+        let ratios: BTreeMap<_, _> = METRICS
+            .into_iter()
+            .map(|metric| {
+                (
+                    metric,
+                    native_summary[metric]["median"].as_u64().unwrap() as f64
+                        / source_summary[metric]["median"].as_u64().unwrap() as f64,
+                )
+            })
+            .collect();
+        workloads.push(
+            json!({"bytes":size,"samples":samples,"native_summary":native_summary,
+            "source_summary":source_summary,"native_to_source_median_ratio":ratios}),
+        );
     }
-    let report = json!({"schema_version":1,"baseline_commit":"c4559ecef08c1fb47cc57669230d2f6013520416",
+    let report = json!({"schema_version":1,"baseline_commit":"ac8347dfd92c088cc69f97dd7231c8d7a5d764bd",
         "candidate_commit":commit,"os":std::env::consts::OS,"architecture":std::env::consts::ARCH,
         "workers":1,"workloads":workloads,"scope":"upload source hashing and local split/merge, not network throughput",
         "limits":"debug harness; lifetime peak RSS includes initialization; warm OS caches; native disk reread/security checks retained"});

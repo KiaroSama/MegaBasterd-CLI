@@ -12,6 +12,8 @@
 - Add `max_parallel_verifications` (default 1, range 1–32) for cancellable,
   process-wide final download verification.
 - Update the locked rustix dependency to 1.1.6 for RUSTSEC-2026-0486.
+- Restore measured source/native local-file resource comparisons and enforce an
+  owned process-group/job deadline for each native CI harness.
 - Preserve formatting, type checking, dependency audit and 76% line coverage;
   retain all 1,416 baseline contract identities with executed native mappings.
 - Fix compilation failures found in the checkpoint and port relevant upstream
