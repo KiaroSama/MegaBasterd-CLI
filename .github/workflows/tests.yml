@@ -29,6 +29,18 @@ jobs:
           python-version: '3.13'
       - run: rustup toolchain install 1.99.1 --profile minimal --component llvm-tools-preview --no-self-update
       - run: cargo install cargo-llvm-cov --version 0.9.1 --locked
+      - name: Download verified media from this commit's native job
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: linux-media-${{ github.sha }}
+          path: .ci-work/media-transport
+      - name: Verify and reuse native Linux media tools
+        run: |
+          cd .ci-work/media-transport
+          sha256sum -c media-linux.tar.gz.sha256
+          test "$(tar -tzf media-linux.tar.gz | sort)" = "$(printf 'ffmpeg\nffprobe')"
+          mkdir -p ../media/bin
+          tar -xzf media-linux.tar.gz -C ../media/bin
       - run: cargo xtask media
       - name: Preserve the 76 percent coverage gate
         env:

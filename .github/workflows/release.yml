@@ -17,6 +17,7 @@ jobs:
   lint:
     uses: ./.github/workflows/lint.yml
   coverage:
+    needs: native
     uses: ./.github/workflows/tests.yml
   dependencies:
     uses: ./.github/workflows/audit.yml
