@@ -79,6 +79,19 @@ jobs:
         run: |
           rustc -vV | tee rust-version.txt
           rustc -vV | grep -Fx 'host: ${{ matrix.target }}'
+      - name: Verify Apple owner-signing adapter before compilation
+        if: runner.os == 'macOS' && inputs.owner_signing
+        shell: pwsh
+        env:
+          MBCLI_RELEASE_PFX_BASE64: ${{ secrets.MBCLI_RELEASE_PFX_BASE64 }}
+          MBCLI_RELEASE_PFX_PASSWORD: ${{ secrets.MBCLI_RELEASE_PFX_PASSWORD }}
+        run: |
+          $scratch = Join-Path $env:RUNNER_TEMP 'owner-signing-preflight'
+          New-Item -ItemType Directory -Path $scratch -ErrorAction Stop | Out-Null
+          try {
+            foreach ($name in @('mb','mbcli','megabasterd-cli')) { Copy-Item /bin/ls (Join-Path $scratch $name) }
+            ./.github/scripts/Sign-Release.ps1 -Stage Binaries -Directory $scratch
+          } finally { Remove-Item -LiteralPath $scratch -Recurse -Force }
       - name: Build all native release commands
         run: cargo build --locked --release --bins -p megabasterd-cli
       - name: Install media test prerequisites
