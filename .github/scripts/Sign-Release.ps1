@@ -46,26 +46,17 @@ function Sign-Detached([string]$Path) {
 }
 $temp = Join-Path $env:RUNNER_TEMP ('mbcli-sign-'+[Guid]::NewGuid().ToString('N'))
 $keychain = Join-Path $temp 'owner.keychain-db'
-$rootStore = $null
-$addedTrust = $false
 try {
     if ($Stage -eq 'Binaries') {
         [IO.Directory]::CreateDirectory($temp) | Out-Null
         $names = @('mb','mbcli','megabasterd-cli')
         if ($IsWindows) {
-            # Trust is scoped to this disposable hosted runner and removed in finally.
-            $rootStore = [Security.Cryptography.X509Certificates.X509Store]::new('Root','CurrentUser')
-            $rootStore.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-            $existing = $rootStore.Certificates.Find([Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,$certificate.Thumbprint,$false)
-            if ($existing.Count -eq 0) { $rootStore.Add([Security.Cryptography.X509Certificates.X509Certificate2]::new($public)); $addedTrust=$true }
             foreach ($name in $names) {
                 $path = Join-Path $directoryPath ($name+'.exe')
-                $result = Set-AuthenticodeSignature -FilePath $path -Certificate $certificate -HashAlgorithm SHA256 -IncludeChain Signer
-                $verify = Get-AuthenticodeSignature -FilePath $path
-                if ($result.Status -ne 'Valid' -or $verify.Status -ne 'Valid' -or $verify.SignerCertificate.Thumbprint -cne $certificate.Thumbprint) {
-                    throw 'Authenticode verification failed.'
-                }
+                $null = Set-AuthenticodeSignature -LiteralPath $path -Certificate $certificate -HashAlgorithm SHA256 -IncludeChain Signer
+                & (Join-Path $PSScriptRoot 'Verify-Windows.ps1') -Path $path
             }
+            & (Join-Path $PSScriptRoot 'Test-WindowsSignature.ps1') -Path (Join-Path $directoryPath 'mb.exe') -Scratch $temp
         } elseif ($IsMacOS) {
             # Empty-password transport is confined to a mode-700 one-job scratch directory.
             & /bin/chmod 700 $temp; Assert-NativeExit
@@ -76,11 +67,21 @@ try {
             & /usr/bin/security unlock-keychain -p '' $keychain; Assert-NativeExit
             & /usr/bin/security import $transport -k $keychain -P '' -T /usr/bin/codesign | Out-Null; Assert-NativeExit
             & /usr/bin/security set-key-partition-list -S 'apple-tool:,apple:,codesign:' -s -k '' $keychain | Out-Null; Assert-NativeExit
+            $requirement = '=certificate leaf = H"'+$certificate.Thumbprint+'"'
             foreach ($name in $names) {
                 $path = Join-Path $directoryPath $name
                 & /usr/bin/codesign --force --sign $certificate.Thumbprint --keychain $keychain --timestamp=none $path; Assert-NativeExit
-                & /usr/bin/codesign --verify --strict --verbose=2 $path; Assert-NativeExit
+                & /usr/bin/codesign --verify --strict -R $requirement $path; Assert-NativeExit
             }
+            $changed = Join-Path $temp 'tampered'
+            $bytes = [IO.File]::ReadAllBytes((Join-Path $directoryPath 'mb'))
+            if ($bytes.Length -le 4096) { throw 'Native payload is too small for the integrity regression.' }
+            $bytes[4096] = $bytes[4096] -bxor 1
+            [IO.File]::WriteAllBytes($changed,$bytes)
+            & /usr/bin/codesign --verify --strict -R $requirement $changed 2>$null
+            if ($LASTEXITCODE -ne 1) { throw 'Tampered macOS payload was not rejected as invalid.' }
+            & /usr/bin/codesign --verify --strict -R $requirement /bin/ls 2>$null
+            if ($LASTEXITCODE -ne 3) { throw 'Different macOS signer was not rejected by the owner requirement.' }
         }
         [IO.File]::WriteAllBytes((Join-Path $directoryPath 'OWNER-CERTIFICATE.cer'),$public)
         Copy-Item -LiteralPath (Join-Path (Get-Location) 'docs/SIGNING.md') -Destination (Join-Path $directoryPath 'SIGNING.md')
@@ -96,8 +97,6 @@ try {
     }
     Write-Output ('Owner signature verified: '+$Stage+'; public certificate SHA256='+$expected+'; private trust only; no notarization.')
 } finally {
-    if ($addedTrust -and $null -ne $rootStore) { $rootStore.Remove([Security.Cryptography.X509Certificates.X509Certificate2]::new($public)) }
-    if ($null -ne $rootStore) { $rootStore.Dispose() }
     if ($IsMacOS -and (Test-Path -LiteralPath $keychain)) { & /usr/bin/security delete-keychain $keychain | Out-Null }
     if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force }
     $certificate.Dispose()
