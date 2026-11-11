@@ -35,6 +35,7 @@ use crate::terminal::progress::{Progress, Status};
 pub struct DownloadOptions {
     pub workers: u32,
     pub verify: bool,
+    pub max_parallel_verifications: u32,
     pub overwrite: bool,
     pub resume: bool,
     pub keep_state: bool,
@@ -53,9 +54,15 @@ impl DownloadOptions {
         if !(1..=64).contains(&workers) {
             return Err(Error::invalid("Workers must be between 1 and 64"));
         }
+        if !(1..=32).contains(&config.max_parallel_verifications) {
+            return Err(Error::invalid(
+                "Parallel verifications must be between 1 and 32",
+            ));
+        }
         Ok(Self {
             workers,
             verify: config.verify_integrity && !no_verify,
+            max_parallel_verifications: config.max_parallel_verifications,
             overwrite,
             resume: config.auto_resume,
             keep_state: config.keep_state_files_on_error,
@@ -212,7 +219,13 @@ fn download_with_space(
                     "Resume staging is missing and destination is an unrelated object",
                 ));
             }
-            verification::verify(&mut published, info.size, &key, control)?;
+            verification::verify_with_limit(
+                &mut published,
+                info.size,
+                &key,
+                control,
+                options.max_parallel_verifications,
+            )?;
             states.clear()?;
             progress.status(item, Status::Complete)?;
             return Ok(claim.path.clone());
@@ -307,7 +320,13 @@ fn download_with_space(
             shared.state.require_complete()?;
             if options.verify {
                 progress.status(item, Status::Verifying)?;
-                verification::verify(&mut shared.file, shared.info.size, &key, control)?;
+                verification::verify_with_limit(
+                    &mut shared.file,
+                    shared.info.size,
+                    &key,
+                    control,
+                    options.max_parallel_verifications,
+                )?;
             }
             Ok(())
         })(),

@@ -58,6 +58,7 @@ fn insufficient_or_unreadable_free_space_preserves_destination_and_never_preallo
                     let item = progress.add(&info.name, info.size).unwrap();
                     let options = DownloadOptions {
                         workers: 1,
+                        max_parallel_verifications: 1,
                         verify: false,
                         overwrite: true,
                         resume: true,

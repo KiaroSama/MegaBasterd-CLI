@@ -16,6 +16,7 @@ pub struct Config {
     pub speed_limit_kbps: f64,
     pub upload_speed_limit_kbps: f64,
     pub verify_integrity: bool,
+    pub max_parallel_verifications: u32,
     pub smart_proxy_enabled: bool,
     pub smart_proxy_url: Option<String>,
     pub timeout_seconds: u64,
@@ -53,6 +54,7 @@ impl Default for Config {
             speed_limit_kbps: 0.0,
             upload_speed_limit_kbps: 0.0,
             verify_integrity: true,
+            max_parallel_verifications: 1,
             smart_proxy_enabled: false,
             smart_proxy_url: None,
             timeout_seconds: 60,
@@ -130,7 +132,9 @@ fn valid(key: &str, value: &Value, default: &Value) -> bool {
     };
     match key {
         "max_workers" | "upload_workers" => (1..=64).contains(&n),
-        "max_parallel_downloads" | "max_parallel_uploads" => (1..=32).contains(&n),
+        "max_parallel_downloads" | "max_parallel_uploads" | "max_parallel_verifications" => {
+            (1..=32).contains(&n)
+        }
         "timeout_seconds" => n > 0,
         "streaming_port" | "connect_proxy_port" => (1..=65535).contains(&n),
         "log_backups" | "quota_max_wait_loops" => n <= u64::from(u32::MAX),

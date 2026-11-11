@@ -29,14 +29,19 @@ user paths require the same isolated user override.
 
 ## CI and test accounting
 
-The CI matrix uses actual native runners for Linux x64, Windows x64 and both
-macOS architectures. Pushes to `main`/`develop` and every PR build all Release aliases, run unit,
-integration, regression, process, filesystem, cryptographic-vector, network-peer,
-media and command-line tests, and package binaries plus source and checksums.
+The manual validation workflow uses actual native runners for Linux x64, Windows
+x64 and both macOS architectures. Dispatch `release.yml` at the intended branch
+or tag to build all release aliases, run unit, integration, regression, process,
+filesystem, cryptographic-vector, network-peer, media and command-line tests,
+and package binaries plus source and checksums. Verify every check and receipt
+against that exact commit; a pull-request merge-ref is a different commit.
 Formatting, Clippy/types, advisories/licenses/sources and LLVM line coverage run
 as separate required checks. The coverage threshold remains 76 percent.
 
-The immutable baseline is `c4559ecef08c1fb47cc57669230d2f6013520416`. Its ledger
+The source baseline is `ac8347dfd92c088cc69f97dd7231c8d7a5d764bd`, whose tree
+is identical to original generation commit `c4559ecef08c1fb47cc57669230d2f6013520416`.
+Fixture provenance retains the original generation ID; source expectations and
+fingerprints were not regenerated during the identity-only repair. Its ledger
 contains 1,416 static test definitions across 164 modules (117 parameterized
 definitions, 118 decorators). These are source contracts, not a claimed count of
 runtime-expanded pytest cases. The full ledger remains in

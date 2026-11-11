@@ -59,6 +59,7 @@ fn a_policy_send_boundary_refusal_is_returned_after_one_call_without_mutating_sa
         let item = progress.add("unused", 4096).unwrap();
         let options = DownloadOptions {
             workers: 1,
+            max_parallel_verifications: 1,
             verify: false,
             overwrite: false,
             resume: true,

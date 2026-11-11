@@ -125,6 +125,7 @@ fn scratch() -> crate::test_support::TempDir {
 fn options(verify: bool) -> DownloadOptions {
     DownloadOptions {
         workers: 1,
+        max_parallel_verifications: 1,
         verify,
         overwrite: false,
         resume: true,

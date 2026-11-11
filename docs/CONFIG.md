@@ -94,6 +94,7 @@ version is not reset. Keep recovery copies until recovery is verified.
 | `speed_limit_kbps` | `0` | Aggregate download KiB/s, finite/nonnegative; 0 unlimited. |
 | `upload_speed_limit_kbps` | `0` | Aggregate upload KiB/s, finite/nonnegative; 0 unlimited. |
 | `verify_integrity` | `true` | Final on-disk download MAC verification. |
+| `max_parallel_verifications` | `1` | Per-process bound on concurrent final download MAC rereads, 1–32; waiting verification remains cancellable. |
 | `timeout_seconds` | `60` | Positive HTTP timeout. |
 | `auto_resume` | `true` | Reuse compatible validated native transfer state. |
 | `keep_state_files_on_error` | `true` | Retain failed-download state/staging for recovery. |

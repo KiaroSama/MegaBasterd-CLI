@@ -79,6 +79,7 @@ fn resume_open_failures_preserve_committed_coverage_and_bytes_before_any_snapsho
                     let item = progress.add("resume", 17).unwrap();
                     let configured = DownloadOptions {
                         workers: 1,
+                        max_parallel_verifications: 1,
                         verify,
                         overwrite: false,
                         resume: true,

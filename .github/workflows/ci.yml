@@ -1,18 +1,10 @@
 name: Rust CI
 
 on:
-  push:
-    branches: [main, develop]
-  pull_request:
-  workflow_dispatch:
   workflow_call:
 
 permissions:
   contents: read
-
-concurrency:
-  group: rust-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   native:
@@ -21,6 +13,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
         include:
           - os: ubuntu-26.04
@@ -96,5 +89,5 @@ jobs:
             .ci-work/resource-report.json
             .ci-work/results/*.txt
           include-hidden-files: true
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 7

@@ -1,18 +1,12 @@
 name: Lint
 on:
-  push:
-    branches: [main, develop]
-  pull_request:
-  workflow_dispatch:
-concurrency:
-  group: rust-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
+  workflow_call:
 permissions:
   contents: read
 jobs:
   rustfmt:
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy --no-self-update
@@ -20,6 +14,7 @@ jobs:
   types:
     name: Rust types and Clippy
     runs-on: ubuntu-26.04
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - run: rustup toolchain install 1.99.1 --profile minimal --component clippy --no-self-update
