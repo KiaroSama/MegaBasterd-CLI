@@ -6,27 +6,18 @@ MegaBasterd CLI - Copyright (c) 2026 Kiaro Sama.
 - Author: https://github.com/KiaroSama
 - Repository: https://github.com/KiaroSama/MegaBasterd-CLI
 
-## Native version
+## License
 
-The new Rust implementation and project-owned native build tooling are licensed
-under **GPL-3.0-or-later**: you may redistribute and modify them under version 3
-of the GNU General Public License, or, at your option, any later version.
-The full license text is in [LICENSE](LICENSE).
+**GPL-3.0-or-later**. The full license text is in [LICENSE](LICENSE).
 
 This software is provided without warranty, including the implied warranties of
 merchantability or fitness for a particular purpose. See the license for details.
-
-The native implementation is a modified replacement of the earlier Python CLI.
-When distributing binaries, provide the matching Corresponding Source, including
-the build scripts, lockfile, project license and applicable dependency notices.
-A source tree for another commit is not the matching source for a binary.
 
 ## Historical versions
 
 Earlier versions were distributed under the MIT License. Those existing grants
 are not revoked by this change. Their notice is preserved in
-[licenses/MIT-historical.txt](licenses/MIT-historical.txt); preserve it when
-redistributing that code or substantial portions of it. Historical source remains available in Git with that grant.
+[licenses/MIT-historical.txt](licenses/MIT-historical.txt).
 
 ## References and dependencies
 
