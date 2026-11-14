@@ -1,380 +1,260 @@
-# Command Reference
+# Native Command Reference
 
-All commands can be run through the source launcher:
+The native commands are `mb`, `mbcli` and `megabasterd-cli`. They share one Rust
+dispatcher. The [README](../README.md#all-commands) lists all 55 leaf commands;
+append `--help` to a command for executable usage.
 
-```powershell
-.\Run.ps1 <command> [arguments] [options]
-```
+## Root options and shared authentication
 
-The same commands are available as `mb`, `mbcli`, and `megabasterd-cli` after
-an editable/package install.
-
-Global options:
-
-| Option | Purpose |
+| Option | Meaning |
 | --- | --- |
-| `-v`, `--verbose` | Increase logging verbosity. Use `-vv` for debug logs. |
-| `-q`, `--quiet` | Suppress normal console output. Errors still print. |
-| `--log-file`, `--no-log-file` | Override config-driven log file behavior for this run. |
-| `-h`, `--help` | Show help. |
-| `--version` | Show package version. |
+| `-h`, `--help` | Show help for the selected command/group. |
+| `--version` | Show version at the root; no `-V` alias. |
+| `-v`, `--verbose` | INFO console diagnostics; `-vv` selects DEBUG. |
+| `-q`, `--quiet` | Suppress non-error console messages. |
+| `--log-file`, `--no-log-file` | Override file logging for this invocation. |
 
-When commands are run through `Run.ps1`, launcher and CLI logs are written to
-`Logs/` automatically. Use `--no-log-file` only when you want to disable the
-Python-side file log for a specific CLI invocation.
+Place root flags before the command in portable scripts. Repeated scalar flags
+use the last value; repeated include/exclude flags accumulate and verbosity
+counts. Opposite logging switches use the last selected switch.
 
-## Transfer Commands
+Account options (`AUTH` below): `-a/--account EMAIL_OR_LABEL`,
+`--vault-passphrase TEXT`, `--mfa-code CODE`. Vault-only options (`VAULT`) are
+`--vault-passphrase TEXT` and `--mfa-code CODE`. Avoid secrets in command-line
+arguments: they can reach shell history/process listings. Prefer interactive
+secret prompts or the supported private `MEGABASTERD_VAULT_PASSPHRASE` environment
+input for vault unlock. Never send MFA codes in a bug report.
 
-### `download`
+Account selection: explicit account → account-vault default → configured
+`default_account`. An explicit account authentication failure must not silently
+become an anonymous transfer. Public `info` does not authenticate.
 
-```powershell
-.\Run.ps1 download [URL ...] [OPTIONS]
+## Downloads
+
+```bash
+mb download [URL ...] [OPTIONS]
 ```
 
-Downloads one or more MEGA links. It supports public file links, public folder
-links, file-in-folder links, folder-in-folder links, legacy link formats,
-password-protected links, `mega://enc`, `mega://fenc`, `mega://elc`, `.dlc`
-input files, and MegaCrypter `mc://` links.
-
-When `--output` is omitted, downloads go to `<project>\Output`. Folder and
-file-in-folder downloads preserve the MEGA folder hierarchy under that output
-directory.
-
-| Option | Purpose |
+| Option | Meaning |
 | --- | --- |
-| `-o`, `--output DIR` | Destination directory. |
-| `-w`, `--workers N` | Parallel chunk workers per file. |
-| `-P`, `--parallel N` | Number of files to download at once. |
-| `-l`, `--limit KBPS` | Aggregate download speed cap shared by all parallel transfers of this command. `0` means unlimited. |
-| `-p`, `--password TEXT` | Password for protected links. |
-| `--no-verify` | Skip final MAC verification. |
-| `--overwrite`, `--force` | Replace an existing destination file. By default an unrelated existing file is preserved and a unique name (`name (1).ext`) is used instead; a valid resumable partial still resumes. |
-| `--rename NAME` | Local filename override for one-file downloads. |
-| `--proxy URL` | HTTP/SOCKS proxy for this run. |
-| `-i`, `--input-file PATH` | Read links from text, or decrypt a `.dlc` file. |
-| `--elc-user TEXT` | ELC account user. |
-| `--elc-api-key TEXT` | ELC API key. |
-| `-I`, `--include GLOB` | Folder links: only download files matching this glob (repeatable). |
-| `-X`, `--exclude GLOB` | Folder links: skip files matching this glob (repeatable; wins over include). |
-| `--select` | Folder links: interactively choose files (`1,3-5` / `all` / `none`). |
-| `--json` | Machine mode: one JSON result record per line on stdout; every human message and progress frame goes to stderr. |
+| `-o`, `--output DIR` | Destination directory; config/root `Output/` by default. |
+| `-w`, `--workers N` | Chunk workers, 1–64; default `max_workers` (8). |
+| `-P`, `--parallel N` | Parallel files, 1–32; default `max_parallel_downloads` (6). |
+| `-l`, `--limit KBPS` | Aggregate KiB/s cap; finite nonnegative, 0 unlimited. |
+| `-p`, `--password TEXT` | Protected-link password. |
+| `--no-verify` | Disable final disk MAC verification; reduces integrity assurance. |
+| `--overwrite`, `--force` | Permit replacement instead of unique-name preservation. |
+| `--rename NAME` | Override a single file's local basename. |
+| `--proxy URL` | Explicit validated proxy for this invocation. |
+| `-i`, `--input-file PATH` | Existing UTF-8 link list or DLC input file. |
+| `--elc-user TEXT`, `--elc-api-key TEXT` | Selected ELC service credentials. |
+| `-I`, `--include GLOB` | Repeatable folder include filter. |
+| `-X`, `--exclude GLOB` | Repeatable exclusion; exclusions win. |
+| `--select` | Interactive folder selection; `1,3-5`, `all`, `none`. |
+| `--json` | JSONL result records on stdout, diagnostics on stderr. |
+| `AUTH` | Optional stored-account-backed public downloads. |
 
-Machine mode (`--json`) emits JSONL records shaped like
-`{"event": "result", "type": "download", "status": "success", "name": ...,
-"path": ..., "size": ..., "elapsed_seconds": ..., "integrity_ok": ...}` plus a
-final `{"event": "summary", ...}` per folder. Failures use
-`"status": "failed"` with a stable `error_code` and a sanitized `error`
-field, user skips use `"skipped"`, and sources are always key-redacted
-(`#<key>`). Records are emitted atomically (one whole line per lock hold), so
-parallel `-P N` output stays valid JSONL, and every string value is passed
-through a recursive secret sanitizer (link keys, SIDs, passwords, API keys,
-MFA codes, tokens are never emitted; a `share_link` keeps its public key).
-Exit codes are unchanged. This is the stable interface an external caller
-should parse.
+A URL list, a supported container or an input file supplies the source. Supported
+formats include public/legacy MEGA file and folder links, file/subfolder links,
+password links, `mega://enc`, `mega://fenc`, ELC, DLC and MegaCrypter.
+Folder include paths preserve double spaces and match `info --json` file paths.
+EOF at selection cancels cleanly. An explicit empty selection is a skip, not a
+successful download of nonexistent content.
 
-Examples:
+Final output is staged until verification/publication. Resume rereads staged
+bytes before trusting completed coverage. An unrelated destination is preserved
+under the default unique-name policy. Persistent `.mbclaim` lock sidecars are
+intentional. Do not delete state or partial files blindly after an error.
 
-```powershell
-.\Run.ps1 download "https://mega.nz/file/ID#KEY" -o .\downloads
-.\Run.ps1 download "https://mega.nz/folder/ID#KEY" -P 4
-.\Run.ps1 download -i .\links.txt -l 4096
-.\Run.ps1 download -i .\container.dlc
+## Uploads
+
+```bash
+mb upload PATH ... [OPTIONS]
 ```
 
-### `upload`
+Paths must exist and may be files or directories. Authentication uses `AUTH`.
 
-```powershell
-.\Run.ps1 upload [PATH ...] [OPTIONS]
-```
-
-Uploads files or directories to a MEGA account stored in the encrypted account
-vault.
-
-| Option | Purpose |
+| Option | Meaning |
 | --- | --- |
-| `-a`, `--account ID` | Account email or label. |
-| `-w`, `--workers N` | Parallel chunk workers per file. |
-| `-P`, `--parallel N` | Number of files to upload at once. |
-| `-l`, `--limit KBPS` | Aggregate upload speed cap shared by all parallel workers of this command. `0` means unlimited. |
-| `--rename NAME` | Remote filename override for a single file. |
-| `--target HANDLE_OR_PATH` | Destination folder handle or path. |
-| `--keep-structure` | Preserve local directory structure. |
-| `--keep-going` | Continue directory uploads after item failures and print a warning summary (the exit code still reports the failures). |
-| `--auto-account` | Select the account immediately before each file starts, reserving its bytes in a live free-space ledger (requires cached quotas from `account refresh-all`). Runs in parallel with `-P N` for flat files — each file gets its own isolated API/session, accounts log in once (no repeated MFA), and the free-space ledger is thread-safe. On a quota error the account's quota is refreshed and the same file is retried on another suitable account (each account at most once per file); a `--keep-structure` tree always stays on ONE account and fails clearly rather than being split. |
-| `--share` | Print a public link after each upload (directories: one link per uploaded file). |
-| `--share-password TEXT` | Create password-protected share links. |
-| `--mfa-code CODE` | Two-factor code if required. |
-| `--vault-passphrase TEXT` | Non-interactive vault unlock. |
-| `--json` | Machine mode: JSONL upload records (`handle`, `account`, `share_link`, ...) on stdout; human output to stderr. Secrets are never included. |
+| `-w`, `--workers N` | Chunk workers, 1–64; default `upload_workers` (4). |
+| `-P`, `--parallel N` | Parallel files, 1–32; default `max_parallel_uploads` (1). |
+| `-l`, `--limit KBPS` | Aggregate finite nonnegative KiB/s cap. |
+| `--rename NAME` | Remote basename for a single file. |
+| `--target HANDLE_OR_PATH` | Destination cloud folder. |
+| `--keep-structure` | Recreate a local directory hierarchy. |
+| `--keep-going` | Retain the directory partial-result path after ordinary item errors; final failure remains nonzero. Strict structured uploads also attempt independent siblings before returning an aggregate transfer failure. |
+| `--auto-account` | Select a suitable cached-quota account per file. |
+| `--share` | Create a public link after successful upload. |
+| `--share-password TEXT` | Password-wrap a requested share link. |
+| `--json` | JSONL result records. |
 
-The account used when `-a/--account` is omitted resolves as: vault default
-(`account default` / `account add --default`) first, then the legacy
-`config default_account`. The command exits non-zero when any item fails;
-a failed `--share` link or post-transfer hook is reported separately and does
-not fail the upload.
+Automatic selection requires cached quotas from `account refresh-all`; a
+structured tree stays on one account. Whole-source hash/file identity checks
+protect resume/final registration. A confirmed registration receipt is retained
+until local finalization is acknowledged; uncertain registration is never
+blindly replayed.
 
-Examples:
+Media uploads automatically attempt an encrypted thumbnail. Image decoding is
+built in; video/audio needs `ffmpeg`/`ffprobe`. A missing codec/tool, rejected
+attribute, public-share error or post-transfer hook error is reported separately
+and does not turn already uploaded file bytes into a failed upload. JSON upload
+results include `thumbnail.status` (`attached`, `not_applicable`, or `failed`),
+with a separate warning/error code where applicable. Native integration proof
+for these paths runs in CI.
 
-```powershell
-.\Run.ps1 upload .\movie.mkv --account me@example.com
-.\Run.ps1 upload .\Photos --keep-structure --target Backups
-.\Run.ps1 upload .\secret.zip --share --share-password "open"
+## Streaming and public metadata
+
+```bash
+mb stream URL [OPTIONS]
 ```
 
-### `stream`
+Options: `-p/--port PORT`, `-H/--host HOST`, `--password TEXT`, `--token TEXT`,
+`--allow-query-token`, `--proxy URL`, `--elc-user TEXT`, `--elc-api-key TEXT`.
+Defaults are `streaming_port=8080` and `streaming_host=127.0.0.1`.
+The source must resolve to exactly one file. Range responses are checked before
+CTR decryption at the selected byte offset. HEAD does not fetch the upstream
+body. A non-loopback listener requires authentication; if no token was supplied,
+the generated token is saved privately under the native data directory and only
+its location is reported. Use `Authorization: Bearer <token>`. Query tokens are
+opt-in because URLs may leak. Ctrl+C stops owned clients/workers.
 
-```powershell
-.\Run.ps1 stream URL [OPTIONS]
+```bash
+mb info URL [--json] [--password TEXT] [--elc-user TEXT] [--elc-api-key TEXT]
 ```
 
-Runs a local HTTP server that fetches encrypted MEGA ranges, decrypts them on
-the fly, and serves media players through normal HTTP Range requests.
+No account/MFA or content download is required. JSON is one object, not JSONL
+human chatter. Folder data includes integer `file_count`, `node_count`,
+`total_size` and `files[{path,size,handle}]`; names and double spaces are preserved.
+Normal private logs/config access can still create runtime data: this command
+is not a promise of zero filesystem activity.
 
-| Option | Purpose |
+```bash
+mb share TARGET [--password TEXT] [--remove] [AUTH]
+```
+
+Create/password-wrap or remove an account-owned node's public link. An
+intentionally exported `share_link` includes its public key; other diagnostic
+link keys remain redacted.
+
+## Cloud and trash
+
+All commands below accept `AUTH`.
+
+| Syntax | Meaning |
 | --- | --- |
-| `-p`, `--port N` | Local HTTP port. |
-| `-H`, `--host HOST` | Bind address. Defaults to loopback. |
-| `--token TEXT` | Require this access token (sent as `Authorization: Bearer`). Auto-generated when binding a non-loopback host so the stream is never exposed unauthenticated. |
-| `--allow-query-token` | Also accept the token via `?token=` (insecure: it can leak into logs/history). Off by default. |
-| `--password TEXT` | Password for protected links. |
-| `--proxy URL` | Upstream MEGA proxy. |
-| `--elc-user TEXT` | ELC account user. |
-| `--elc-api-key TEXT` | ELC API key. |
+| `mb ls [PATH] [--all]` | List children, a selected file or the account node listing. |
+| `mb mkdir NAME [--parent TARGET]` | Create a folder. |
+| `mb rm TARGET [--yes]` | Request remote deletion; confirmation otherwise. |
+| `mb mv SOURCE DESTINATION` | Move into a folder; refuse cycles/system roots. |
+| `mb rename TARGET NEW_NAME` | Rename while preserving other attributes. |
+| `mb search PATTERN [--regex]` | Search names, optionally using a regular expression. |
+| `mb import SHARE_URL [--target TARGET]` | Server-side folder/subtree import. |
+| `mb trash list` | List trash children. |
+| `mb trash empty [--yes]` | Permanently delete trash children. |
 
-Upstream responses are strictly validated: a partial request must be answered
-with HTTP 206 and a `Content-Range` matching the requested bytes, or the
-request fails with 502. This prevents a proxy or CDN that ignores `Range` from
-having its full-file response decrypted at the wrong AES-CTR offset and served
-as valid data.
+Definitive individual rejection does not erase successful sibling changes.
+Partial batches return failure rather than printing an all-success message.
+Cancellation/ambiguous mutation stops immediately; inspect remote state before
+retrying. Imports forward original validated attribute ciphertext and rewrap
+full node keys. If a parent import is rejected, surviving descendants use the
+explicit selected destination, preserving the source application's fallback.
 
-A loopback bind (`127.0.0.1`/`::1`/`localhost`) runs without authentication.
-Any non-loopback bind requires a token: if you do not pass `--token`, a strong
-one is generated and shown once on the console (never written to logs).
+## Accounts
 
-## Public Link Commands
-
-### `info`
-
-```powershell
-.\Run.ps1 info URL [--json] [--password TEXT] [--elc-user TEXT] [--elc-api-key TEXT]
-```
-
-Shows public link metadata without downloading or logging into an account: type,
-name, size, node count, and container details where available. No MFA code is
-needed because this command uses public-link APIs.
-
-| Option | Purpose |
+| Syntax | Options / behavior |
 | --- | --- |
-| `--json` | Print the answer as one JSON object on stdout instead of a table. |
-| `--password TEXT` | Password for protected links. |
-| `--elc-user TEXT` | ELC account user for `mega://elc` links. |
-| `--elc-api-key TEXT` | ELC API key for `mega://elc` links. |
+| `mb account list` | Stored identities, not passwords. |
+| `mb account add EMAIL` | `--password`, `--label`, `--default`, `--vault-passphrase`, `--verify`/`--no-verify`, `--mfa-code`. Verification is on by default; opposite switches use the last selection. |
+| `mb account remove EMAIL_OR_LABEL` | Remove credentials/session with confirmation. |
+| `mb account logout [EMAIL_OR_LABEL]` | `--all`, `--vault-passphrase`; end sessions without removing credentials. |
+| `mb account default EMAIL_OR_LABEL` | Set the vault default. |
+| `mb account info [EMAIL_OR_LABEL]` | `VAULT`; fetch account/quota information. |
+| `mb account refresh-all` | `VAULT`; update cached quotas. |
 
-With `--json`, a folder share also carries a `files` array — one entry per file
-with `path`, `size` and `handle`:
+Passwords and sessions are encrypted. A definitive expired session may be
+removed; transport/suspicious-validation failures preserve stored bytes.
+Logout and remove are different operations, not aliases.
 
-```json
-{"type": "Folder share", "public_id": "ID", "file_count": 2, "total_size": 108037402,
- "files": [{"path": "Season 1/clip.mkv", "size": 1024, "handle": "fileBBBB"}]}
-```
+## Queue
 
-`size` is a byte count, never a formatted string, and `path` is exactly what
-`download --include` matches and what a download writes — so a selection made
-from this listing can be passed straight back as a filter. Nothing is
-downloaded and nothing is created on disk.
-
-### `share`
-
-```powershell
-.\Run.ps1 share TARGET [OPTIONS]
-```
-
-Creates or removes a public link for a node in your account.
-
-| Option | Purpose |
+| Syntax | Options / behavior |
 | --- | --- |
-| `--password TEXT` | Wrap the share URL in MEGA password-link format. |
-| `--remove` | Remove the public link. |
-| `-a`, `--account ID` | Account email or label. |
-| `--vault-passphrase TEXT` | Non-interactive vault unlock. |
+| `mb queue list` | Inspect job status. |
+| `mb queue add-download URL` | `-o/--output DIR`, `-p/--password TEXT`. |
+| `mb queue add-upload PATH` | Existing file; `-a/--account ID`. |
+| `mb queue remove ITEM_ID` | Remove one eligible job. |
+| `mb queue retry ITEM_ID` | Accepts `all`; requeue eligible failed/interrupted/canceled work. |
+| `mb queue clear` | Confirm clearing completed/canceled jobs. |
+| `mb queue reset` | Explicitly confirm discarding current queue; corrupt data is preserved first. |
+| `mb queue run` | `VAULT`; execute jobs under leases/heartbeats. |
 
-## Cloud Commands
+Queue payloads are encrypted. Atomic claim/generation checks prevent stale
+owners from finishing another owner's job. Unknown remote mutation remains
+active for reconciliation rather than automatically retrying it. Corrupt/future
+stores are not silently replaced. Native process tests cover this behavior.
 
-These commands require a stored account.
+## Proxies
 
-| Command | Syntax | Purpose |
-| --- | --- | --- |
-| `ls` | `.\Run.ps1 ls [PATH] [--all]` | List files and folders. |
-| `mkdir` | `.\Run.ps1 mkdir NAME [--parent PATH]` | Create a remote folder. |
-| `rm` | `.\Run.ps1 rm TARGET [--yes]` | Move a node to trash. |
-| `mv` | `.\Run.ps1 mv SOURCE DESTINATION` | Move a node into another folder. |
-| `rename` | `.\Run.ps1 rename TARGET NEW_NAME` | Rename a node. |
-| `search` | `.\Run.ps1 search PATTERN [--regex]` | Search remote filenames. |
-| `import` | `.\Run.ps1 import SHARE_URL [--target HANDLE]` | Server-side import of a public folder share. |
+| Syntax | Options / behavior |
+| --- | --- |
+| `mb proxy list` | `--config-urls`/`--no-config-urls`; configured URLs included by default. |
+| `mb proxy add URL ...` | Validate and store URLs. |
+| `mb proxy remove URL` | Remove one URL. |
+| `mb proxy clear` | Clear the stored pool. |
+| `mb proxy import PATH` | Existing local text file. |
+| `mb proxy fetch` | `--protocol http\|socks4\|socks5` (http), `--source URL`, `--limit N` (200), `--timeout SECONDS` (20). |
+| `mb proxy test` | Bounded TCP reachability; not a complete proxy handshake/trust test. |
+| `mb proxy serve` | `-p/--port PORT`, `--password TEXT`, `--any-port`; loopback listener, configured defaults. |
 
-Common options: `-a/--account` and `--vault-passphrase`.
+Supported routing URLs include HTTP, HTTPS, SOCKS4, SOCKS5 and SOCKS5H. Embedded
+proxy credentials are redacted in displays. Local pool reload preserves
+compatible health/cooldown state; bad reloads do not silently replace a healthy
+pool. Forced mode refuses when no allowed proxy is available, without a direct
+fallback. CONNECT/HTTP forwarding remains restricted to MEGA domains; `--any-port`
+changes port policy, not domain policy.
 
-Trash commands:
+## Crypter, containers and local files
 
-```powershell
-.\Run.ps1 trash list
-.\Run.ps1 trash empty --yes
+| Syntax | Options / behavior |
+| --- | --- |
+| `mb crypter encrypt SOURCE DESTINATION` | Existing file; `--password TEXT`, `--chunk-size-kb N` (64). The unit is KiB, not MiB. |
+| `mb crypter decrypt SOURCE DESTINATION` | Existing file; `--password TEXT`. |
+| `mb crypter make-link MEGA_URL` | `--server`, `--password`, `--description`, `--no-expire`, `--reverse`, `--max-downloads`. |
+| `mb crypter resolve MC_URL` | `--password TEXT`. |
+| `mb crypter elc-resolve ELC_URL` | `--user TEXT`, `--api-key TEXT`. |
+| `mb crypter dlc-resolve PATH` | Existing DLC file, trusted HTTPS resolver. |
+| `mb split SOURCE PART_SIZE_MB` | `-o/--output-dir DIR`; numbered parts plus SHA-1 sidecar. |
+| `mb merge ANY_PART` | `-o/--output FILE`, `--no-verify`, `--delete-parts`. |
+| `mb thumbnail SOURCE DESTINATION` | JPEG within 250x250, aspect preserved, no upscaling. |
+
+File encryption writes authenticated MBCR v2; reading legacy v1 explicitly warns
+about its weaker sequence/trailing-data guarantees. Cipher chunk sizes are
+bounded; wrong passwords/corrupt input must not replace a prior output. Merge
+checks SHA-1 unless explicitly disabled; part deletion is opt-in and only follows
+successful publication. Thumbnail outputs preserve input aliases/existing files;
+video/audio requires a supported external tool pair.
+
+## Clipboard and settings
+
+```bash
+mb watch [--interval SECONDS] [-o DIR] [--run] [VAULT]
 ```
 
-## Account Commands
+Default interval 1.5 seconds, valid inclusive range 0.05–3600. Queue newly copied
+MEGA links; `--run` also runs pending jobs. No application-owned clipboard daemon
+is installed; Ctrl+C ends the command. A usable platform clipboard is required.
 
-```powershell
-.\Run.ps1 account list
-.\Run.ps1 account add EMAIL [--label NAME] [--default] [--verify/--no-verify]
-.\Run.ps1 account remove EMAIL_OR_LABEL
-.\Run.ps1 account logout [EMAIL_OR_LABEL] [--all]
-.\Run.ps1 account default EMAIL_OR_LABEL
-.\Run.ps1 account info [EMAIL_OR_LABEL]
-.\Run.ps1 account refresh-all
-```
+| Syntax | Meaning |
+| --- | --- |
+| `mb config show` | Display sanitized settings. |
+| `mb config get KEY` | Display one sanitized setting. |
+| `mb config set KEY VALUE` | Validate and persist one setting. |
+| `mb config unset KEY` | Clear a nullable setting. |
+| `mb config reset` | Confirm restoring defaults, not corrupt-file recovery. |
+| `mb config path` | Active path. |
+| `mb config migrate` | Normalize supported native settings and remove retired/unknown keys; never imports Python-era stores. |
+| `mb config recover [--reset]` | Diagnose corruption; explicit reset preserves original bytes. |
 
-Account passwords are stored in the encrypted vault. The vault passphrase is
-prompted interactively unless `--vault-passphrase` is provided.
-
-Logging in caches the session, encrypted under the same vault passphrase, so
-later commands do not re-authenticate — which also means they do not re-prompt
-for 2FA. The session stays valid until you end it.
-
-`account logout` ends it: it tells MEGA to invalidate the session and deletes
-the local cache. Both halves matter — removing the file alone would leave a
-token MEGA still honours, and invalidating alone would leave a dead file the
-next command has to probe and discard. `--all` does every stored account.
-
-**`logout` and `remove` are different.** `logout` ends the session and *keeps*
-the stored credential, so signing in again needs only the vault passphrase —
-the account stays in `account list`. `remove` deletes the credential, and
-clears the cached session with it so removal never leaves a live token behind.
-If you want the account gone from this machine, that is `remove`.
-
-## Queue Commands
-
-```powershell
-.\Run.ps1 queue list
-.\Run.ps1 queue add-download URL [-o DIR] [-p PASSWORD]
-.\Run.ps1 queue add-upload PATH [-a ACCOUNT]
-.\Run.ps1 queue remove ID
-.\Run.ps1 queue retry ID|all
-.\Run.ps1 queue clear
-.\Run.ps1 queue reset
-.\Run.ps1 queue run [--vault-passphrase TEXT]
-```
-
-The queue is persisted as JSON under `<project>/User/Data/queue.json`.
-
-`queue run` claims each job atomically (reload + stale recovery + lease under
-one cross-process file lock), so concurrent `queue run` threads, instances,
-or processes can never execute the same job; if the queue lock cannot be
-acquired within its timeout the command reports a clear error and exits
-non-zero. A malformed or invalid-schema `queue.json` (non-list root, missing
-required fields, unknown type/status) is treated as corruption: the original
-is preserved and backed up as `queue.json.corrupt.<timestamp>.json`,
-mutations are blocked with a non-zero exit, and no queue key is created.
-Recover with `mb queue reset` (discards the jobs; the backup remains) or by
-restoring a good copy. Jobs a crashed or killed run left `active` are recovered as
-`interrupted` on the next run and re-run automatically; a job whose owner is
-still heartbeating is never stolen, and a heartbeat can never revert a
-finished status. `failed` jobs are not retried automatically — use
-`queue retry <id>` (or `queue retry all`) to return failed/interrupted/
-canceled jobs to `pending`; encrypted link passwords survive the retry.
-`queue run` exits non-zero when any job fails; per-job statuses are kept, and
-every progress row ends in the job's real final state (Ctrl+C marks the
-current job `interrupted` and its row canceled).
-
-## Proxy Commands
-
-```powershell
-.\Run.ps1 proxy list [--config-urls/--no-config-urls]
-.\Run.ps1 proxy add URL [URL ...]
-.\Run.ps1 proxy remove URL
-.\Run.ps1 proxy clear
-.\Run.ps1 proxy import PATH
-.\Run.ps1 proxy fetch [--protocol http|socks4|socks5] [--source URL] [--limit N] [--timeout N]
-.\Run.ps1 proxy test
-.\Run.ps1 proxy serve [--port N] [--password TEXT] [--any-port]
-```
-
-`proxy serve` starts a local CONNECT proxy for MEGA traffic. `proxy fetch`
-imports public proxy lists into the local pool.
-
-`proxy test` probes every pooled proxy concurrently and prints which ones
-answer, with the latency or the reason. It exits non-zero only when *nothing*
-is reachable, so `proxy test` can gate a transfer:
-
-```powershell
-.\Run.ps1 proxy test; if ($LASTEXITCODE -eq 0) { .\Run.ps1 download URL }
-```
-
-It checks TCP reachability — that the port answers — not that the peer really
-speaks HTTP CONNECT or SOCKS5, because a full handshake would have to tunnel
-to a third-party host to find out. A dead host is what kills most of a fetched
-free-proxy list, and that is what this catches. Credentials in a stored proxy
-URL are redacted in the table.
-
-## Crypter Commands
-
-```powershell
-.\Run.ps1 crypter encrypt SOURCE DESTINATION [--password TEXT] [--chunk-size-mb N]
-.\Run.ps1 crypter decrypt SOURCE DESTINATION [--password TEXT]
-.\Run.ps1 crypter make-link MEGA_URL [OPTIONS]
-.\Run.ps1 crypter resolve MC_URL [--password TEXT]
-.\Run.ps1 crypter elc-resolve ELC_URL [--user TEXT] [--api-key TEXT]
-.\Run.ps1 crypter dlc-resolve PATH
-```
-
-`encrypt` and `decrypt` are local file operations. `make-link`, `resolve`,
-`elc-resolve`, and `dlc-resolve` interoperate with supported container/link
-formats.
-
-`dlc-resolve` uses JDownloader's public DLC service endpoint over HTTPS, and
-follows redirects only within that same trusted origin. The DLC master key is a
-known public constant, and the returned URLs are supplied by that third-party
-service, so resolve DLC files only on networks you trust.
-
-## Local File Utility Commands
-
-```powershell
-.\Run.ps1 split SOURCE PART_SIZE_MB [-o DIR]
-.\Run.ps1 merge ANY_PART [-o PATH] [--delete-parts] [--no-verify]
-.\Run.ps1 thumbnail SOURCE DESTINATION
-```
-
-`split` writes numbered part files and SHA-1 metadata. `merge` verifies and
-reconstructs the original file. `thumbnail` creates a 250x250 JPEG for supported
-image files when Pillow is installed.
-
-## Watch Command
-
-```powershell
-.\Run.ps1 watch [--interval SECONDS] [-o DIR] [--run]
-```
-
-Watches clipboard text and queues MEGA links as they appear.
-
-## Config Commands
-
-```powershell
-.\Run.ps1 config show
-.\Run.ps1 config get KEY
-.\Run.ps1 config set KEY VALUE
-.\Run.ps1 config reset
-.\Run.ps1 config path
-.\Run.ps1 config migrate
-.\Run.ps1 config recover [--reset]
-```
-
-Use `config path` to see the exact config file used on the current machine.
-
-A malformed `config.json` (bad JSON, invalid UTF-8, or a root that is not an
-object) is treated as corruption: the original is preserved byte-for-byte, one
-timestamped, content-addressed copy is kept as
-`config.json.corrupt.<ts>-<hash>.json`, and every mutation
-(`set`, `unset`, `migrate`, `reset`) refuses with a non-zero exit instead of
-overwriting it. `config recover` reports that state; `config recover --reset`
-writes a fresh default config and keeps the backup. Read-only commands keep
-working and never rewrite the file. Corruption messages never echo values from
-the corrupt file.
+See [CONFIG.md](CONFIG.md) for defaults, storage envelopes, secret fields and
+log retention. Exit codes: 0 success/skip, 1 operation failure, 2 usage error,
+130 cancellation. CI records executed command contracts.

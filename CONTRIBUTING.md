@@ -1,105 +1,98 @@
 # Contributing
 
-## Quick Start
+The application, tests and build driver use Rust 1.99.1, edition 2024. Install a
+native linker/SDK and follow the checked-in lockfile. Run commands from the
+repository root.
 
-```powershell
-git clone https://github.com/KiaroSama/megabasterd-cli.git
-cd megabasterd-cli
-
-# Source launcher path
-.\Run.ps1 --help
-
-# Development environment
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
-pre-commit install
+```bash
+cargo fmt --all --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo xtask media
+cargo xtask verify
+cargo build --locked --release --bins -p megabasterd-cli
+cargo xtask package
 ```
 
-## Workflow
+`cargo xtask media` obtains a checksum-pinned FFmpeg/ffprobe 9.0.2 pair for real
+MP4/WebM decoding tests. On Unix it builds a minimal test-only toolchain; on
+Windows it extracts the pinned public binary pair. The immutable download retries
+at most twice within a 60-second retry window, retaining TLS and SHA-256 verification;
+each transfer is bounded to 180 seconds. Coverage reuses the native Linux job's
+same-run, same-commit tool archive with checksum and member validation rather than
+repeating the download and build. Nothing installs media tools
+into the user's application or system. A local compatible FFmpeg pair can also be
+supplied through `MEGABASTERD_FFMPEG` when running targeted tests.
 
-1. Open an issue for non-trivial changes.
-2. Create a topic branch.
-3. Keep edits focused and add tests for changed behavior.
-4. Run local checks.
-5. Open a pull request with a short behavior summary and test results.
+`cargo xtask verify` builds every test harness, discovers its tests, executes all
+of them, rejects ignored/missing results and checks every applicable parity
+mapping. Each harness has a 180-second wall limit, bounded captured output and
+owned process-group/Windows-job cleanup, inside the 60-minute native job. It supplies
+an isolated `MEGABASTERD_USER_DIR` under `.ci-work/`. No live MEGA credentials are
+needed: bounded local TLS peers exercise the real wire paths.
+The test profile optimizes cryptographic dependencies so KDF tests remain practical.
+For a narrow edit use `cargo test --locked --test NAME`; tests involving discovered
+user paths require the same isolated user override.
 
-## Local Checks
+## CI and test accounting
 
-```powershell
-ruff check src tests
-black --check src tests
-mypy src/megabasterd_cli --ignore-missing-imports
-pytest
-.\Run.ps1 --help
-```
+The manual validation workflow uses actual native runners for Linux x64, Windows
+x64 and both macOS architectures. Dispatch `release.yml` at the intended branch
+or tag to build all release aliases, run unit, integration, regression, process,
+filesystem, cryptographic-vector, network-peer, media and command-line tests,
+and package binaries plus source and checksums. Verify every check and receipt
+against that exact commit; a pull-request merge-ref is a different commit.
+Formatting, Clippy/types, advisories/licenses/sources and LLVM line coverage run
+as separate required checks. The coverage threshold remains 76 percent.
 
-## Project Layout
+The source baseline is `ac8347dfd92c088cc69f97dd7231c8d7a5d764bd`, whose tree
+is identical to original generation commit `c4559ecef08c1fb47cc57669230d2f6013520416`.
+Fixture provenance retains the original generation ID; source expectations and
+fingerprints were not regenerated during the identity-only repair. Its ledger
+contains 1,416 static test definitions across 164 modules (117 parameterized
+definitions, 118 decorators). These are source contracts, not a claimed count of
+runtime-expanded pytest cases. The full ledger remains in
+`tests/fixtures/contract_coverage.json`; no baseline case has been removed or
+exempted from native assertion accounting. Rust tests may group related cases.
+Python-specific import, launcher and old-data-reader tests use explicit Rust
+replacements; the row's reason records changed mechanisms and policies.
 
-```text
-Run.ps1                  # Source launcher
-src/megabasterd_cli/     # Importable package
-tests/                   # Unit tests
-docs/                    # User and developer documentation
-.github/                 # Issue templates and CI workflows
-```
+When changing a mapped assertion, review its invariant and variants before
+updating its SHA-256. Never change an identity, delete a failing case, mark it
+retired, or point it at an unrelated passing helper. The Rust driver checks
+source digests and the exact harness identities against discovery and execution.
+Each platform writes `.ci-work/receipt.json` with the tested commit, architecture,
+native test count and the disposition of all 1,416 contracts.
+The accompanying `source-contracts.xml` reports those same preserved identities
+in JUnit format; it is assertion-mapping evidence, not a second test execution. Platform-specific
+cases must execute on their applicable native runner; they are not claimed as
+passing elsewhere.
 
-Inside `src/megabasterd_cli`:
+## Representative source comparison
 
-```text
-commands/     Click command adapters
-core/         MEGA protocol, crypto, transfer engines, link parsing
-accounts/     Encrypted account vault
-proxy/        Smart proxy pool and CONNECT proxy
-queue/        Persistent transfer queue
-streaming/    Local HTTP streaming server
-ui/           Rich theme, prompts, tables, progress bars
-utils/        Logging, helpers, hooks, speed limiting
-```
+CI checks out three immutable, hash-verified Python baseline leaves into
+`.ci-work/baseline` and supplies `MEGABASTERD_CI_PYTHON` from its test-only Python
+3.13 setup. `tests/resource_contract.rs` takes three samples per engine and input
+size, checks actual hash/split/merge outputs, and records median/min/max plus
+native/source ratios in `.ci-work/resource-report.json`. This is local-file and
+transfer-preparation evidence, not network throughput. The native debug harness,
+warm filesystem caches and stronger disk-integrity checks limit comparisons.
 
-## Coding Conventions
+For an equivalent local test, use that exact baseline checkout and set
+`MEGABASTERD_CI_PYTHON` to an absolute compatible Python path. The application and
+release binaries do not use Python; this helper runs only as a CI comparison oracle.
 
-- Target Python 3.10+.
-- Prefer tested core helpers over command-level logic.
-- Keep command modules thin.
-- Use `ui.theme.make_console()` for Rich output.
-- Use existing style names from `ui/theme.py` before adding new visual styles.
-- Avoid broad refactors when a focused fix is enough.
-- Do not log secrets, account passwords, share keys, or vault passphrases.
+## Distribution
 
-## Tests
+`cargo xtask package` uses already-built Release binaries. Artifacts include
+all three aliases, SHA256SUMS, project licensing and the matching Cargo source
+package. The manual root enables dedicated owner signing through two protected
+inputs, available only during packaging. Windows Authenticode and macOS codesign
+use the project-specific self-signed certificate; detached CMS signs each archive.
+Private trust is explicit, with no public-CA or Apple notarization claim. Unsigned
+older artifacts are not signed releases. See [signing verification](docs/SIGNING.md).
+Published binaries need matching Corresponding Source and applicable dependency notices.
+Keep credentials, logs, caches, generated media tools and user data out of Git
+and out of release archives.
 
-Tests should cover:
-
-- new link formats and parser behavior;
-- cryptographic transformations with deterministic fixtures;
-- transfer state and resume behavior;
-- command registration and important help surfaces;
-- error paths where user-facing behavior matters.
-
-For network-dependent behavior, prefer unit tests with fakes unless the test is
-explicitly marked and documented as live.
-
-## Pull Request Checklist
-
-- `pytest` passes.
-- `ruff check src tests` passes.
-- `black --check src tests` passes.
-- `.\Run.ps1 --help` runs.
-- Documentation is updated when user-visible behavior changes.
-- New config keys are documented in `docs/CONFIG.md`.
-
-## Reporting Bugs
-
-Include:
-
-- OS and Python version;
-- command used;
-- sanitized error output;
-- whether the issue happens through `Run.ps1`, installed `mb`, or both;
-- `-vv` logs when useful, with secrets removed.
-
-## Security Issues
-
-Do not open public issues for security-sensitive problems. Use the contact path
-in [SECURITY.md](SECURITY.md).
+See [migration notes](docs/MIGRATION.md), [upstream review](docs/UPSTREAM.md),
+[architecture](docs/ARCHITECTURE.md), and [security policy](SECURITY.md).

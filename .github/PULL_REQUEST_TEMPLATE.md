@@ -1,18 +1,12 @@
-## Summary
+## Change
 
-<!-- One or two sentences on what this PR changes and why. -->
+Describe the problem and resulting behavior.
 
-## Changes
+## Validation
 
-- ...
-
-## Test plan
-
-- [ ] `pytest` passes
-- [ ] `ruff check src tests` passes
-- [ ] `.\Run.ps1 --help` passes
-- [ ] Manually tested the command(s) affected
+- [ ] `cargo fmt --all --check` and Clippy/types
+- [ ] Native tests, complete parity receipts and Release builds on all supported targets
+- [ ] Dependency policy and the 76% LLVM line-coverage gate
+- [ ] Documentation and migration notes updated for changed behavior
 
 ## Related issues
-
-Closes #

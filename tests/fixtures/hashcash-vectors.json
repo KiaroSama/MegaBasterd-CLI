@@ -1,0 +1,43 @@
+{
+  "provenance": {
+    "python": "3.11.9",
+    "baseline_commit": "c4559ecef08c1fb47cc57669230d2f6013520416",
+    "source_sha256": "9ac0be44bb9876b9d02d433e8c13fc0058ff81d24402b8d36511557b21badc95",
+    "method": "Independent stdlib hashlib.sha256: nonce big-endian followed by 262144 copies of the 48-byte token; incremental 12 KiB blocks, ascending nonce search bounded to 4096 candidates and 30 seconds.",
+    "synthetic_only": true
+  },
+  "vectors": [
+    {
+      "token_byte": 1,
+      "easiness": 192,
+      "nonce": "00000165",
+      "nonce_b64": "AAABZQ",
+      "digest": "008cf1f80b9a88f3e9b66992ed5db6e77f5880d31e6c53b5af5126fc580adc10",
+      "threshold": 16777216
+    },
+    {
+      "token_byte": 2,
+      "easiness": 192,
+      "nonce": "0000004a",
+      "nonce_b64": "AAAASg",
+      "digest": "008242afa4a52c4a3443bdf97398dc09bf31412bf8af7bce19de522be27f27ee",
+      "threshold": 16777216
+    },
+    {
+      "token_byte": 1,
+      "easiness": 255,
+      "nonce": "00000001",
+      "nonce_b64": "AAAAAQ",
+      "digest": "5f4318baef1a13eec1d5d07f1c3b69bf144610c1584ca0f2624166006bcb29b0",
+      "threshold": 2130706432
+    },
+    {
+      "token_byte": 2,
+      "easiness": 255,
+      "nonce": "00000000",
+      "nonce_b64": "AAAAAA",
+      "digest": "44eadf9213a2482fbb3ec4d2414463d85df544315fc624425bffd4c7b3ab995d",
+      "threshold": 2130706432
+    }
+  ]
+}

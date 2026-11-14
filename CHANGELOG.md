@@ -1,6 +1,31 @@
 # Changelog
 
-## Unreleased
+## [2.0.0] - 2026-11-11
+
+### Native Rust rewrite
+
+- Complete the `refactor/rust-cli-rewrite` checkpoint as a native Rust application,
+  including all three command aliases, tests and CI tooling; remove Python,
+  PowerShell, C# and C project sources and their packaging configuration.
+- Build and test Linux x64, Windows x64 and macOS Intel/Apple Silicon in one
+  manually dispatched validation batch; publish CI artifacts with source and SHA-256 checksums.
+- Add `max_parallel_verifications` (default 1, range 1–32) for cancellable,
+  process-wide final download verification.
+- Embed Windows publisher, product, version and source-commit resources before
+  owner signing and verify metadata on all three command aliases.
+- Update the locked rustix dependency to 1.1.6 for RUSTSEC-2026-0486.
+- Restore measured source/native local-file resource comparisons and enforce an
+  owned process-group/job deadline for each native CI harness.
+- Preserve formatting, type checking, dependency audit and 76% line coverage;
+  retain all 1,416 baseline contract identities with executed native mappings.
+- Fix compilation failures found in the checkpoint and port relevant upstream
+  proxy parsing and thumbnail retry fixes. See `docs/UPSTREAM.md`.
+- Use fresh native storage; historical data remains untouched. See `docs/MIGRATION.md`.
+
+## Retained Python implementation — unreleased history
+
+The entries below describe the retained implementation, not verified Rust parity.
+Native storage uses a fresh namespace and does not read Python-era personal stores.
 
 ### Changed
 - **Stored account credentials must be re-added.** The account vault now records the scrypt cost inside each encrypted credential instead of assuming a constant, which is what makes the cost raisable at all - and it is raised from 2**14 to 2**15. Credentials written by earlier versions are not read: `mb account remove` then `mb account add` restores them in seconds, and opening one reports the old format explicitly rather than claiming a wrong passphrase. The cipher is unchanged (AES-256-GCM), and the KDF parameters read out of the vault file are range-checked, so a hand-edited file cannot force an unbounded scrypt cost.

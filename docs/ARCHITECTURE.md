@@ -1,339 +1,278 @@
-# Architecture
+# Native Architecture
 
-MegaBasterd CLI is a source-run Python application. `Run.ps1` is the launcher,
-and the importable package lives under `src/megabasterd_cli`.
+The application is a standalone Rust CLI. Three small Rust entrypoints call one
+dispatcher. There is no interpreter bridge; historical source remains in Git.
 
-## Runtime Flow
+Build and test evidence is recorded by the native CI matrix for each commit.
 
-```text
-Run.ps1
-  |-- find Python 3.10+
-  |-- create per-run logs under Logs/
-  |-- check/import dependency modules
-  |-- optionally create .venv and install requirements.txt
-  |-- open the interactive menu when no CLI args are supplied
-  |-- add src/ to PYTHONPATH
-  `-- python -m megabasterd_cli <args>
-
-src/megabasterd_cli/__main__.py
-  `-- cli.main()
-
-src/megabasterd_cli/cli.py
-  |-- creates shared config/logging context
-  `-- dispatches Click commands
-```
-
-## Package Layout
+## Responsibilities and dependency direction
 
 ```text
-src/megabasterd_cli/
-|-- cli.py              # Click root command and subcommand registration
-|-- config.py           # Config dataclass and project-local User/ paths
-|-- commands/           # Thin command adapters
-|-- core/               # MEGA protocol, crypto, transfers, links, state
-|-- accounts/           # Encrypted account vault
-|-- proxy/              # Smart proxy pool and CONNECT proxy
-|-- queue/              # Persistent transfer queue
-|-- streaming/          # Local HTTP stream server
-|-- ui/                 # Rich theme, tables, prompts, progress
-|-- native/             # Optional native helper sources/binaries
-`-- utils/              # Logging, hooks, speed limiting, formatting
+src/main.rs
+  -> cli/          clap schema, command adapters, interactive menu
+  -> transfers/    download/upload orchestration, claims, resume, controls
+  -> services/     local files/media, stream/CONNECT servers, child commands
+  -> protocol/     MEGA API/auth/nodes/links/HTTP/routing contracts
+  -> crypto/       wire primitives, file keys, CTR, MAC, KDFs
+
+storage/           versioned private configuration/vault/queue/state
+platform/          native anchored files, permissions, identity, child ownership
+terminal/          safe output, prompts, progress, input and per-run logs
 ```
 
-Tests live in `tests/`. Documentation lives in `docs/`. Helper build scripts
-live in `tools/`. Packaging and tool configuration lives in `pyproject.toml`.
+CLI adapters own configuration/account selection and presentation. Crypto does
+not read settings, launch tools or contact a service. Protocol data stays explicit;
+filesystem/network/terminal effects sit at their owning boundaries. Small concrete
+modules are preferred over an interface/factory with no second implementation.
 
-## Layers
+| Area | Main responsibilities |
+| --- | --- |
+| `cli/args.rs`, `cli/mod.rs` | Exact schema, dispatch, output mode, exit codes and cancellation. |
+| `crypto/` | Base64/u32 wire data, AES block wrapping, attributes, CTR, ordered MACs and login/link KDFs. |
+| `protocol/api.rs`, `auth.rs`, `nodes.rs`, `shares.rs` | Action-aware requests, session verification, cloud graph and mutations. |
+| `protocol/transport.rs`, `dns.rs`, proxy modules | Validated HTTPS, address pinning, proxy selection, redirects and bounded bodies. |
+| `storage/` | Fresh versioned stores, encrypted payloads, locks, reload/atomic writes and leases. |
+| `transfers/` | Bounded workers/limiters, actual transfer bytes, source identities, stage publication and receipts. |
+| `services/` | Local authenticated encryption/split/merge/media, HTTP services and literal child arguments. |
+| `platform/` | Windows/Unix-specific handle/file/process contracts. |
+| `terminal/` | Central redaction, serialized machine output, shared logging, prompts and progress. |
 
-```text
-+-------------------------------------------------------+
-| Launcher                                               |
-|   Run.ps1 dependency check + Python dispatch           |
-|   launcher transcript + CLI log file wiring            |
-+-------------------------+-----------------------------+
-                          |
-+-------------------------v-----------------------------+
-| CLI layer                                             |
-|   Click root group + commands/*.py                    |
-+-------------------------+-----------------------------+
-                          |
-+-------------------------v-----------------------------+
-| Orchestration                                         |
-|   MegaDownloader, MegaFolderDownloader, MegaUploader  |
-|   StreamingServer, QueueManager                       |
-+-------------------------+-----------------------------+
-                          |
-+-------------------------v-----------------------------+
-| Protocol and crypto                                   |
-|   MegaAPIClient, MegaClient, links.py, crypto.py      |
-|   chunks.py, hashcash.py, state.py                    |
-+-------------------------+-----------------------------+
-                          |
-+-------------------------v-----------------------------+
-| Support systems                                       |
-|   accounts vault, config, proxy pool, themed UI       |
-+-------------------------------------------------------+
-```
+## CLI and output contracts
 
-## Command Design
+The baseline inventory contains 55 leaf commands: 16 root leaves and 39 inside
+six groups, with 131 explicit source option declarations. Added download account
+flags are tracked separately. Aliases `mb`, `mbcli`, `megabasterd-cli` share the
+same parser. Public behavior is the command interface; Python import APIs are
+retired, not bridged.
 
-Command modules should stay thin:
+`Output` serializes complete JSON/JSONL records under one lock. Human diagnostics
+use stderr; table/public-link output uses the appropriate explicit interface.
+Redaction covers nested secret fields, link keys, credential URLs and free-text
+secret forms. Deliberately public share links are an explicit exception, never a
+reason to copy other keys into logs.
 
-- parse Click arguments;
-- load config and account context;
-- construct core objects;
-- render results through `ui/`;
-- leave protocol and crypto behavior in `core/`.
+`Context` and `Output` share one logger. Console thresholds/quiet do not suppress
+file events; structured context events avoid double logging. Logs are private,
+unique per run, UTF-8/UTC, with current-run-only rotation. Before `Started`, the
+logger fixes `run` to its selected basename stem and `cmd` to an exhaustive static
+root-command label (`unknown` for public library constructors). Every record keeps
+its level/component and the same run/command context, including rotated segments;
+raw arguments are never used as labels. Logging failure has a safe warning and
+never an insecure file reopen. The executable installs a panic hook that captures
+bounded command-thread payload/location and a native backtrace into a scoped
+thread-local slot. Sanitization and private logging happen after unwind, never
+under the hook or a logger lock. Nested scopes restore prior state and successful
+commands discard internally caught panic details. Backtrace capture itself is
+platform-managed and not a bounded-time recovery guarantee; aborting and worker
+panics remain outside this command-thread recovery contract.
 
-This keeps commands easy to test and avoids duplicating MEGA protocol logic.
+Progress owns structured rows and a joined TTY renderer. A snapshot exposes
+immutable total/completed/status for observation without creating a test-only
+transfer engine. Terminal states freeze elapsed and remove ETA. Interactive `p`
+changes shared pause state; Ctrl+C cancels and wakes waiters. Piped/JSON commands
+do not start the raw keyboard listener. Actual PTY restoration/visual parity is
+a native verification requirement, not established by this document.
 
-## Theme Design
+## API, routing and mutation ownership
 
-`ui/theme.py` defines a shared 20-color Rich palette. New UI code should create
-consoles with `make_console()` and use the `mb.*` styles already registered in
-the theme. This keeps tables, prompts, and progress bars visually consistent.
+Each concurrent transfer has its own mutable API/session sequence state. Shared
+pool/limiters/control are synchronized deliberately; mutable account clients are
+not shared unsafely between transfer workers. URL refresh within a download is
+serialized with a generation check.
 
-## Progress Architecture
+API actions are classified conservatively. Reads may retry bounded transport
+failures; unknown/mutating actions never replay an uncertain sent request.
+Typed definitive MEGA rejection is distinct from cancellation, TLS failure,
+malformed response and unknown mutation outcome. Ambiguity diagnostics identify
+only allowlisted action names or fixed `unknown`/`batch` labels, never arbitrary
+action text or request data. Account, queue and upload-journal stop fences retain
+the same ambiguity classification and non-retryable exit behavior.
 
-All transfer modes (single/parallel/file-in-folder downloads, folder
-downloads, single/parallel/directory uploads, queue runs) share one system:
+API response collection is incremental and capped at 64 MiB after identity/gzip
+decoding; an oversized declared length is rejected before reading. HTML and
+non-array result diagnostics describe the failure without echoing arbitrary
+headers or bodies. Origin HTTP errors do not blame or credit a selected proxy;
+HTTP 407 and unusable bodies do. Credit requires a usable result, and each
+response owns its connection until it is consumed or rejected. Actual native
+socket closure and attribution fixtures are exercised by native tests.
 
-- **Producers** (`core/downloader.py`, `core/uploader.py`) emit structured
-  byte snapshots from a steady 0.5 s reporter thread; they know nothing about
-  layout.
-- **Controller** (`ui/transfer_progress.py`, `TransferProgress`) owns item
-  registration, aggregation, the operation clock, and the lifecycle: every
-  item ends in exactly one terminal state (`complete`/`failed`/`canceled`/
-  `skipped`) and `close()` finalizes leftovers for every outcome (errors,
-  cancellation, empty selections).
-- **Renderer** (`ui/progress.py`, `MultiFileProgressView`) only paints
-  controller state. Rich's auto-refresh re-invokes `__rich_console__` ~4×/s,
-  so `Elapsed`, ETA, and speeds keep moving while producers are silent;
-  speeds come from view-owned rolling meters that decay during stalls and
-  treat the first (resume) sample as a baseline. `Elapsed` is wall-clock from
-  one monotonic clock, frozen at terminal state, and never hidden (narrow
-  terminals shrink the bar instead). Huge folders paint a bounded row set
-  (active rows first) without losing overall totals.
+Hashcash accepts both the retained `1:easiness:token` challenge and the current
+SDK's `1:easiness:timestamp:token` form. Their solution headers are respectively
+`1:easiness:token:nonce` and `1:token:nonce`; the timestamp is informational.
+Parsing bounds the header and encoded token before decoding and requires a
+48-byte token, version 1 and an unsigned-byte easiness. Proofs hash a four-byte
+big-endian nonce followed by 262,144 copies of that token, incrementally rather
+than allocating the complete repeated input.
 
-Command modules must not duplicate layout logic; they only talk to
-`TransferProgress`. Speed limits are aggregate per command: the command
-builds one `TokenBucket` and every worker shares it.
+One absolute 30-second deadline covers an API request's challenge handling, with
+at most two solves. Pause waits, each 12 KiB hash batch and the completed hash
+check cancellation and expiry; a late solution cannot authorize another request.
+Ordinary transfer pause checkpoints retain their deadline-free behavior. A 402
+rejection may be answered with a proof, but an uncertain sent mutation after that
+proof is still not replayed. Independent SHA-256 vectors and direct/CONNECT peer
+fixtures cover these contracts in source; native CI executes these tests.
 
-The final overall state combines the context outcome with the item states:
-any `failed` item — or any item still unfinished at `close()` time — makes
-the overall state `Failed`, matching the process exit code; explicit user
-skips stay successful.
+Trash/import batches return successful handles plus definitive rejections in
+`BatchOutcome`. They continue definitive sibling failures and invalidate cached
+listings; the CLI's completeness gate makes partial batches nonzero instead of
+printing all-success messages. Ambiguity/cancellation stops immediately. Imports
+forward retained, validated original attribute ciphertext and rewrap full node
+keys; reserializing JSON is not byte-preserving. Failed-parent descendants retain
+the baseline fallback to the explicitly selected destination.
+Account listings preserve structurally valid unavailable-key nodes as metadata,
+without a usable key or guessed filename; unrelated owned nodes remain accessible.
+Public-share/content decoding stays strict. Export refuses missing key material
+before publishing a link. Search uses only decoded names and is case-insensitive
+for both substring and regex modes.
 
-## API-Client Ownership
+Own-cloud commands require authenticated context before requesting a listing or
+mutation. Missing nodes and unavailable keys return typed, nonzero errors without
+echoing the target or key. Folder creation invalidates the listing even when a
+sent request returns malformed registration data: its outcome is ambiguous and
+must not be replayed; a later explicit listing can reveal the committed folder.
+Trash cleanup deletes only direct children of the trash root; an empty listing
+sends no deletion. Persistent parsed-command and TLS peer fixtures express these
+contracts, but native CI executes these tests.
 
-`MegaAPIClient` owns one mutable `requests.Session`, a request-sequence
-counter, and the SID slot; it belongs to exactly ONE concurrent transfer.
-Commands build a fresh client per transfer (`MegaAPIClient.clone()` for
-folder workers), and every client is closed on a `finally` path. Within one
-`MegaDownloader`, chunk worker threads reach the API only through
-`_refresh_url`, which is serialized by the downloader's `_url_refresh_lock`;
-initial link resolution happens on the transfer's own thread before workers
-start. The `SmartProxyPool` is the only intentionally shared object (every
-method takes its internal lock). The aggregate `TokenBucket` limiter is also
-shared by design and is thread-safe.
+Every remote path uses the selected transport policy: HTTPS without embedded
+service credentials, verified host/certificate, bounded response, public resolved
+destinations and validated redirects. Trusted explicitly configured proxy endpoints
+are separate from target DNS. Forced proxy mode never silently connects directly.
+The narrow pinned HTTP/HTTPS CONNECT/SOCKS5H adapter preserves original target
+Host/SNI while dialing validated numeric addresses, including bounded failover.
+No target gets a MEGA-hostname exception to public-address/TLS rules.
 
-## Proxy Selection and Force Mode
+## Folder selection and wildcard compatibility
 
-`proxy/selector.py` is the single per-request proxy authority. `ProxySelector`
-picks (1) a SmartProxyPool entry, (2) the static `--proxy` dict, or (3) refuses
-with `ProxyRequiredError` when `force_smart_proxy` is on and nothing is
-available - before any socket is opened, and with no direct fallback after a
-proxy failure. Every outbound path selects here: API calls, chunk transfers,
-the streaming CDN reads, MegaCrypter/DLC/ELC resolution, and `proxy fetch`.
-`MegaAPIClient`, `MegaDownloader`, and `MegaUploader` delegate to it instead of
-each keeping a private copy of the precedence rules.
+`transfers/planner.rs` owns safe relative destinations and re-exports `Filter`;
+`transfers/folder_filter.rs` owns bounded source-style wildcard compilation using
+the existing regex engine. User patterns are not regular expressions: literals
+and character-class endpoints are escaped, braces stay literal, and repeated stars
+collapse. The pinned `unicode_fold.rs` table preserves the source interpreter's
+Unicode 14 full folding independently of the compiler's Unicode release. Its
+Unicode notice is included with project licenses. An independent source-only
+oracle supplies 360 pattern match sets over 32 subjects; native execution of those
+assertions remains a verification gate, not a claim made by this document.
 
-## Streaming Range Validation
+## Crypto contracts
 
-A nonzero Range decrypted at a nonzero AES-CTR counter is only correct if the
-server honored the range. `streaming/server.validate_range_response` therefore
-requires HTTP 206 with a `Content-Range` whose start, end, and total match the
-request (and a `Content-Length` that matches the span) before a byte is
-streamed. HTTP 200 is accepted only for a whole-file request, where the counter
-starts at zero anyway. Anything else fails with 502 rather than serving
-plaintext that belongs to a different offset.
+MEGA wrapping encrypts independent AES blocks, not chained CBC. Attribute
+ciphertext uses AES-CBC/zero IV. Files have an eight-u32/32-byte raw key:
+XOR of its first/last four words yields AES material; words 4–5 are the nonce,
+words 6–7 the condensed MAC. CTR offset includes the intra-block byte position.
 
-## API Retry Policy
+Chunks grow from 128 KiB to 1 MiB in 128 KiB steps, then remain 1 MiB. Ordered
+chunk CBC-MACs fold into the final file MAC; final download verification rereads
+the actual disk file. Independent source-generated vectors, not the Rust result
+itself, supply expected keys/ciphertext/hash values.
 
-`core/api.py` classifies every request: actions in `READ_ONLY_ACTIONS` keep
-bounded retries on any transport error, and everything else - including any
-action not yet listed, so new commands fail safe - is MUTATING. A mutating
-request is retried only when the failure is provably pre-commit (MEGA
-rate-limiting, which means the server declined it, or a `ConnectTimeout`, which
-means it was never sent). An ambiguous read timeout or mid-flight disconnect
-raises `AmbiguousMutationError` instead of replaying a command the server may
-already have applied.
+Vault/session/upload-key envelopes use AES-256-GCM with context-bound associated
+data and explicit scrypt parameters. Each vault retains at most 32 zeroizing derived
+keys in a private FIFO cache, indexed by the salt and complete validated cost tuple.
+Derivation is serialized per vault; every open still authenticates its ciphertext
+and associated data. Eviction and vault destruction drop the wrapped keys; no
+measured speedup or physical memory-erasure guarantee is claimed.
+Local MBCR v2 authenticates sequence/final
+records; v1 reads warn about their weaker contract. Zeroizing buffers are used
+for sensitive material where supported. Big-integer RSA is not claimed constant-
+time or fully zeroized merely because other buffers are.
 
-## Resume State Integrity
+## Storage and native file boundaries
 
-`core/state.py` validates a `.mbstate` document before trusting it: object
-root, known `transfer_type`, non-negative sizes, integer non-duplicate chunk
-indexes (rejecting bools), fixed-length valid hex MACs with no orphan entries,
-and an object `metadata`. Invalid hex is rejected at load time rather than
-escaping later as a raw `ValueError` during verification. An untrustworthy file
-is quarantined byte-for-byte and the transfer restarts fresh, which is the same
-outcome `auto_resume = false` produces. Saves hold both the in-process mutex
-and a cross-process advisory lock.
+The native namespace is `User/native-v2/`, or `native-v2` under the configured
+user base. Python stores are untouched. Documents use version 2 envelopes.
+A persistent sidecar lock spans reload → validation → private same-directory
+stage → flush/fsync → atomic replace. Corrupt/future/foreign state fails closed.
+Explicit recovery preserves original bytes before resetting; no silent rewrite.
+Transfer owners claim checked, increasing snapshot revisions while holding their
+existing transfer lock. The state store reloads under its sidecar and ignores a
+snapshot older than the committed revision without changing saved bytes. Equal
+revisions may be saved again; a newer revision may intentionally remove coverage
+that resume validation rejected. Revision overflow refuses without wrapping. Persisted upload URLs still require
+HTTPS, no embedded credentials, public-address policy and the exact MEGA host
+boundary; malformed encrypted-key envelopes are refused before use. Invalid
+stored values report saved-data corruption without echoing the rejected URL.
 
-## Destination Reservation
+Private files are owner-only before the first byte. Native directory handles
+anchor subsequent operations; Windows DACL/file IDs and Unix nofollow/openat/
+owner/link/mode checks do not fall back to unchecked paths. File identity is
+compared while the relevant handles are live. UNC is deliberately unsupported;
+unsupported directory-sync behavior is explicit, not fabricated durability.
+On Windows, read/list ancestor handles deny delete sharing while publication renames
+the exact source handle to an absolute UTF-16 destination. Overwrite uses
+`FileRenameInfoEx` with POSIX semantics so the verified, delete-shared destination
+handle remains live until replacement finishes. No-overwrite publication keeps
+its refusal when the destination already exists.
 
-`utils/helpers.claim_destination` reserves one destination for exactly one
-transfer across PROCESSES, not just threads: it holds an advisory lock on a
-`.mbclaim` sidecar for the transfer's lifetime and re-checks existence under
-that lock (closing the TOCTOU window). Because the lock is advisory, the OS
-drops it if the owner crashes, so a stale reservation can never permanently
-block a valid future transfer.
+Downloads hold persistent `.mbclaim` sidecar locks and stage output separately.
+Resume checks stored source/key/destination identity and recomputes actual local
+chunk MACs before reuse. Only verified/explicitly permitted output is published.
+The shared verification permit bounds simultaneous disk rereads and is released
+on all outcomes.
 
-## Corrupt-File Preservation
+Uploads keep full SHA-256/size/mtime/native held-object/current-path identity.
+Changed in-flight content cannot register a mixed remote file. Only matching
+known-unregistered upload state may be discarded after proved mutation;
+registration markers/confirmed receipts remain protected. The receipt survives
+local finalization failure and prevents blind duplicate registration.
+Structured uploads additionally retain a locked folder journal: lookup/key preparation
+precedes the pre-send mutation intent; confirmed parents and per-file receipts survive
+sibling failures. Completed file finalization is not replayed. Unknown finalization
+requires reconciliation, not another thumbnail/share/hook attempt. A durable completion
+tombstone replaces unlink-based acknowledgement; retained receipts are not garbage-collected
+by broad scans. These recovery paths still require native CI execution.
 
-`utils/corruption.preserve_corrupt_file` is shared by the config store, the
-queue, and resume state. Backups are deduplicated by CONTENT HASH, not by "a
-backup already exists", so a second, different corruption episode is never
-suppressed by an older one; the filename carries a timestamp plus the digest,
-the file is created with `O_CREAT|O_EXCL`, and the caller is told `None` when
-nothing could be written so no message claims a backup that does not exist.
+Queue payloads are encrypted, including source/destination/account/error fields
+when no password is supplied. Atomic claims, retained execution locks and lease
+generations fence stale writers; expiry alone cannot steal a running executor.
+Heartbeats continue while paused. Each heartbeat lock attempt is capped by the
+remaining renewal grace, the interval and the normal 10-second store timeout;
+a renewal returning after grace stops the transfer rather than restoring health.
+The synchronous executor must honor cancellation and reap its workers before
+returning. A queue job row exists before preparation and is marked Done only
+after the queue commit; missing local inputs, failures and cancellation retain
+terminal rows. File executors own live rendering, and final queue rows are
+reported afterward through the existing bounded progress formatter, without
+starting a second renderer or writing to machine stdout. Unknown remote mutation
+does not become automatic retry. Native race, deadline, progress and recovery
+tests run in the native matrix; source assertions alone are insufficient.
 
-## Shared File Lock
+## Local services and child processes
 
-`utils/filelock.py` provides one bounded, cross-platform advisory lock
-(`msvcrt.locking` on Windows, `fcntl.flock` on POSIX) used by BOTH
-`QueueManager` and `ConfigStore`, so the locking code is written and tested
-once. Each store wraps it with an instance re-entrant mutex and translates a
-timeout into its own domain error (`QueueLockError` / `ConfigLockError`).
+Streaming validates HTTP framing and exact upstream ranges before CTR decrypt.
+Non-loopback access is authenticated, query tokens opt-in. HTTP workers/listeners
+and paused waiters share cancellation/shutdown ownership. CONNECT forwarding is
+MEGA-domain restricted and authenticated, not a generic open proxy.
 
-## Queue Concurrency and Integrity
+Media input remains an opened regular-file handle. Images have encoded/pixel/
+allocation limits and no-upscale aspect bounds. Video/audio uses seekable
+`fd` input from inherited regular-file stdin, a protocol whitelist and bounded
+ffprobe/ffmpeg output/time.
+Hardware decode is requested before a reported CPU fallback. Generated JPEG is
+encrypted under the file AES key, uploaded via `ufa`, and attached with an exact
+eight-byte attribute handle via `pfa`.
 
-`QueueManager` serializes every read-modify-write behind the instance mutex
-plus the shared file lock. Mutations reload the newest queue from disk before
-writing, so a stale snapshot can never clobber newer statuses and a heartbeat
-can never revert a terminal state. `claim_next(run_id)` performs recovery +
-selection + leasing atomically under one lock acquisition, which makes
-concurrent `queue run` threads/instances/processes safe. Saves write a unique
-fsync'd temp file and `os.replace` it over `queue.json`. On load, the file is
-schema-validated (list root; each entry a dict with typed required fields and
-known type/status); any violation is corruption — the original is preserved,
-backed up once as `queue.json.corrupt.<ts>.json`, mutations are blocked
-(`QueueCorruptionError`, non-zero CLI exit), and no queue key is created.
+Child commands receive literal argument vectors, hidden Windows startup, bounded
+captures and owned process-group/job cleanup. No shell evaluation, automatic media
+installation, background daemon or hook installation is part of this design.
+Native process-tree/pipe/cancellation tests remain required.
 
-## Config Concurrency and Secrets
+## Verification and distribution
 
-`ConfigStore` mirrors the queue contract: `set`/`unset`/`migrate` reload the
-newest config under the shared lock, apply only the requested change, and
-persist through a unique fsync'd temp file, so concurrent processes never lose
-each other's updates. Load applies the same integrity contract as the queue:
-invalid UTF-8/JSON or a non-object root is corruption — the original is
-preserved, backed up once as `config.json.corrupt.<ts>.json`, and every
-mutation raises `ConfigCorruptionError` (non-zero CLI exit) until
-`mb config recover --reset`. `config show`/`get` redact secret values via
-`config.display_value` (which reuses the machine-output sanitizer), and
-`config set` never echoes a value. Nullable keys accept `null`/`none` to
-store JSON null; `config unset` clears them.
+`tests/fixtures/cli-schema.json` records the independently transcribed source
+schema. Crypto, link, local-file and transfer vectors retain source provenance.
+The parity ledger keeps all 1,416 baseline definitions across 164 modules.
+`cargo xtask verify` checks target hashes, discovers and executes the native
+harnesses, then reconciles each applicable mapping with actual passing results.
+Receipts include the exact commit, native OS and architecture; static source
+inspection alone never marks a test passed.
 
-## Machine Output and Redaction
+The manual validation workflow builds release binaries for Windows, Linux,
+macOS Intel and macOS Apple Silicon at the dispatched commit. Formatting,
+Clippy/type, dependency-policy and LLVM coverage jobs preserve the
+previous check categories and 76% line-coverage floor. The CI driver and packaging
+tool are Rust (`xtask/`). Test-only FFmpeg/ffprobe prerequisites use pinned archives
+and checksums; no runtime install step is part of the application.
 
-`utils/redaction.py` is the single secret-redaction authority: `sanitize()`
-recursively walks records (secret-named fields wholesale, embedded link keys
-and secret query params in every string, `share_link` kept). `redact_text()`
-also covers the free-text shapes that reach output through `str(exc)` —
-`password: x`, `SID was x`, `MFA code 123456`, `api key = x`, `token is x`,
-`Authorization: Bearer x`, and `scheme://user:pass@host` proxy credentials. `MachineOutput`
-sanitizes each `--json` record and writes it as one atomic
-`dumps(...) + "\n"` under a lock, so parallel workers never interleave partial
-lines. `transfer_progress.redact_link` and `config.display_value` delegate to
-the same module.
-
-## Parallel `--auto-account`
-
-Flat-file auto-account uploads run concurrently under `-P N`: each file
-reserves bytes from the thread-safe `QuotaLedger` immediately before it
-starts, gets its own isolated worker client (via `MegaAPIClient.clone`/session
-reuse — one login per account, no repeated MFA), and closes it when done. The
-account store's `update_quota` and vault save are lock-protected so
-concurrent quota refreshes cannot corrupt the vault. `--keep-structure` trees
-remain one-account and sequential.
-
-## Upload Resume Identity
-
-Upload state records a versioned (v2) source identity: canonical path, size,
-`mtime_ns`, platform file id, and a FULL streaming SHA-256 of the content.
-Resume and pre-finalization checks recompute the hash, so a change to any
-byte anywhere in the file is detected (zero-byte uploads included). Legacy
-v1 sampled identities are never trusted; such uploads restart fresh.
-
-## Transfer Invariants
-
-### Crypto is deterministic
-
-`core/crypto.py` and `core/chunks.py` are pure helpers. They should not perform
-network calls, filesystem writes, or config reads.
-
-### Transfers are restartable
-
-Downloads and uploads write `.mbstate` files next to transfer targets. State
-contains completed chunks and MAC metadata so an interrupted command can resume
-without redoing finished chunks.
-
-### Parallelism is per transfer
-
-One file transfer owns a thread pool of chunk workers. Folder and multi-file
-operations can run several file transfers concurrently, each with its own chunk
-workers.
-
-### Integrity is explicit
-
-Downloaded chunks are folded into MEGA's final CBC-MAC. Mismatches raise an
-integrity error and leave the state file in place.
-
-### Account secrets are encrypted on disk
-
-The account vault encrypts stored passwords with AES-GCM and a scrypt-derived
-key. The vault passphrase is requested interactively unless a command receives
-`--vault-passphrase`.
-
-## MEGA Protocol Notes
-
-### File keys
-
-MEGA file keys are eight uint32 values. The first four are XORed with the last
-four to recover the AES key and metadata:
-
-```text
-[ aes_xor_nonce_hi, aes_xor_nonce_lo, aes_xor_mac_hi, aes_xor_mac_lo,
-  nonce_hi,         nonce_lo,         mac_iv_hi,      mac_iv_lo        ]
-```
-
-`core.crypto.unpack_file_key` returns `(aes_key, nonce, mac)`.
-
-### Chunk sizing
-
-The first eight chunks grow from 128 KB to 1024 KB. Later chunks stay at 1024
-KB. `core.chunks.iter_chunks` centralizes this pattern.
-
-### Folder node keys
-
-Files inside public folder shares store per-node keys wrapped by the folder key.
-Folder-file and folder-subtree operations must fetch the parent folder listing,
-unwrap the target node key, and then request the CDN URL in folder context.
-
-### Hashcash challenges
-
-MEGA may return an `X-Hashcash` challenge for API throttling. `core/hashcash.py`
-solves the challenge and verifies the returned nonce before retrying. On
-Windows, the solver prefers `Bin/hashcash-solver-win64.exe` when it exists, then
-the bundled PowerShell/.NET helper in `tools/hashcash_solver_windows.ps1`, and
-finally the pure-Python fallback. Set `MEGABASTERD_HASHCASH_NATIVE=0` to disable
-native helper use.
-
-## Extension Points
-
-- Add link formats in `core/links.py`.
-- Add public-link metadata renderers in `commands/info_cmd.py`.
-- Add transfer behavior in `core/downloader.py` or `core/uploader.py`.
-- Add new cloud operations to `core/client.py` and expose them from
-  `commands/cloud_cmd.py`.
-- Add UI styles in `ui/theme.py`, then consume them through `make_console()`.
+[Migration notes](MIGRATION.md) document the native storage/compatibility boundary;
+[upstream review](UPSTREAM.md) records the relevant Java behaviors ported to Rust.
