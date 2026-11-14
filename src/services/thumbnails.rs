@@ -412,6 +412,15 @@ fn generate(
     Ok(thumbnail)
 }
 
+/// Single format classification shared with automatic attachment; the previous
+/// duplicated extension allowlist silently dropped m4v and 3gp.
+pub fn supports(extension: &str) -> bool {
+    matches!(
+        extension,
+        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp" | "tiff"
+    ) || media_format(extension).is_ok()
+}
+
 /// Local bytes only; the caller owns optional encrypted media attribute upload.
 pub fn generate_thumbnail(
     source: &Path,

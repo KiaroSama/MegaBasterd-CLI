@@ -12,6 +12,46 @@ impl Drop for CancelOnDrop {
 }
 
 #[test]
+fn resumed_chunk_rereads_wait_for_the_shared_permit_and_cancel_without_mutating_coverage() {
+    use std::io::Write;
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".ci-work/resume-gate");
+    std::fs::create_dir_all(&base).unwrap();
+    let scratch = crate::test_support::tempdir_in(base).unwrap();
+    let path = scratch.path().join("stage");
+    let mut file = File::create(&path).unwrap();
+    file.write_all(b"x").unwrap();
+    drop(file);
+    let key = keys::unpack_file_key(&[0; 8]).unwrap();
+    let mac = chunks::chunk_mac(b"x", key.aes_key.as_slice(), &key.nonce).unwrap();
+    let held = gate().acquire(&Control::new(), 1).unwrap();
+    let control = Control::new();
+    let _cancel = CancelOnDrop(control.clone());
+    let (send, receive) = mpsc::sync_channel(1);
+    std::thread::scope(|scope| {
+        let waiting = control.clone();
+        scope.spawn(move || {
+            let mut file = File::open(path).unwrap();
+            let mut completed = std::collections::BTreeMap::from([(0, mac)]);
+            let result = validate_completed(&mut file, 1, &key, &mut completed, &waiting);
+            send.send((result.map_err(|error| error.exit_code()), completed))
+                .unwrap();
+        });
+        let early = receive.recv_timeout(Duration::from_millis(200));
+        control.cancel();
+        let was_waiting = matches!(early, Err(mpsc::RecvTimeoutError::Timeout));
+        let (result, completed) =
+            early.unwrap_or_else(|_| receive.recv_timeout(Duration::from_secs(2)).unwrap());
+        drop(held);
+        assert!(
+            was_waiting,
+            "resume reread bypassed the shared verification permit"
+        );
+        assert_eq!(result, Err(130));
+        assert_eq!(completed, std::collections::BTreeMap::from([(0, mac)]));
+    });
+}
+
+#[test]
 fn configured_disk_gate_admits_two_and_cancels_the_third_until_release() {
     let gate = Gate {
         active: Mutex::new(0),

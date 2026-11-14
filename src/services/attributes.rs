@@ -83,38 +83,9 @@ pub fn attach(
         .and_then(|value| value.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    if !matches!(
-        extension.as_str(),
-        "jpg"
-            | "jpeg"
-            | "png"
-            | "gif"
-            | "bmp"
-            | "webp"
-            | "tiff"
-            | "mp4"
-            | "mkv"
-            | "webm"
-            | "mov"
-            | "avi"
-            | "mpeg"
-            | "mpg"
-            | "vob"
-            | "ts"
-            | "m2ts"
-            | "flv"
-            | "wmv"
-            | "asf"
-            | "mp3"
-            | "flac"
-            | "m4a"
-            | "m4b"
-            | "ogg"
-            | "opus"
-            | "wav"
-            | "aif"
-            | "aiff"
-    ) {
+    // Reuse the thumbnail backend's classification so attachment coverage cannot
+    // drift from what generation actually supports (m4v and 3gp were missing here).
+    if !thumbnails::supports(&extension) {
         return Ok(Attachment::NotApplicable);
     }
     let ffmpeg = std::env::var_os("MEGABASTERD_FFMPEG")

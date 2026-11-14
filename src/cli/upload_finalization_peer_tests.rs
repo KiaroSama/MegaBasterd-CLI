@@ -60,6 +60,71 @@ enum Finalization {
 }
 
 #[test]
+fn canceled_optional_finalization_work_propagates_cancellation_and_preserves_the_registration_receipt()
+ {
+    let scratch = scratch();
+    let source = scratch.path().join("image.png");
+    std::fs::write(
+        &source,
+        include_bytes!("../../tests/fixtures/media/1x1-green.png"),
+    )
+    .unwrap();
+    let mut context = Context::test_context(scratch.path());
+    let stdout = Capture::default();
+    let stderr = Capture::default();
+    context.output = Output::with_writers(true, false, stdout.clone(), stderr.clone());
+    let log_path = source.with_extension("jsonl");
+    context.config.upload_log_path = Some(log_path.to_str().unwrap().into());
+    let mut options = options(&source);
+    options.share = true;
+    let receipt = scratch.path().join("private receipt/cancel.json");
+    let mut state =
+        TransferState::new("upload", "cancellation fixture", &receipt, 4, &[1; 16]).unwrap();
+    state.completed.insert(0, [2; 16]);
+    state.completion_token = Some(TOKEN.into());
+    state.registration_started = true;
+    state.registered_handle = Some("FILE0001".into());
+    let states = States::new(&receipt);
+    states.save(&state).unwrap();
+    let before = std::fs::read(&receipt).unwrap();
+    let uploaded = confirmed_receipt(&state, &[1; 24], "image.png", &receipt).unwrap();
+    let ((), calls) = test_peer::with_peer(
+        |_| panic!("canceled finalization contacted the API"),
+        |address| {
+            let mut cloud = cloud(address);
+            // Cancellation must not be downgraded to a nonfatal thumbnail/share warning.
+            context.control.cancel();
+            let error = finalize(&context, &options, &mut cloud, &source, &uploaded, 1.0)
+                .expect_err("canceled optional work must fail finalization");
+            assert!(matches!(error, Error::Canceled), "got {error:?}");
+        },
+    );
+    assert!(calls.is_empty());
+    let completed = states.load().unwrap().unwrap();
+    assert_eq!(completed.registered_handle.as_deref(), Some("FILE0001"));
+    assert!(
+        completed.finalization_started && !completed.finalization_completed,
+        "an interrupted finalization must stay resumable, never completed"
+    );
+    assert!(
+        !log_path.exists(),
+        "a canceled finalization must not publish a success result log"
+    );
+    assert!(
+        !String::from_utf8_lossy(&stdout.0.lock().unwrap()).contains("Uploaded "),
+        "a canceled finalization must not report a successful upload"
+    );
+    let after: Value = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+    let mut expected: Value = serde_json::from_slice(&before).unwrap();
+    expected["data"]["finalization_started"] = json!(true);
+    expected["data"]["revision"] = json!(1);
+    assert_eq!(
+        after, expected,
+        "keys, coverage and registration receipt must be preserved"
+    );
+}
+
+#[test]
 fn confirmed_finalization_shares_logs_and_runs_the_literal_command_once_without_failing_the_upload()
 {
     for mode in [
