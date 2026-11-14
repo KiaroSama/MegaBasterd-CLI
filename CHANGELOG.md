@@ -21,6 +21,10 @@
 - Fix compilation failures found in the checkpoint and port relevant upstream
   proxy parsing and thumbnail retry fixes. See `docs/UPSTREAM.md`.
 - Use fresh native storage; historical data remains untouched. See `docs/MIGRATION.md`.
+- Add `mb account import PATH` for `EMAIL#PASSWORD` account files and
+  `mb account export PATH` for the reverse; export writes owner-only files and
+  refuses to overwrite without `--force`.
+- Add `mb upload --proxy URL`, matching `download --proxy`.
 
 ## Retained Python implementation — unreleased history
 

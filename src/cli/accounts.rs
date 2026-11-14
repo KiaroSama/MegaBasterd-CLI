@@ -287,6 +287,140 @@ pub(super) fn dispatch_with_mfa(
             }
             Ok(())
         }
+        Account::Import {
+            path,
+            vault_passphrase,
+            ..  // json is the global --json flag on Output
+        } => import(context, &path, vault_passphrase.as_deref()),
+        Account::Export {
+            path,
+            force,
+            vault_passphrase,
+            ..  // json is the global --json flag on Output
+        } => export(context, &path, force, vault_passphrase.as_deref()),
+    }
+}
+
+/// Bulk-add accounts from `EMAIL#PASSWORD` lines, the format the upstream GUI
+/// exports and imports. A malformed or repeated line is skipped and counted
+/// rather than aborting the batch, so one bad row cannot block the rest.
+fn import(context: &mut Context, path: &std::path::Path, passphrase: Option<&str>) -> Result<()> {
+    const MAX_BYTES: u64 = 4 * 1024 * 1024;
+    let metadata = std::fs::metadata(path)?;
+    if metadata.len() > MAX_BYTES {
+        return Err(Error::invalid("Account file exceeds the 4 MiB import limit"));
+    }
+    let text = std::fs::read_to_string(path)
+        .map_err(|_| Error::invalid("Account file must be readable UTF-8 text"))?;
+    let vault = context.vault(passphrase)?;
+    let store = context.accounts();
+    let (mut added, mut skipped) = (0u32, 0u32);
+    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let Some((email, password)) = line.split_once('#') else {
+            skipped += 1;
+            continue;
+        };
+        let (email, password) = (email.trim(), password.trim());
+        if email.is_empty() || password.is_empty() {
+            skipped += 1;
+            continue;
+        }
+        match store.add(email, password, None, false, &vault) {
+            Ok(true) => added += 1,
+            Ok(false) => skipped += 1,
+            Err(error @ (Error::Canceled | Error::AmbiguousMutation(_) | Error::Corrupt(_))) => {
+                return Err(error);
+            }
+            Err(_) => skipped += 1,
+        }
+    }
+    if context.output.json {
+        context.output.record(&json!({"added": added, "skipped": skipped}))?;
+    } else {
+        context
+            .output
+            .message("INFO", &format!("Imported {added} accounts; skipped {skipped}"))?;
+    }
+    Ok(())
+}
+
+/// Write `EMAIL#PASSWORD` lines for every stored account. The file carries
+/// plaintext credentials, so it is created owner-only, never overwritten
+/// without --force, and never echoed to the terminal.
+fn export(
+    context: &mut Context,
+    path: &std::path::Path,
+    force: bool,
+    passphrase: Option<&str>,
+) -> Result<()> {
+    if path.exists() && !force {
+        return Err(Error::invalid("Export target exists; pass --force to overwrite"));
+    }
+    let vault = context.vault(passphrase)?;
+    let data = context.accounts().list()?;
+    let mut text = String::new();
+    for account in &data.accounts {
+        let password = Accounts::password(account, &vault)?;
+        if password.contains('#') || password.contains('\n') {
+            return Err(Error::invalid(
+                "A stored password contains a literal # or newline and cannot round-trip through this format",
+            ));
+        }
+        text.push_str(&format!("{}#{}\n", account.email, password.as_str()));
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    use std::io::Write;
+    let mut file = options.open(path)?;
+    file.write_all(text.as_bytes())?;
+    file.sync_all()?;
+    // Windows inherits the parent directory's ACL, so without this the exported
+    // credentials would be readable by every principal that can read the folder.
+    // A failure is reported rather than leaving a silently over-shared file.
+    #[cfg(windows)]
+    owner_only(path)?;
+    if context.output.json {
+        context
+            .output
+            .record(&json!({"exported": data.accounts.len(), "path": path}))?;
+    } else {
+        context.output.message(
+            "INFO",
+            &format!("Exported {} accounts to {}", data.accounts.len(), path.display()),
+        )?;
+    }
+    Ok(())
+}
+
+/// Replace the inherited ACL with one granting only the current user full
+/// control. `icacls` and `whoami` ship with every supported Windows version, so
+/// this needs no extra dependency.
+#[cfg(windows)]
+fn owner_only(path: &std::path::Path) -> Result<()> {
+    const FAILED: &str = "Could not restrict the export file to its owner";
+    let whoami = std::process::Command::new("whoami")
+        .output()
+        .map_err(|_| Error::invalid(FAILED))?;
+    let user = String::from_utf8_lossy(&whoami.stdout).trim().to_owned();
+    if !whoami.status.success() || user.is_empty() {
+        return Err(Error::invalid(FAILED));
+    }
+    let grant = std::process::Command::new("icacls")
+        .arg(path)
+        .arg("/inheritance:r")
+        .arg("/grant:r")
+        .arg(format!("{user}:F"))
+        .output()
+        .map_err(|_| Error::invalid(FAILED))?;
+    if grant.status.success() {
+        Ok(())
+    } else {
+        Err(Error::invalid(FAILED))
     }
 }
 

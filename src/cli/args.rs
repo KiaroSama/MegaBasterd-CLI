@@ -248,6 +248,9 @@ pub struct Upload {
     pub auto_account: bool,
     #[arg(short = 'P', long)]
     pub parallel: Option<u32>,
+    /// Explicit proxy URL for this upload; otherwise the configured pool applies.
+    #[arg(long)]
+    pub proxy: Option<String>,
     #[arg(long)]
     pub share: bool,
     #[arg(long)]
@@ -345,6 +348,29 @@ pub enum Account {
     RefreshAll {
         #[command(flatten)]
         auth: VaultOptions,
+    },
+    /// Bulk-add accounts from a text file of EMAIL#PASSWORD lines, matching the
+    /// upstream GUI's account-file import. Blank lines and #-less lines are skipped.
+    Import {
+        #[arg(value_parser = super::values::existing_file())]
+        path: PathBuf,
+        #[arg(long)]
+        vault_passphrase: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Write EMAIL#PASSWORD lines for stored accounts so they can be moved to
+    /// another machine. Requires the vault passphrase; the file is created with
+    /// owner-only permissions and never printed to the terminal.
+    Export {
+        #[arg(value_parser = super::values::output_file())]
+        path: PathBuf,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        vault_passphrase: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
 }
 

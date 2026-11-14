@@ -170,6 +170,8 @@ explicit selected destination, preserving the source application's fallback.
 | `mb account default EMAIL_OR_LABEL` | Set the vault default. |
 | `mb account info [EMAIL_OR_LABEL]` | `VAULT`; fetch account/quota information. |
 | `mb account refresh-all` | `VAULT`; update cached quotas. |
+| `mb account import PATH` | `VAULT`, `--json`; add accounts from `EMAIL#PASSWORD` lines. |
+| `mb account export PATH` | `VAULT`, `--force`, `--json`; write `EMAIL#PASSWORD` lines, owner-only. Plaintext credentials: keep the file private. |
 
 Passwords and sessions are encrypted. A definitive expired session may be
 removed; transport/suspicious-validation failures preserve stored bytes.
