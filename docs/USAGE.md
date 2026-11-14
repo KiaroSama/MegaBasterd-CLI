@@ -141,13 +141,6 @@ mb upload archive.zip --proxy http://127.0.0.1:8080
 `upload --proxy` overrides the configured pool for that invocation only, the
 same way `download --proxy` does.
 
-```bash
-mb upload archive.zip --proxy http://127.0.0.1:8080
-```
-
-`upload --proxy` overrides the configured pool for that invocation only, the
-same way `download --proxy` does.
-
 Automatic selection reserves free quota per file; an entire structured tree stays
 on one account. Structured uploads attempt independent siblings after an ordinary
 item failure and preserve successful files. Without `--keep-going`, an aggregate
