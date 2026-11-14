@@ -1,0 +1,19 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-or-later"
+
+[[bin]]
+name = "xtask"
+path = "../tools/ci.rs"
+
+[dependencies]
+megabasterd-cli = { path = ".." }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+hex = "0.4.3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.190"

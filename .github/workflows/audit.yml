@@ -1,33 +1,14 @@
 name: Dependency Audit
-
 on:
-  push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main]
-  schedule:
-    # Advisories land without anyone pushing code, so also run weekly.
-    - cron: "0 6 * * 1"
-  workflow_dispatch:
-
+  workflow_call:
 permissions:
   contents: read
-
 jobs:
-  pip-audit:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+  cargo-policy:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-
-      - run: pip install pip-audit
-
-      # Audits the runtime dependency set that actually ships to users.
-      # Resolves the specifiers in requirements.txt the same way an install
-      # would, so an advisory in any reachable version fails the build.
-      - name: Audit runtime dependencies
-        run: pip-audit --strict -r requirements.txt
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - run: rustup toolchain install 1.99.1 --profile minimal --no-self-update
+      - run: cargo install cargo-deny --version 0.20.2 --locked
+      - run: cargo deny --locked check advisories licenses sources

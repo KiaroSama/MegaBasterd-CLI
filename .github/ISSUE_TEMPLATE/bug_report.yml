@@ -12,8 +12,8 @@ body:
     id: version
     attributes:
       label: Version
-      description: "Run `./Run.ps1 --version` or `mb --version` and paste the output."
-      placeholder: "megabasterd-cli 1.0.0"
+      description: "Run `mb --version` and paste the output."
+      placeholder: "mb 2.0.0"
     validations:
       required: true
 
@@ -25,16 +25,18 @@ body:
         - Windows 11
         - Windows 10
         - Linux
-        - macOS (untested platform)
+        - macOS (Apple Silicon)
+        - macOS (Intel)
         - Other
     validations:
       required: true
 
   - type: input
-    id: python
+    id: rust
     attributes:
-      label: Python version
-      placeholder: "3.12.1"
+      label: Rust toolchain (source builds only)
+      description: "For a source build, include `rustc --version`. For a downloaded build, name the CI artifact instead."
+      placeholder: "rustc 1.99.1 or megabasterd-cli-x86_64-pc-windows-msvc"
 
   - type: textarea
     id: what
@@ -50,7 +52,7 @@ body:
       label: How to reproduce
       description: Exact command you ran and what you expected.
       placeholder: |
-        1. ./Run.ps1 download "https://mega.nz/file/..."
+        1. mb download "https://mega.nz/file/..."
         2. ...
     validations:
       required: true
@@ -59,5 +61,5 @@ body:
     id: logs
     attributes:
       label: Relevant logs
-      description: Paste the output of running with `-vv` (debug logging).
+      description: "Paste relevant output from `mb -vv …`. Remove passwords, account stores, session data and private link keys before submitting."
       render: shell
