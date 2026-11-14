@@ -19,8 +19,10 @@ try {
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ExeName = if ($IsWindows -or $env:OS -eq "Windows_NT") { "mb.exe" } else { "mb" }
 # Prefer a packaged build, then a release build, then a debug build, so the
-# launcher works in a checkout and in an extracted release alike.
+# launcher works in a checkout and in an extracted release alike. A release
+# archive keeps the executable beside this script, so the root is a candidate too.
 $Candidates = @(
+    (Join-Path $ProjectRoot $ExeName),
     (Join-Path $ProjectRoot (Join-Path "dist" $ExeName)),
     (Join-Path $ProjectRoot (Join-Path "target/release" $ExeName)),
     (Join-Path $ProjectRoot (Join-Path "target/debug" $ExeName))
