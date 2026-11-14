@@ -1,6 +1,28 @@
 # Changelog
 
-## [2.0.0] - 2026-11-11
+## [2.0.0] - 2026-11-14
+
+Published release with signed Linux x64, Windows x64 and macOS Intel/Apple
+Silicon archives. All eight CI jobs passed on the tagged commit.
+
+### Fixes since the checkpoint
+
+- Read the proxy pool back with the default retry budget in the held-transaction
+  test. A zero timeout raced the kernel releasing the sidecar lock on macOS and
+  reported a spurious `Busy` for a store nobody held.
+- Let `Run.ps1` find `mb` beside the script in an extracted release archive; the
+  packaged executable sits at the archive root, not under `dist/`.
+- Bump `aes`, `flate2`, `rpassword` and `tokio` to their current patch releases.
+  `ureq` stays on 3.4 because the 3.5 line changes a blocking-transport API this
+  command set depends on.
+
+### Documentation
+
+- State the license as GPL-3.0-or-later in one place and keep the full historical
+  MIT and Unicode notices under `licenses/`.
+- Remove a duplicated `upload --proxy` example from the usage reference.
+
+## 2.0.0 checkpoint - 2026-11-11
 
 ### Native Rust rewrite
 

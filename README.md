@@ -32,9 +32,11 @@ Apple Silicon at the exact commit of the selected ref.
 
 ## Installation
 
-Download the artifact matching your OS and architecture from a successful
-[native validation run](https://github.com/KiaroSama/MegaBasterd-CLI/actions/workflows/release.yml).
-Unpack the artifact's ZIP, then extract its `.tar.gz` payload; the tar archive
+Download the artifact matching your OS and architecture from
+[Releases](https://github.com/KiaroSama/MegaBasterd-CLI/releases). A release ZIP is
+the verified form of the same artifact a
+[native validation run](https://github.com/KiaroSama/MegaBasterd-CLI/actions/workflows/release.yml)
+produces. Unpack the ZIP, then extract its `.tar.gz` payload; the tar archive
 preserves executable permissions on Linux and macOS. It contains the three
 command aliases, `SHA256SUMS`, license notices and the matching Rust source
 package. Verify the archive's `.sha256` file and keep the commands together when
@@ -43,8 +45,7 @@ dedicated self-signed owner certificate for Windows Authenticode, macOS code
 signing and detached CMS archive signatures. This is private trust, not public-CA
 trust or Apple notarization; operating-system warnings may remain. Verify the
 archive before extraction using [SIGNING.md](docs/SIGNING.md).
-[Releases](https://github.com/KiaroSama/MegaBasterd-CLI/releases) contains published
-versions; unsigned artifacts from older runs are not signed releases.
+Unsigned artifacts from older workflow runs are not releases.
 
 ```bash
 mb --version
