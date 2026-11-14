@@ -143,6 +143,38 @@ fn real_png_thumbnail_is_encrypted_uploaded_and_attached_only_after_exact_handle
 }
 
 #[test]
+fn automatic_attachment_follows_the_thumbnail_format_classification() {
+    // m4v and 3gp are supported by the thumbnail backend but were absent from the
+    // duplicated attachment allowlist, so they were silently reported NotApplicable.
+    for extension in ["mp4", "m4v", "3gp", "mkv", "mov", "mp3", "m4a"] {
+        assert!(
+            crate::services::thumbnails::supports(extension),
+            "{extension} must be classified as a supported thumbnail format"
+        );
+    }
+    for extension in ["txt", "pdf", "", "exe"] {
+        assert!(
+            !crate::services::thumbnails::supports(extension),
+            "{extension} must stay unsupported"
+        );
+    }
+    let scratch = scratch();
+    let source = scratch.path().join("clip.m4v");
+    std::fs::write(&source, b"not a decoded file").unwrap();
+    let raw_key = wire::a32_to_bytes(&keys::pack_file_key(&[1; 16], &[2; 8], &[0, 0]).unwrap());
+    let (_, calls) = test_peer::with_peer(
+        |_| panic!("unsupported media contacted the API"),
+        |address| {
+            let mut cloud = cloud(address);
+            // Classification now admits m4v, so it must fail as media, not as NotApplicable.
+            let result = attach(&mut cloud, &source, "AQIDBAUG", &raw_key, &Control::new());
+            assert!(!matches!(result, Ok(Attachment::NotApplicable)));
+        },
+    );
+    assert!(calls.is_empty());
+}
+
+#[test]
 fn rejected_attachment_and_unsupported_or_canceled_inputs_never_claim_success() {
     let scratch = scratch();
     let source = scratch.path().join("green.png");

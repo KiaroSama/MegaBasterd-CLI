@@ -239,12 +239,13 @@ fn download_with_space(
                 "Resume staging file was replaced; both objects were preserved",
             ));
         }
-        verification::validate_completed(
+        verification::validate_completed_with_limit(
             &mut file,
             info.size,
             &key,
             &mut state.completed,
             control,
+            options.max_parallel_verifications,
         )?;
     } else {
         // No final pathname is written until on-disk verification succeeds.

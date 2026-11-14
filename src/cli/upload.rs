@@ -595,6 +595,9 @@ fn finalize_effects(
     uploaded: &Uploaded,
     elapsed: f64,
 ) -> Result<()> {
+    // Cancellation is not an optional-feature failure: it must reach the caller as
+    // Error::Canceled so the confirmed registration receipt is preserved and the run
+    // exits 130 instead of reporting a complete upload.
     let thumbnail = match crate::services::attributes::attach(
         cloud,
         path,
@@ -611,6 +614,7 @@ fn finalize_effects(
             }
             serde_json::to_value(attachment)?
         }
+        Err(Error::Canceled) => return Err(Error::Canceled),
         Err(error) => {
             context.output.message(
                 "WARNING",
@@ -619,6 +623,7 @@ fn finalize_effects(
             json!({"status":"failed","error_code":error.code(),"warning":error.to_string()})
         }
     };
+    context.control.checkpoint()?;
     let mut share = None;
     if command.share {
         match cloud.export(&uploaded.handle, command.share_password.as_deref()) {
@@ -628,6 +633,7 @@ fn finalize_effects(
                 }
                 share = Some(link);
             }
+            Err(Error::Canceled) => return Err(Error::Canceled),
             Err(error) => {
                 context.output.message(
                     "WARNING",
@@ -664,15 +670,18 @@ fn finalize_effects(
             )?;
         }
     }
-    if let Err(error) = hooks::after_file(
+    match hooks::after_file(
         context.config.run_command.as_deref(),
         path,
         &context.control,
         &context.output,
     ) {
-        context
+        // A canceled hook is still a cancellation: report it, do not downgrade it to a warning.
+        Err(Error::Canceled) => return Err(Error::Canceled),
+        Err(error) => context
             .output
-            .message("WARNING", &format!("Post-upload command failed: {error}"))?;
+            .message("WARNING", &format!("Post-upload command failed: {error}"))?,
+        Ok(()) => {}
     }
     Ok(())
 }

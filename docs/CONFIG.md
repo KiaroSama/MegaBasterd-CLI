@@ -168,7 +168,19 @@ executable/argument vector, never run through a shell. INFO diagnostics identify
 only the executable basename and configured-argument count, not argument values,
 appended file paths or child output. Output is bounded; cancellation/timeouts own
 the child tree. The application does not install hooks or services.
-Hook/share/thumbnail errors are separately reported after upload.
+Hook/share/thumbnail errors are separately reported after upload. Cancellation is
+not one of them: a canceled thumbnail, share or post-transfer hook keeps the
+confirmed registration receipt unacknowledged and exits 130 instead of reporting a
+completed upload. Cancellation is
+not one of them: a canceled thumbnail, share or post-transfer hook keeps the
+confirmed registration receipt unacknowledged and exits 130 instead of reporting a
+completed upload. Cancellation is
+not one of them: a canceled thumbnail, share or post-transfer hook keeps the
+confirmed registration receipt unacknowledged and exits 130 instead of reporting a
+completed upload. Cancellation is
+not one of them: a canceled thumbnail, share or post-transfer hook keeps the
+confirmed registration receipt unacknowledged and exits 130 instead of reporting a
+completed upload.
 
 ## Native runtime files
 

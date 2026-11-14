@@ -72,9 +72,23 @@ pub fn validate_completed(
     completed: &mut std::collections::BTreeMap<usize, [u8; 16]>,
     control: &Control,
 ) -> Result<u64> {
+    validate_completed_with_limit(file, size, key, completed, control, 1)
+}
+
+/// Resume rereads hold the same configured permit as final verification, so an
+/// unbounded resume cannot starve or bypass the disk gate.
+pub fn validate_completed_with_limit(
+    file: &mut File,
+    size: u64,
+    key: &keys::FileKey,
+    completed: &mut std::collections::BTreeMap<usize, [u8; 16]>,
+    control: &Control,
+    limit: u32,
+) -> Result<u64> {
     if file.metadata()?.len() != size {
         return Err(Error::integrity("Resume staging file size changed"));
     }
+    let _permit = gate().acquire(control, limit)?;
     let mut verified_bytes = 0;
     for chunk in chunks::iter_chunks(size)? {
         let Some(expected) = completed.get(&chunk.index).copied() else {
