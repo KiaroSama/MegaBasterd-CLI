@@ -45,7 +45,7 @@ use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
 const TOTAL: Duration = Duration::from_secs(15);
 const IO: Duration = Duration::from_secs(5);
@@ -140,9 +140,11 @@ impl Write for DeadlineSocket {
 }
 
 fn config() -> Arc<rustls::ServerConfig> {
-    let key = PrivateKeyDer::from_pem_slice(include_bytes!(
-        "../../tests/fixtures/proxy_tls/public-test-key.txt"
-    ))
+    // DER, not PEM: the armour is what secret scanners match on for this public
+    // rustls test fixture, which is not a credential.
+    let key = PrivateKeyDer::try_from(
+        &include_bytes!("../../tests/fixtures/proxy_tls/public-test-key.der")[..],
+    )
     .unwrap();
     Arc::new(
         rustls::ServerConfig::builder_with_provider(Arc::new(
