@@ -324,6 +324,9 @@ fn held_proxy_transaction_refuses_before_mutation_and_allows_retry_after_release
         } else {
             vec!["http://new:2"]
         };
-        assert_eq!(store.list().unwrap(), expected);
+        // Read back with the default retry budget: a zero timeout here would race
+        // the kernel releasing the just-dropped sidecar lock on macOS and report a
+        // spurious Busy for a store nobody holds.
+        assert_eq!(ProxyStore::new(path.clone()).list().unwrap(), expected);
     }
 }
