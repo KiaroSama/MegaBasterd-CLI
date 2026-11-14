@@ -10,11 +10,12 @@ use ureq::tls::Certificate;
 const ROOT: &[u8] = include_bytes!("../../tests/fixtures/proxy_tls/root.der");
 const CERT: &[u8] = include_bytes!("../../tests/fixtures/proxy_tls/server.der");
 const INTERMEDIATE: &[u8] = include_bytes!("../../tests/fixtures/proxy_tls/intermediate.der");
-const PUBLIC_TEST_KEY: &[u8] = include_bytes!("../../tests/fixtures/proxy_tls/public-test-key.txt");
+// Stored as DER rather than PEM: the PEM armour is what secret scanners match on,
+// and this public rustls fixture is a test key, not a credential.
+const PUBLIC_TEST_KEY: &[u8] = include_bytes!("../../tests/fixtures/proxy_tls/public-test-key.der");
 
 fn server_config() -> Arc<rustls::ServerConfig> {
-    let key = ureq::tls::PrivateKey::from_pem(PUBLIC_TEST_KEY).unwrap();
-    let key = rustls::pki_types::PrivateKeyDer::try_from(key.der().to_vec()).unwrap();
+    let key = rustls::pki_types::PrivateKeyDer::try_from(PUBLIC_TEST_KEY.to_vec()).unwrap();
     Arc::new(
         rustls::ServerConfig::builder_with_provider(Arc::new(
             rustls::crypto::aws_lc_rs::default_provider(),
