@@ -157,14 +157,12 @@ fn distribution_inputs_keep_the_real_gpl_grant_historical_mit_and_unicode_notice
         license.contains("Corresponding Source") && license.contains("Conveying Non-Source Forms")
     );
     let attribution = include_str!("../ATTRIBUTION.md");
+    assert!(attribution.contains("GPL-3.0-or-later"));
     assert!(
-        attribution.contains("GPL-3.0-or-later")
-            && attribution.contains("matching Corresponding Source")
+        attribution.contains("MegaBasterd CLI - Copyright (c) 2026 Kiaro Sama")
     );
-    assert!(
-        attribution.contains("Their notice is preserved")
-            && attribution.contains("MIT-historical.txt")
-    );
+    assert!(attribution.contains("[LICENSE](LICENSE)"));
+    assert!(attribution.contains("MIT-historical.txt"));
     let historical = include_str!("../licenses/MIT-historical.txt").replace("\r\n", "\n");
     assert!(historical.starts_with("MIT License\n"));
     assert!(historical.contains("Copyright (c) 2026 Kiaro Sama"));

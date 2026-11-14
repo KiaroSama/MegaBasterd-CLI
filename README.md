@@ -287,14 +287,9 @@ See [commands](docs/COMMANDS.md), [usage](docs/USAGE.md),
 [configuration](docs/CONFIG.md), [architecture](docs/ARCHITECTURE.md) and
 [security reporting](SECURITY.md).
 
-## License and attribution
+## License
 
-New owner-authored Rust code and native tooling are **GPL-3.0-or-later**.
-See [LICENSE](LICENSE) and [ATTRIBUTION.md](ATTRIBUTION.md). Earlier MIT grants
-remain valid; their notice is retained in
-[licenses/MIT-historical.txt](licenses/MIT-historical.txt). Third-party work keeps
-its own license. Binary distribution must include the corresponding source and
-applicable notices; another commit's source is not a matching source release.
+**GPL-3.0-or-later**. See [LICENSE](LICENSE) and [ATTRIBUTION.md](ATTRIBUTION.md).
 
 ## Donate
 
