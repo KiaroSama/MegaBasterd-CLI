@@ -308,7 +308,9 @@ fn import(context: &mut Context, path: &std::path::Path, passphrase: Option<&str
     const MAX_BYTES: u64 = 4 * 1024 * 1024;
     let metadata = std::fs::metadata(path)?;
     if metadata.len() > MAX_BYTES {
-        return Err(Error::invalid("Account file exceeds the 4 MiB import limit"));
+        return Err(Error::invalid(
+            "Account file exceeds the 4 MiB import limit",
+        ));
     }
     let text = std::fs::read_to_string(path)
         .map_err(|_| Error::invalid("Account file must be readable UTF-8 text"))?;
@@ -335,11 +337,14 @@ fn import(context: &mut Context, path: &std::path::Path, passphrase: Option<&str
         }
     }
     if context.output.json {
-        context.output.record(&json!({"added": added, "skipped": skipped}))?;
-    } else {
         context
             .output
-            .message("INFO", &format!("Imported {added} accounts; skipped {skipped}"))?;
+            .record(&json!({"added": added, "skipped": skipped}))?;
+    } else {
+        context.output.message(
+            "INFO",
+            &format!("Imported {added} accounts; skipped {skipped}"),
+        )?;
     }
     Ok(())
 }
@@ -354,7 +359,9 @@ fn export(
     passphrase: Option<&str>,
 ) -> Result<()> {
     if path.exists() && !force {
-        return Err(Error::invalid("Export target exists; pass --force to overwrite"));
+        return Err(Error::invalid(
+            "Export target exists; pass --force to overwrite",
+        ));
     }
     let vault = context.vault(passphrase)?;
     let data = context.accounts().list()?;
@@ -391,7 +398,11 @@ fn export(
     } else {
         context.output.message(
             "INFO",
-            &format!("Exported {} accounts to {}", data.accounts.len(), path.display()),
+            &format!(
+                "Exported {} accounts to {}",
+                data.accounts.len(),
+                path.display()
+            ),
         )?;
     }
     Ok(())
