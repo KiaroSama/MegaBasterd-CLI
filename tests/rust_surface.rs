@@ -107,10 +107,12 @@ fn independent_native_user_namespace_does_not_import_or_mutate_python_stores() {
             .join("pyproject.toml")
             .exists()
     );
+    // The launcher stays as a thin entry point to the native binary; it must
+    // never re-introduce the Python package or its stores.
     assert!(
-        !Path::new(env!("CARGO_MANIFEST_DIR"))
+        Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("Run.ps1")
-            .exists()
+            .is_file()
     );
 }
 
