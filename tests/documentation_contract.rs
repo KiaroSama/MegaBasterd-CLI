@@ -53,7 +53,7 @@ fn readme_and_command_reference_list_every_actual_native_leaf_without_phantom_co
         .filter(|record| record["kind"] == "command")
         .map(|record| record["path"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(actual.len(), 55);
+    assert_eq!(actual.len(), 57);
     assert_eq!(actual, baseline);
     assert_eq!(documented(include_str!("../README.md")), actual);
     let reference = include_str!("../docs/COMMANDS.md");

@@ -75,6 +75,7 @@ pub fn execute(
                 keep_going: false,
                 auto_account: false,
                 parallel: Some(1),
+                proxy: None,
                 share: false,
                 share_password: None,
                 json: context.output.json,

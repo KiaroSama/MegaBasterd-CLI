@@ -109,6 +109,8 @@ pub(crate) fn execute(cli: Cli) -> i32 {
         Command::Download(args) => args.json,
         Command::Upload(args) => args.json,
         Command::Info(args) => args.json,
+        Command::Account(args::Account::Import { json, .. })
+        | Command::Account(args::Account::Export { json, .. }) => *json,
         _ => false,
     };
     let logging = if cli.no_log_file {

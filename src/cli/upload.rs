@@ -95,7 +95,12 @@ pub fn execute(
             .as_ref()
             .is_some_and(|chosen| chosen.email == account.email)
     }) {
-        match context.session(account, &vault, command.auth.mfa_code.as_deref(), None) {
+        match context.session(
+            account,
+            &vault,
+            command.auth.mfa_code.as_deref(),
+            command.proxy.as_deref(),
+        ) {
             Ok((api, session)) => {
                 clients.insert(account.email.clone(), Cloud::new(api, session));
             }

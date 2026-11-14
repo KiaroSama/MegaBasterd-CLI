@@ -146,6 +146,8 @@ actual executable help.
 | `mb account default EMAIL_OR_LABEL` | Set the account-vault default. |
 | `mb account info [EMAIL_OR_LABEL]` | Read account details/quota. |
 | `mb account refresh-all` | Refresh stored account quotas. |
+| `mb account import PATH` | Bulk-add accounts from `EMAIL#PASSWORD` lines; malformed lines are skipped and counted. |
+| `mb account export PATH` | Write `EMAIL#PASSWORD` lines with owner-only permissions; needs `--force` to overwrite. |
 | `mb queue list` | Inspect queued job status. |
 | `mb queue add-download URL` | Queue a download. |
 | `mb queue add-upload PATH` | Queue a local file upload. |

@@ -123,7 +123,19 @@ fn relocated_native_aliases_need_no_python_cargo_source_cwd_or_project_root_over
 #[test]
 fn packaged_launcher_delegates_without_raw_transcripts_or_late_file_scrubbing() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    assert!(!root.join("Run.ps1").exists());
+    // The launcher is a thin PowerShell entry point only: it must locate the
+    // native binary and forward its exit code, and must never grow its own
+    // transcript, redaction or logging of CLI output.
+    let launcher = include_str!("../Run.ps1");
+    assert!(!root.join("launcher").exists());
+    assert!(launcher.contains("& $Binary @CliArgs"));
+    assert!(launcher.contains("exit $LASTEXITCODE"));
+    for forbidden in ["Start-Transcript", "Tee-Object", "Add-Content", "Out-File"] {
+        assert!(
+            !launcher.contains(forbidden),
+            "the launcher must not capture or scrub CLI output itself: {forbidden}"
+        );
+    }
     let package = include_str!("../tools/ci.rs");
     assert!(package.contains("fn package()"));
     assert!(package.contains("SHA256SUMS"));

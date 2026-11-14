@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "provenance": {"baseline": "c4559ecef08c1fb47cc57669230d2f6013520416", "method": "Manual transcription of retained Click decorators and source inventory; not generated from Rust or executed", "static_leaf_commands": 55, "static_option_declarations": 131},
+  "provenance": {"baseline": "c4559ecef08c1fb47cc57669230d2f6013520416", "method": "Manual transcription of retained Click decorators and source inventory; not generated from Rust or executed", "static_leaf_commands": 57, "static_option_declarations": 137},
   "entry_aliases": ["mb", "mbcli", "megabasterd-cli"],
   "help_flags": ["-h", "--help"],
   "source_root_option_placement": "Root options precede subcommands; implicit help alone inherits in Click",
@@ -41,6 +41,7 @@
     "exclude": {"flags": ["-X", "--exclude"], "type": "string", "default": [], "multiple": true},
     "select": {"flags": ["--select"], "type": "switch", "default": false},
     "json": {"flags": ["--json"], "type": "switch", "default": false},
+    "force": {"flags": ["--force"], "type": "switch", "default": false},
     "target": {"flags": ["--target"], "type": "string", "default": null},
     "structure": {"flags": ["--keep-structure"], "type": "switch", "default": false},
     "keep_going": {"flags": ["--keep-going"], "type": "switch", "default": false},
@@ -86,7 +87,7 @@
   "commands": [
     {"path": "", "kind": "group", "args": [], "options": ["verbose", "quiet", "logging", "version"]},
     {"path": "download", "kind": "command", "args": [["urls", "string", 0, null, null]], "options": ["output_dir", "workers", "limit", "password", "no_verify", "overwrite", "rename", "proxy", "input", "elc_user", "elc_api", "parallel", "include", "exclude", "select", "json"]},
-    {"path": "upload", "kind": "command", "args": [["paths", "existing_path", 1, null, null]], "options": ["account", "workers", "limit", "rename", "target", "structure", "keep_going", "auto_account", "vault", "mfa", "parallel", "share", "share_password", "json"]},
+    {"path": "upload", "kind": "command", "args": [["paths", "existing_path", 1, null, null]], "options": ["account", "workers", "limit", "rename", "target", "structure", "keep_going", "auto_account", "vault", "mfa", "parallel", "proxy", "share", "share_password", "json"]},
     {"path": "stream", "kind": "command", "args": [["url", "string", 1, 1, null]], "options": ["port", "host", "long_password", "token", "query_token", "proxy", "elc_user", "elc_api"]},
     {"path": "info", "kind": "command", "args": [["url", "string", 1, 1, null]], "options": ["json", "long_password", "elc_user", "elc_api"]},
     {"path": "share", "kind": "command", "args": [["target", "string", 1, 1, null]], "options": ["long_password", "remove", "account", "vault", "mfa"]},
@@ -108,6 +109,8 @@
     {"path": "account default", "kind": "command", "args": [["email_or_label", "string", 1, 1, null]], "options": []},
     {"path": "account info", "kind": "command", "args": [["email_or_label", "string", 0, 1, null]], "options": ["vault", "mfa"]},
     {"path": "account refresh-all", "kind": "command", "args": [], "options": ["vault", "mfa"]},
+    {"path": "account import", "kind": "command", "args": [["path", "existing_file", 1, 1, null]], "options": ["vault", "json"]},
+    {"path": "account export", "kind": "command", "args": [["path", "output_file", 1, 1, null]], "options": ["force", "vault", "json"]},
     {"path": "queue", "kind": "group", "args": [], "options": []},
     {"path": "queue list", "kind": "command", "args": [], "options": []},
     {"path": "queue add-download", "kind": "command", "args": [["url", "string", 1, 1, null]], "options": ["queue_output", "password"]},

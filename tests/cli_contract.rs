@@ -109,7 +109,7 @@ fn option<'a>(command: &'a clap::Command, flag: &str) -> &'a Arg {
 }
 
 #[test]
-fn complete_command_surface_has_fifty_five_leaves_and_short_help() {
+fn complete_command_surface_has_fifty_seven_leaves_and_short_help() {
     fn leaves(command: &clap::Command) -> usize {
         if command.get_subcommands().next().is_none() {
             1
@@ -118,7 +118,7 @@ fn complete_command_surface_has_fifty_five_leaves_and_short_help() {
         }
     }
     let command = Cli::command();
-    assert_eq!(leaves(&command), 55);
+    assert_eq!(leaves(&command), 57);
     assert_eq!(
         Cli::try_parse_from(["mb", "download", "-h"])
             .err()
@@ -153,17 +153,17 @@ fn every_baseline_command_group_position_and_option_matches_actual_clap_schema()
         .map(|v| v["path"].as_str().unwrap().to_owned())
         .collect();
     assert_eq!(actual.keys().cloned().collect::<BTreeSet<_>>(), expected);
-    assert_eq!(records.len(), 62);
+    assert_eq!(records.len(), 64);
     assert_eq!(
         records.iter().filter(|v| v["kind"] == "command").count(),
-        55
+        57
     );
     assert_eq!(
         records
             .iter()
             .map(|v| v["options"].as_array().unwrap().len())
             .sum::<usize>(),
-        131
+        137
     );
     let global_keys = ["verbose", "quiet", "logging"];
     for record in records {
