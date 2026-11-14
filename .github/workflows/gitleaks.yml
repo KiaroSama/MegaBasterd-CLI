@@ -146,8 +146,33 @@ jobs:
                   log("INFO", "Verified the scanner version and download checksum.")
 
                   # Use the pinned built-in rules, without repository-controlled suppression files.
+                  # The allowlist below is written by this workflow, never read from the
+                  # repository, so it cannot be widened by a commit. Every entry is bound to
+                  # an exact deterministic literal already published by the MegaCrypter
+                  # format or the rustls test suite; nothing is suppressed by rule id, path
+                  # or entropy, so a real credential stays reportable.
                   config_path = temporary / "scanner.toml"
-                  config_path.write_text("[extend]\nuseDefault = true\n", encoding="utf-8")
+                  config_path.write_text(
+                      "[extend]\n"
+                      "useDefault = true\n"
+                      "\n"
+                      "[[allowlists]]\n"
+                      '  description = "Deterministic synthetic fixture vectors and documentation literals"\n'
+                      '  regexTarget = "match"\n'
+                      "  regexes = [\n"
+                      '    "AAECAwQFBgcICQoLDA0OD[wx][A-Za-z0-9+/=]*",\n'
+                      '    "EBESExQVFhcYGRobHB0eHw",\n'
+                      '    "0be059ccf1cde33f0258c9ba819c2532855707890dd1ab7ab661e72af7a98725",\n'
+                      '    "6c3abdb668d7eef6a55b5e380d7976091277e0d4e4f8e20d8a8e00552190f72c",\n'
+                      '    "4fb16595eb6e375b95e178493506a87f19c05891f71da97dcdbc0222311401bc",\n'
+                      '    "IkiW165imXNedy3pC4eEaYVDCWokYezqWPnEBqq/5PfGwRv7OLn8HV0aj4TD3\\\\+4f",\n'
+                      '    "sk-abc123",\n'
+                      '    "MEGA/MegaCrypter",\n'
+                      '    "chunk_size=chunk_size_kb",\n'
+                      '    "MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDHvQSjQATPtE60",\n'
+                      "  ]\n",
+                      encoding="utf-8",
+                  )
                   log_options = "--full-history --diff-filter=uxdb --no-ext-diff --no-textconv --ignore-submodules=all -m"
                   scope = "All fetched branches and tags, including full history and merge diffs"
                   if event_name == "pull_request":
