@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Documentation
+
+- Add `docs/GRAPH.md`: what the two repository graphs are, which trees each one
+  excludes and why, and how to rebuild either from a fresh clone.
+- Colour the README badges and add repository-size, platform-coverage and
+  release shields. Two badges were dropped to stay inside the count the
+  documentation contract allows; the edition and native-CLI claims they carried
+  are stated in the surrounding prose.
+
+### Tooling
+
+- Track a Claude Code `PostToolUse` hook, `.claude/hooks/sync-graphs.ps1`, so
+  every clone inherits it. After an edit it refreshes the graphify graph and the
+  Codebase-Memory index in a detached worker, which costs no model tokens. The
+  hook blocks on neither graph's work: graphify queues its own rebuild behind a
+  per-repository lock, and the index call starts only when no job is already
+  running.
+- Exclude the `tests/` integration tree from the graphify graph. It mirrored the
+  `src/` surface one-for-one and added 727 near-duplicate nodes; in-`src/`
+  `*_tests.rs` unit tests remain, and both trees stay indexed in
+  Codebase-Memory.
+
 ## [2.0.0] - 2026-11-14
 
 Published release with signed Linux x64, Windows x64 and macOS Intel/Apple

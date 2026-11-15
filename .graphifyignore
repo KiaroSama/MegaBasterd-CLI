@@ -26,6 +26,9 @@ User/
 # Transient staging/derived trees, not project knowledge
 .ai/.cross-project-sync/
 .ai/ARCHIVE/
+# Private notes and signing metadata. Never graphed, never surfaced in a query
+# answer, even when a future file here looks like ordinary documentation.
+.ai/PRIVATE/
 
 # Agent configuration and local instruction files
 .claude/
@@ -39,3 +42,8 @@ secrets.md
 explain-AI.md
 .env
 .env.*
+
+# Test fixtures mirror the Rust surface one-for-one; they add ~700
+# nodes of near-duplicate names and push the graph past the 5000-node
+# aggregation threshold for the HTML view.
+tests/
