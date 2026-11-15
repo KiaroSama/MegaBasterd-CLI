@@ -1,0 +1,41 @@
+# Graphify exclusions. Git ignore is disabled during the build, so dependency,
+# build, cache, log and temp trees are listed here instead. Required Markdown
+# folders (.ai/, specs/, .specify/, plans/, docs/) stay IN the graph.
+
+# Build output and caches
+target/
+.ci-work/
+.ci-*/
+node_modules/
+dist/
+.cargo/
+graphify-out/
+.codebase-memory/
+.codebase-memory*/
+*.profraw
+
+# Runtime data written by a real run; not source
+Output/
+Logs/
+User/
+*.mbclaim
+*.uplock
+*.mbstate*
+*.lock
+
+# Transient staging/derived trees, not project knowledge
+.ai/.cross-project-sync/
+.ai/ARCHIVE/
+
+# Agent configuration and local instruction files
+.claude/
+.codex/
+.agents/
+.kiro/
+.cursor/
+.cline/
+secrets.md
+.ignoreme
+explain-AI.md
+.env
+.env.*
