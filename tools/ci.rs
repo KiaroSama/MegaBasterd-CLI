@@ -471,8 +471,8 @@ fn package() -> Result<()> {
     ]))?;
     print!("{}", String::from_utf8_lossy(&source.stderr));
     fs::copy(
-        root().join("target/package/megabasterd-cli-2.0.0.crate"),
-        destination.join("megabasterd-cli-2.0.0.crate"),
+        root().join("target/package/megabasterd-cli-2.0.1.crate"),
+        destination.join("megabasterd-cli-2.0.1.crate"),
     )?;
     let signed = std::env::var("MBCLI_SIGN_RELEASE").as_deref() == Ok("1");
     let signing_script = root().join(".github/scripts/Sign-Release.ps1");
@@ -505,14 +505,16 @@ fn package() -> Result<()> {
     // executable modes of the actual native aliases across artifact download.
     let target = match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
         ("windows", "x86_64") => "x86_64-pc-windows-msvc",
+        ("windows", "aarch64") => "aarch64-pc-windows-msvc",
         ("macos", "x86_64") => "x86_64-apple-darwin",
         ("macos", "aarch64") => "aarch64-apple-darwin",
         _ => return Err("Unsupported native distribution target".into()),
     };
     let archives = root().join(".ci-work/distribution");
     fs::create_dir_all(&archives)?;
-    let name = format!("megabasterd-cli-2.0.0-{target}.tar.gz");
+    let name = format!("megabasterd-cli-2.0.1-{target}.tar.gz");
     let archive = archives.join(&name);
     output(
         Command::new("tar")

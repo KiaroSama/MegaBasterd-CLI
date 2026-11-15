@@ -1,6 +1,20 @@
 # Changelog
 
-## Unreleased
+## [2.0.1] - 2026-11-15
+
+Adds native Linux arm64 and Windows arm64 builds, so every release covers x64
+and arm64 on Linux, Windows and macOS. No application code changed since 2.0.0.
+
+### Build
+
+- Build, test and package `aarch64-unknown-linux-gnu` on `ubuntu-26.04-arm` and
+  `aarch64-pc-windows-msvc` on `windows-11-arm`, both on native hardware rather
+  than cross-compiled.
+
+### Tests
+
+- Widen the easiness-192 hashcash vector deadline from 30 s to 300 s. The
+  deadline only stops a hang; the Rosetta 2 macOS Intel runner needed 98 s.
 
 ### Documentation
 

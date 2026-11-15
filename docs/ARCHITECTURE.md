@@ -267,8 +267,8 @@ harnesses, then reconciles each applicable mapping with actual passing results.
 Receipts include the exact commit, native OS and architecture; static source
 inspection alone never marks a test passed.
 
-The manual validation workflow builds release binaries for Windows, Linux,
-macOS Intel and macOS Apple Silicon at the dispatched commit. Formatting,
+The manual validation workflow builds release binaries for Windows and Linux on
+x64 and arm64, macOS Intel and macOS Apple Silicon at the dispatched commit. Formatting,
 Clippy/type, dependency-policy and LLVM coverage jobs preserve the
 previous check categories and 76% line-coverage floor. The CI driver and packaging
 tool are Rust (`xtask/`). Test-only FFmpeg/ffprobe prerequisites use pinned archives
