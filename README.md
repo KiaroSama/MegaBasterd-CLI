@@ -286,8 +286,8 @@ which changes are implemented, already present, or specific to its desktop GUI.
 [Migration notes](docs/MIGRATION.md) explain the storage and interface changes.
 
 See [commands](docs/COMMANDS.md), [usage](docs/USAGE.md),
-[configuration](docs/CONFIG.md), [architecture](docs/ARCHITECTURE.md) and
-[security reporting](SECURITY.md).
+[configuration](docs/CONFIG.md), [architecture](docs/ARCHITECTURE.md),
+[repository graphs](docs/GRAPH.md) and [security reporting](SECURITY.md).
 
 ## License
 
