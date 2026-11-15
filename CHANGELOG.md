@@ -19,8 +19,16 @@
   hook blocks on neither graph's work: graphify queues its own rebuild behind a
   per-repository lock, and the index call starts only when no job is already
   running.
-- Exclude the `tests/` integration tree from the graphify graph. It mirrored the
-  `src/` surface one-for-one and added 727 near-duplicate nodes; in-`src/`
+- Log the graphify shrink refusal instead of retrying it with `--force`. Forcing
+  bypasses the check that protects the semantic tier: measured here, a refused
+  5882-node rebuild forced over a 5897-node graph dropped 18 `_origin: semantic`
+  nodes from `.ai/LESSON.md` for good. The refusal leaves graph.json untouched,
+  so the graph goes stale rather than wrong, and the host-side
+  `/graphify --update` pipeline is what re-merges the tier.
+- Exclude the `tests/` integration tree from the graphify graph, by owner
+  decision. It would add 817 net-new nodes (5897 to 6714) whose labels are full
+  behaviour sentences rather than symbols; the tree is connected rather than
+  duplicative, so this trades recall for a navigable symbol graph. In-`src/`
   `*_tests.rs` unit tests remain, and both trees stay indexed in
   Codebase-Memory.
 

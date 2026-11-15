@@ -38,9 +38,12 @@ $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
 # Paths in neither graph: generated build output, runtime state, and the local
 # agent-config trees that .graphifyignore also drops. Everything else listed
-# here IS modelled and must trigger a rebuild: plans/, specs/, .specify/,
-# .ai/ (structural Markdown for graphify), and root files that git ignores but
-# .graphifyignore deliberately does not (secrets.md).
+# here IS modelled and must trigger a rebuild: plans/, specs/, .specify/ and
+# .ai/ (structural Markdown for graphify). Note the one asymmetry: secrets.md is
+# git-ignored AND excluded by .graphifyignore, so it never lands in either graph,
+# yet it still passes this filter and costs one rebuild per edit. Harmless, and
+# kept here deliberately so that dropping the exclusion later does not silently
+# stop the hook from noticing the change.
 $SkipRoots = '^(target|\.ci-work|\.git|graphify-out|\.codebase-memory|node_modules|User|Output|Logs|\.claude|\.codex|\.agents|\.kiro|\.cursor|\.cline)(/|$)'
 
 # Only these extensions are structural. Logs, lockfiles, archives, binaries and
@@ -65,7 +68,11 @@ function Start-GraphRefresh {
     param([string] $Path)
 
     # graphify: incremental, local, no model, no tokens. Blocking here is fine;
-    # this function only ever runs inside the detached worker.
+    # this function only ever runs inside the detached worker. Scope limit worth
+    # knowing: `update` is the code/AST tier only. It skips a change set with no
+    # code files, so a .ai/ or plans/ edit refreshes Codebase-Memory below but
+    # leaves the graphify concept/rationale tier stale until a host-side
+    # /graphify --update pipeline run. See docs/GRAPH.md.
     $graphify = Get-Command graphify -ErrorAction SilentlyContinue
     if ($null -ne $graphify) {
         $log = Join-Path $env:TEMP "mbcli-graphify-$PID.log"
@@ -73,6 +80,24 @@ function Start-GraphRefresh {
             # Out-File -Encoding utf8, not *>: the native redirect writes UTF-16
             # on Windows PowerShell, which no other tool reads as text.
             & $graphify.Source update $RepoRoot 2>&1 | Out-File -FilePath $log -Encoding utf8
+
+            # A rebuild with FEWER nodes than graph.json is refused, and that
+            # refusal is the guard doing its job: do NOT retry with --force.
+            # Measured on this repo (graphify 0.9.109): a refused run was
+            # 5882 nodes against 5897 on disk, and forcing it wrote the smaller
+            # graph and dropped 18 `_origin: semantic` nodes from .ai/LESSON.md
+            # for good. The count check is exactly what protects the semantic
+            # tier here, so overriding it is the data-loss path, not the fix.
+            # A refusal leaves graph.json untouched, so the graph goes stale
+            # rather than wrong; the host-side /graphify --update pipeline is
+            # what re-merges the tier and clears it. Log the refusal so a
+            # permanently-stale graph is visible instead of silent.
+            $text = Get-Content -LiteralPath $log -Raw -ErrorAction SilentlyContinue
+            if ($text -and $text -match 'Refusing to overwrite') {
+                Add-Content -LiteralPath "$log.refused" -Encoding utf8 -Value (
+                    "{0}`t{1}" -f (Get-Date -Format 's'), $Path
+                )
+            }
         } catch {
             Add-Content -LiteralPath "$log.err" -Value $_.ToString() -ErrorAction SilentlyContinue
         }

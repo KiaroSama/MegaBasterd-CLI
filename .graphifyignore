@@ -43,7 +43,8 @@ explain-AI.md
 .env
 .env.*
 
-# Test fixtures mirror the Rust surface one-for-one; they add ~700
-# nodes of near-duplicate names and push the graph past the 5000-node
-# aggregation threshold for the HTML view.
+# Integration tree, excluded by owner decision: 817 net-new nodes whose labels
+# are full behaviour sentences rather than symbols. They are connected, not
+# duplicates (none isolated, mean degree matches the rest of the graph), so this
+# is a noise call. The in-src *_tests.rs unit tests stay in. See docs/GRAPH.md.
 tests/
