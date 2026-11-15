@@ -192,8 +192,12 @@ fn proof_validation_and_both_solution_formats_match_independent_sha256_vectors()
         assert!(challenge.valid(nonce));
         if easiness == 192 {
             assert!(!challenge.valid([0; 4]));
+            // The deadline only bounds a hang; this test asserts the answer, not
+            // speed. Easiness 192 walks 357 nonces of ~12.6 MB of SHA-256 each,
+            // which took 98 s on the x86_64-apple-darwin runner (Rosetta 2, no
+            // hardware SHA) and blew a 30 s budget there.
             let solution = challenge
-                .solve(Instant::now() + Duration::from_secs(30), &Control::new())
+                .solve(Instant::now() + Duration::from_secs(300), &Control::new())
                 .unwrap();
             let nonce = vector["nonce_b64"].as_str().unwrap();
             assert_eq!(solution, format!("1:192:{token}:{nonce}"));
