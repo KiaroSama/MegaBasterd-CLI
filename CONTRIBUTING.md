@@ -35,8 +35,8 @@ user paths require the same isolated user override.
 
 ## CI and test accounting
 
-The manual validation workflow uses actual native runners for Linux x64, Windows
-x64 and both macOS architectures. Dispatch `release.yml` at the intended branch
+The manual validation workflow uses actual native runners for x64 and arm64 on
+Linux, Windows and macOS. Dispatch `release.yml` at the intended branch
 or tag to build all release aliases, run unit, integration, regression, process,
 filesystem, cryptographic-vector, network-peer, media and command-line tests,
 and package binaries plus source and checksums. Verify every check and receipt

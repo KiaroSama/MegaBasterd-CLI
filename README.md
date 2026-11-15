@@ -11,7 +11,7 @@ Python runtime bridge is included in the native implementation.
 [![Coverage gate](https://img.shields.io/badge/Line%20coverage-gate%20at%2076%25-brightgreen)](.github/workflows/tests.yml)
 [![Dependency policy](https://img.shields.io/badge/Dependency%20policy-cargo--deny-4c1)](.github/workflows/audit.yml)
 [![License GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v2.0.0-blueviolet)](https://github.com/KiaroSama/MegaBasterd-CLI/releases/tag/v2.0.0)
+[![Release](https://img.shields.io/badge/Release-v2.0.1-blueviolet)](https://github.com/KiaroSama/MegaBasterd-CLI/releases/tag/v2.0.1)
 [![Repo size](https://img.shields.io/github/repo-size/KiaroSama/MegaBasterd-CLI)](#)
 [![Rust toolchain 1.99.1](https://img.shields.io/badge/Rust-1.99.1-orange)](rust-toolchain.toml)
 [![CLI parser clap](https://img.shields.io/badge/CLI-clap-blueviolet)](Cargo.toml)
@@ -21,15 +21,15 @@ Python runtime bridge is included in the native implementation.
 [![Source fingerprints SHA-256](https://img.shields.io/badge/Source%20fingerprints-SHA--256-purple)](docs/ARCHITECTURE.md)
 [![Machine output JSONL](https://img.shields.io/badge/Machine%20output-JSONL-yellow)](docs/COMMANDS.md)
 [![Documentation command reference](https://img.shields.io/badge/Docs-command%20reference-yellowgreen)](docs/COMMANDS.md)
-[![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)](#installation)
+[![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%28x64%20%2B%20arm64%29-lightgrey)](#installation)
 [![Support donations](https://img.shields.io/badge/Support-donations-d04a9a)](#donate)
 
 </div>
 
 The application, tests and CI driver are implemented in Rust. The three native
 commands are `mb`, `mbcli` and `megabasterd-cli`. No interpreter or script launcher
-is required. Manual CI builds Linux x64, Windows x64, macOS Intel and macOS
-Apple Silicon at the exact commit of the selected ref.
+is required. Manual CI builds Linux x64 and arm64, Windows x64 and arm64, macOS Intel and
+macOS Apple Silicon at the exact commit of the selected ref.
 
 ## Installation
 

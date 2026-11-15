@@ -50,7 +50,7 @@ that all discovered tests passed, and only then reconciles applicable mappings.
 The exact commit, target architecture and all case dispositions are recorded in
 a CI artifact. Formatting, static types/Clippy, dependency policy and the prior
 76% line-coverage gate remain separate checks. Release binaries are always built
-in CI on Linux, Windows, macOS Intel and macOS Apple Silicon.
+in CI on Linux and Windows (x64 and arm64), macOS Intel and macOS Apple Silicon.
 
 ## Other branches
 
