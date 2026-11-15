@@ -38,15 +38,23 @@ graph is small enough to be useful.
 
 Excluded on purpose, each for a different reason:
 
-- `tests/` — the integration suite. Its files mirror the `src/` surface
-  one-for-one, so with them the graph held 6256 nodes and 13790 edges and 727 of
-  those nodes (12%) re-used `src/` names under a `test_*` spelling. Dropping them
-  gives 5408 nodes and 11541 edges, and `vault` resolves once instead of twice.
-  This exclusion is partial by design: the 125 `*_tests.rs` files that live
-  **inside** `src/` are crate unit tests, exercise a real module in place, and
-  still contribute 944 nodes (17%). Only the separate integration tree is out.
-  Both trees remain fully indexed by Codebase-Memory, which is the graph to ask
-  about coverage.
+- `tests/` — the separate integration tree, excluded by owner decision. The
+  measured effect: 822 nodes, 817 of them net new, taking the graph from 5897
+  to 6714. They are neither duplicates nor dead weight — none is isolated, and
+  their mean degree (4.29) matches the graph's (4.12) — but every label is a
+  full behaviour sentence (`tests_account_documents_malformed_account_roots_…`)
+  rather than a symbol, so they read as prose noise over a symbol graph. Only
+  68 of their labels overlap the retained graph at all. An earlier draft of this
+  note claimed they mirrored the `src/` surface one-for-one and pushed the HTML
+  past its 5000-node aggregation threshold; both claims are false, and that
+  threshold was already crossed without them at 5408 nodes. The exclusion is
+  partial by design: the `*_tests.rs` files that live **inside** `src/` are
+  crate unit tests, exercise a real module in place, and still contribute 944
+  nodes (16% of the graph, 38% of the 2473 `src/` nodes). Both trees remain
+  fully indexed by Codebase-Memory, which is the graph to ask about coverage.
+- The current graph is 5897 nodes, 12150 edges and 12 hyperedges: 3260 code,
+  1881 document, 611 concept and 145 rationale. Refresh the numbers here from
+  `graphify-out/GRAPH_REPORT.md` rather than trusting this paragraph.
 - `User/`, `Logs/`, `Output/` — runtime state written by a real run, not source.
 - `target/`, `.ci-work/`, `.ci-cache/`, `dist/`, `node_modules/` — build output
   and caches.
@@ -65,10 +73,31 @@ in this working tree. CI sparse-checkouts it from a pinned baseline commit into
 Build or refresh:
 
 ```powershell
-graphify update .          # structural: AST plus Markdown, no model, no tokens
+graphify update .          # code/AST tier only: no model, no tokens
 graphify query "what does the vault depend on"
-graphify path src/cli/args.rs src/storage/vault.rs
+graphify path src/cli/args.rs src/storage/vault.rs --undirected
 ```
+
+`graphify update` does not read Markdown. It scans code files, and when the
+change set holds no code it prints "No tracked code files in change set -
+skipping rebuild" and points doc changes at the host-side `/graphify --update`
+pipeline instead. So the `.ai/`, `plans/` and `specs/` concept and rationale
+nodes, and the `rationale_for` / `implements` edges between them, are refreshed
+only by that pipeline run, never by the sync hook. Editing a note under `.ai/`
+leaves the semantic tier stale until someone runs it.
+
+Pass `--undirected` to `graphify path` and remember it in `graphify explain`.
+`path` forces a directed search by default and ignores the graph's own
+`directed` flag, which is `false` here, so a code-to-doc query returns "No
+directed path found" even though a real route exists. With `--undirected` the
+same pair resolves through `references` and `contains` edges.
+The graph is also `multigraph: true`, and its effective reading is undirected
+(`directed: false`, which `graphify diagnose multigraph --json` confirms as
+`effective_directed: false`). Under that reading 2 of the 12150 edges collapse
+onto an existing same-endpoint pair; the directed reading collapses none. Two
+collapsed pairs in 12150 edges is noise, but it is not zero, and the number
+moves as the graph grows, so re-read it from the diagnose output rather than
+from this sentence.
 
 `graphify-out/graph.html` opens in a browser. The graph exceeds the 5000-node
 display limit, so the HTML is an aggregated community view; node-level detail
@@ -91,6 +120,30 @@ than reinvented here: `graphify update` takes a per-repository lock and queues a
 request if a rebuild is already running, so a burst of edits cannot pile up or
 lose the last one; the Codebase-Memory call probes the running job first and
 starts an index only when none is queued or in flight.
+
+One case needs care rather than a retry. `graphify update` refuses to overwrite
+`graph.json` when the rebuild has fewer nodes than the file on disk. The first
+instinct is to re-run with `--force`, and on this repository that is wrong:
+measured on graphify 0.9.109, a refused run reported 5882 nodes against 5897 on
+disk, and forcing it wrote the smaller graph and dropped 18 `_origin: semantic`
+nodes from `.ai/LESSON.md` permanently. `--force` bypasses `to_json`'s shrink
+check wholesale, and that check is the only thing protecting the semantic tier on
+an incremental run; `graphify update` does not accept the narrower
+`--allow-dedup-shrink` flag that would make it safe (`graphify extract` does).
+
+So the worker logs the refusal to `$env:TEMP\mbcli-graphify-<pid>.log.refused`
+and leaves the graph alone. A refusal is sticky in the sense that the same
+rebuild keeps being refused while the true count stays below the stored one, but
+it is not a freeze: graph.json is untouched, so the graph goes stale rather than
+wrong, and the Codebase-Memory refresh in the same worker is a separate call and
+still runs. The way back is the host-side `/graphify --update` pipeline, which
+re-merges the semantic tier and raises the count again, not a forced rebuild.
+
+Nodes sourced from files graphify never scans are dropped at merge time, not
+kept. A lockfile, `deny.toml` or `.graphifyignore` is not in the scan set, so a
+concept node pointing at one can never reappear in a rebuild, and it would trip
+the refusal above for a node that has no chance of coming back. The merge checks
+every semantic node against the scan manifest for exactly this reason.
 
 To turn it off, remove the `sync-graphs` entry from `.claude/settings.json`. The
 hook is tracked so a clone inherits it; everything else under `.claude/` stays
