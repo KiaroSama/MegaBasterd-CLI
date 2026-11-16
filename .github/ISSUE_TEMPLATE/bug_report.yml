@@ -27,8 +27,6 @@ body:
         - Windows 10
         - Linux (x64)
         - Linux (arm64)
-        - macOS (Apple Silicon)
-        - macOS (Intel)
         - Other
     validations:
       required: true

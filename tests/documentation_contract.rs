@@ -102,20 +102,17 @@ fn native_docs_do_not_claim_old_toolchain_or_unexecuted_platform_success() {
     }
     let readme = include_str!("../README.md");
     // Must name exactly the native matrix in .github/workflows/ci.yml.
-    assert!(readme.contains(
-        "CI builds Linux x64 and arm64, Windows x64 and arm64, macOS Intel and\nmacOS Apple Silicon"
-    ));
+    assert!(readme.contains("CI builds Linux x64 and arm64 and Windows x64 and arm64"));
     let ci = include_str!("../.github/workflows/ci.yml");
     for target in [
         "x86_64-unknown-linux-gnu",
         "aarch64-unknown-linux-gnu",
         "x86_64-pc-windows-msvc",
         "aarch64-pc-windows-msvc",
-        "x86_64-apple-darwin",
-        "aarch64-apple-darwin",
     ] {
         assert!(ci.contains(&format!("target: {target}\n")), "{target}");
     }
+    assert!(!ci.contains("apple-darwin"), "macOS support was removed");
     assert!(readme.contains("1,416 baseline test"));
     assert!(readme.contains("User/native-v2/"));
     assert!(readme.contains("collision suffixes"));

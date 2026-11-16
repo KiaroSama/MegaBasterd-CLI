@@ -34,10 +34,6 @@ jobs:
             target: x86_64-pc-windows-msvc
           - os: windows-11-arm
             target: aarch64-pc-windows-msvc
-          - os: macos-26-intel
-            target: x86_64-apple-darwin
-          - os: macos-26
-            target: aarch64-apple-darwin
     env:
       CARGO_TERM_COLOR: never
       CARGO_BUILD_JOBS: 2
@@ -83,19 +79,6 @@ jobs:
         run: |
           rustc -vV
           rustc -vV | grep -Fx 'host: ${{ matrix.target }}'
-      - name: Verify Apple owner-signing adapter before compilation
-        if: runner.os == 'macOS' && inputs.owner_signing
-        shell: pwsh
-        env:
-          MBCLI_RELEASE_PFX_BASE64: ${{ secrets.MBCLI_RELEASE_PFX_BASE64 }}
-          MBCLI_RELEASE_PFX_PASSWORD: ${{ secrets.MBCLI_RELEASE_PFX_PASSWORD }}
-        run: |
-          $scratch = Join-Path $env:RUNNER_TEMP 'owner-signing-preflight'
-          New-Item -ItemType Directory -Path $scratch -ErrorAction Stop | Out-Null
-          try {
-            foreach ($name in @('mb','mbcli','megabasterd-cli')) { Copy-Item /bin/ls (Join-Path $scratch $name) }
-            ./.github/scripts/Sign-Release.ps1 -Stage Binaries -Directory $scratch
-          } finally { Remove-Item -LiteralPath $scratch -Recurse -Force }
       - name: Build all native release commands
         run: cargo build --locked --release --bins -p megabasterd-cli
       - name: Install media test prerequisites

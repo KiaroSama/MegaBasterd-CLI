@@ -123,7 +123,6 @@ fn clipboard_fixture(
             "preferred-clipboard" | "fallback-clipboard" => &[],
             "wl-paste" => &["-n"],
             "xclip" => &["-selection", "clipboard", "-o"],
-            "pbpaste" => &[],
             _ => panic!("Unexpected clipboard program"),
         };
         assert_eq!(
@@ -191,7 +190,6 @@ fn successful_preferred_clipboard_backend_returns_without_trying_another_command
     for (commands, expected) in [
         (TEST_CLIPBOARD, "preferred-clipboard"),
         (LINUX_CLIPBOARD, "wl-paste"),
-        (MACOS_CLIPBOARD, "pbpaste"),
     ] {
         for text in ["from-pyperclip", "", "  first\nsecond\n", "متن"] {
             assert_eq!(
@@ -212,7 +210,6 @@ fn clipboard_cancel_invalid_utf8_and_exhaustion_keep_their_existing_error_bounda
     for (commands, expected) in [
         (TEST_CLIPBOARD, "preferred-clipboard"),
         (LINUX_CLIPBOARD, "wl-paste"),
-        (MACOS_CLIPBOARD, "pbpaste"),
     ] {
         assert!(matches!(
             clipboard_fixture(commands, vec![Err(Error::Canceled)], &[expected]),
@@ -229,7 +226,6 @@ fn clipboard_cancel_invalid_utf8_and_exhaustion_keep_their_existing_error_bounda
             &["preferred-clipboard", "fallback-clipboard"][..],
         ),
         (LINUX_CLIPBOARD, &["wl-paste", "xclip"][..]),
-        (MACOS_CLIPBOARD, &["pbpaste"][..]),
     ] {
         let replies = expected
             .iter()

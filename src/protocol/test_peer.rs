@@ -245,11 +245,6 @@ pub(crate) fn respond(stream: &mut impl Write, response: Response, keep_alive: b
                 | io::ErrorKind::ConnectionReset
                 | io::ErrorKind::ConnectionAborted
         );
-        // Darwin can report EINVAL when the range-refusal client closes while
-        // this valid response is being sent. The client still must prove its
-        // intended header rejection and unchanged output, never just an I/O error.
-        #[cfg(target_os = "macos")]
-        let peer_closed = peer_closed || error.raw_os_error() == Some(libc::EINVAL);
         assert!(peer_closed, "TLS response failed: {error}");
     }
 }

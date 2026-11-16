@@ -17,8 +17,6 @@ mod tests;
 #[cfg(test)]
 const TEST_CLIPBOARD: &[(&str, &[&str])] =
     &[("preferred-clipboard", &[]), ("fallback-clipboard", &[])];
-#[cfg(any(target_os = "macos", test))]
-const MACOS_CLIPBOARD: &[(&str, &[&str])] = &[("pbpaste", &[])];
 #[cfg(any(target_os = "linux", test))]
 const LINUX_CLIPBOARD: &[(&str, &[&str])] = &[
     ("wl-paste", &["-n"]),
@@ -32,8 +30,6 @@ fn clipboard(context: &Context) -> Result<String> {
 
 #[cfg(not(windows))]
 fn clipboard(context: &Context) -> Result<String> {
-    #[cfg(target_os = "macos")]
-    let commands = MACOS_CLIPBOARD;
     #[cfg(target_os = "linux")]
     let commands = LINUX_CLIPBOARD;
     clipboard_with(commands, |program, args| {

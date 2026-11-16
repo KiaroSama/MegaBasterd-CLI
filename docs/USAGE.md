@@ -295,8 +295,8 @@ Ambiguous remote changes remain for reconciliation rather than blind replay.
 mb watch -o inbox
 ```
 
-The watcher requires a real graphical clipboard backend: native Win32 clipboard access on Windows,
-`pbpaste` on macOS, `wl-paste`/`xclip` on Linux. It queues newly copied links;
+The watcher requires a real graphical clipboard backend: native Win32 clipboard access on Windows
+or `wl-paste`/`xclip` on Linux. It queues newly copied links;
 `--run` additionally executes the queue. No background service is installed.
 
 ## Local file operations

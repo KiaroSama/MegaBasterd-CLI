@@ -18,18 +18,7 @@ fn private(directory: TempDir) -> io::Result<TempDir> {
 }
 
 pub fn tempdir() -> io::Result<TempDir> {
-    #[cfg(target_os = "macos")]
-    // Darwin's default /var/... temporary root aliases /private/var. Create
-    // owned fixtures beneath its canonical path, leaving nofollow policy intact.
-    {
-        private(::tempfile::tempdir_in(std::fs::canonicalize(
-            std::env::temp_dir(),
-        )?)?)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        private(::tempfile::tempdir()?)
-    }
+    private(::tempfile::tempdir()?)
 }
 pub fn tempdir_in(path: impl AsRef<Path>) -> io::Result<TempDir> {
     private(::tempfile::tempdir_in(path)?)
@@ -54,17 +43,7 @@ impl<'a, 'b> Builder<'a, 'b> {
         self
     }
     pub fn tempdir(&self) -> io::Result<TempDir> {
-        #[cfg(target_os = "macos")]
-        {
-            private(
-                self.0
-                    .tempdir_in(std::fs::canonicalize(std::env::temp_dir())?)?,
-            )
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            private(self.0.tempdir()?)
-        }
+        private(self.0.tempdir()?)
     }
     pub fn tempdir_in(&self, path: impl AsRef<Path>) -> io::Result<TempDir> {
         private(self.0.tempdir_in(path)?)

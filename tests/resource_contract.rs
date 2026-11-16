@@ -116,8 +116,7 @@ fn peak_rss() -> u64 {
     );
     // SAFETY: the successful call initialized the complete rusage structure.
     let peak = u64::try_from(unsafe { usage.assume_init() }.ru_maxrss).unwrap();
-    peak.checked_mul(if cfg!(target_os = "macos") { 1 } else { 1024 })
-        .unwrap()
+    peak.checked_mul(1024).unwrap()
 }
 
 #[cfg(windows)]

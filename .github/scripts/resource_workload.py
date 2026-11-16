@@ -71,7 +71,7 @@ def peak_rss():
     if os.name != "nt":
         import resource
         value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        return int(value if sys.platform == "darwin" else value * 1024)
+        return int(value * 1024)
     import ctypes
     from ctypes import wintypes as w
     class Counters(ctypes.Structure):

@@ -17,5 +17,5 @@ try {
     if([DateTime]::UtcNow -lt $cert.NotBefore.ToUniversalTime() -or [DateTime]::UtcNow -gt $cert.NotAfter.ToUniversalTime()){throw 'Owner certificate is outside its validity period.'}
     $checksum=([IO.File]::ReadAllText($path+'.sha256',[Text.Encoding]::UTF8).Trim() -split '\s+')[0]
     if($checksum -cne [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()){throw 'Archive SHA256 mismatch.'}
-    Write-Output 'Archive signature, pinned owner certificate and SHA256 verified. Private trust only; no public CA or Apple notarization claim.'
+    Write-Output 'Archive signature, pinned owner certificate and SHA256 verified. Private trust only; no public CA or notarization claim.'
 } finally {$cert.Dispose()}

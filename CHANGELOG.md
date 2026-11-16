@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Removed
+
+- macOS support. CI, signing and packaging now cover only Linux and Windows on
+  x64 and arm64. The macOS clipboard backend, Apple code signing and the
+  macOS-only test branches are gone, and the macOS assets were removed from the
+  2.0.0 and 2.0.1 releases.
+
 ## [2.0.1] - 2026-11-15
 
 Adds native Linux arm64 and Windows arm64 builds, so every release covers x64

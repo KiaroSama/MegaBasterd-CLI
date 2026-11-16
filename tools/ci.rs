@@ -508,8 +508,6 @@ fn package() -> Result<()> {
         ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
         ("windows", "x86_64") => "x86_64-pc-windows-msvc",
         ("windows", "aarch64") => "aarch64-pc-windows-msvc",
-        ("macos", "x86_64") => "x86_64-apple-darwin",
-        ("macos", "aarch64") => "aarch64-apple-darwin",
         _ => return Err("Unsupported native distribution target".into()),
     };
     let archives = root().join(".ci-work/distribution");

@@ -21,15 +21,15 @@ Python runtime bridge is included in the native implementation.
 [![Source fingerprints SHA-256](https://img.shields.io/badge/Source%20fingerprints-SHA--256-purple)](docs/ARCHITECTURE.md)
 [![Machine output JSONL](https://img.shields.io/badge/Machine%20output-JSONL-yellow)](docs/COMMANDS.md)
 [![Documentation command reference](https://img.shields.io/badge/Docs-command%20reference-yellowgreen)](docs/COMMANDS.md)
-[![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS%20%28x64%20%2B%20arm64%29-lightgrey)](#installation)
+[![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%28x64%20%2B%20arm64%29-lightgrey)](#installation)
 [![Support donations](https://img.shields.io/badge/Support-donations-d04a9a)](#donate)
 
 </div>
 
 The application, tests and CI driver are implemented in Rust. The three native
 commands are `mb`, `mbcli` and `megabasterd-cli`. No interpreter or script launcher
-is required. Manual CI builds Linux x64 and arm64, Windows x64 and arm64, macOS Intel and
-macOS Apple Silicon at the exact commit of the selected ref.
+is required. Manual CI builds Linux x64 and arm64 and Windows x64 and arm64 at the
+exact commit of the selected ref. macOS is not supported.
 
 ## Installation
 
@@ -38,13 +38,12 @@ Download the artifact matching your OS and architecture from
 the verified form of the same artifact a
 [native validation run](https://github.com/KiaroSama/MegaBasterd-CLI/actions/workflows/release.yml)
 produces. Unpack the ZIP, then extract its `.tar.gz` payload; the tar archive
-preserves executable permissions on Linux and macOS. It contains the three
+preserves executable permissions on Linux. It contains the three
 command aliases, `SHA256SUMS`, license notices and the matching Rust source
 package. Verify the archive's `.sha256` file and keep the commands together when
 adding the directory to `PATH`. The manual release batch uses this project's
-dedicated self-signed owner certificate for Windows Authenticode, macOS code
-signing and detached CMS archive signatures. This is private trust, not public-CA
-trust or Apple notarization; operating-system warnings may remain. Verify the
+dedicated self-signed owner certificate for Windows Authenticode and detached CMS
+archive signatures. This is private trust, not public-CA trust; operating-system warnings may remain. Verify the
 archive before extraction using [SIGNING.md](docs/SIGNING.md).
 Unsigned artifacts from older workflow runs are not releases.
 
@@ -55,8 +54,8 @@ mb --help
 
 ### Build from source
 
-Install Rust **1.99.1** and a native linker: MSVC Build Tools on Windows, Xcode
-Command Line Tools on macOS, or a C toolchain on Linux for native dependencies.
+Install Rust **1.99.1** and a native linker: MSVC Build Tools on Windows or a C
+toolchain on Linux for native dependencies.
 `rust-toolchain.toml` pins Rust; `Cargo.lock` pins dependencies.
 
 ```bash
@@ -76,8 +75,8 @@ chosen executable path, or make the tools available on `PATH`. The application
 never installs media tools automatically. Missing media support is a separate
 warning after an otherwise successful upload, not proof the upload failed.
 
-Clipboard watching uses native Win32 Unicode clipboard APIs on Windows, `pbpaste` on
-macOS, or `wl-paste`/`xclip` on Linux. A usable graphical clipboard session is
+Clipboard watching uses native Win32 Unicode clipboard APIs on Windows or
+`wl-paste`/`xclip` on Linux. A usable graphical clipboard session is
 required; a headless host need not have one.
 
 ## Usage

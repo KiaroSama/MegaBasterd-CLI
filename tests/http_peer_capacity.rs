@@ -18,56 +18,12 @@ impl Drop for CancelOnDrop {
 }
 
 fn listener() -> (TcpListener, SocketAddr, SocketAddr) {
-    #[cfg(not(target_os = "macos"))]
-    {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        (listener, address, address)
-    }
-    #[cfg(target_os = "macos")]
-    {
-        use std::os::fd::AsRawFd;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let socket = tokio::net::TcpSocket::new_v6().unwrap();
-        let disabled: libc::c_int = 0;
-        // SAFETY: the owned socket stays live; the initialized c_int and its exact length
-        // are readable for this synchronous call, and only this fixture's socket is changed.
-        let result = unsafe {
-            libc::setsockopt(
-                socket.as_raw_fd(),
-                libc::IPPROTO_IPV6,
-                libc::IPV6_V6ONLY,
-                (&disabled as *const libc::c_int).cast(),
-                std::mem::size_of_val(&disabled) as libc::socklen_t,
-            )
-        };
-        assert_eq!(result, 0, "could not configure owned dual-stack fixture");
-        socket.bind("[::]:0".parse().unwrap()).unwrap();
-        let listener = {
-            let _entered = runtime.enter();
-            // Match std's ordinary listener backlog. The 30-client burst must
-            // not measure Darwin SYN retransmission after an eight-slot overflow.
-            socket.listen(128).unwrap().into_std().unwrap()
-        };
-        let port = listener.local_addr().unwrap().port();
-        (
-            listener,
-            SocketAddr::from(([127, 0, 0, 1], port)),
-            SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], port)),
-        )
-    }
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    (listener, address, address)
 }
 
 fn client(address: SocketAddr, other: bool) -> TcpStream {
-    #[cfg(target_os = "macos")]
-    let stream = {
-        let _ = other; // Distinct IPv4/IPv6 destinations supply the two Darwin peers.
-        TcpStream::connect_timeout(&address, Duration::from_secs(2)).unwrap()
-    };
-    #[cfg(not(target_os = "macos"))]
     let stream = bound_client(address, other);
     stream.set_nonblocking(false).unwrap();
     stream
@@ -79,7 +35,6 @@ fn client(address: SocketAddr, other: bool) -> TcpStream {
     stream
 }
 
-#[cfg(not(target_os = "macos"))]
 fn bound_client(address: SocketAddr, other: bool) -> TcpStream {
     // Reuse one reactor for source-bound fixture connections.
     thread_local! {

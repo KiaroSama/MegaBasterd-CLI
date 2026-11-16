@@ -194,8 +194,7 @@ fn proof_validation_and_both_solution_formats_match_independent_sha256_vectors()
             assert!(!challenge.valid([0; 4]));
             // The deadline only bounds a hang; this test asserts the answer, not
             // speed. Easiness 192 walks 357 nonces of ~12.6 MB of SHA-256 each,
-            // which took 98 s on the x86_64-apple-darwin runner (Rosetta 2, no
-            // hardware SHA) and blew a 30 s budget there.
+            // which can take well over 30 s on a slow runner without hardware SHA.
             let solution = challenge
                 .solve(Instant::now() + Duration::from_secs(300), &Control::new())
                 .unwrap();

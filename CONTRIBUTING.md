@@ -36,7 +36,7 @@ user paths require the same isolated user override.
 ## CI and test accounting
 
 The manual validation workflow uses actual native runners for x64 and arm64 on
-Linux, Windows and macOS. Dispatch `release.yml` at the intended branch
+Linux and Windows. Dispatch `release.yml` at the intended branch
 or tag to build all release aliases, run unit, integration, regression, process,
 filesystem, cryptographic-vector, network-peer, media and command-line tests,
 and package binaries plus source and checksums. Verify every check and receipt
@@ -86,9 +86,9 @@ release binaries do not use Python; this helper runs only as a CI comparison ora
 `cargo run --locked --package xtask -- package` uses already-built Release binaries. Artifacts include
 all three aliases, SHA256SUMS, project licensing and the matching Cargo source
 package. The manual root enables dedicated owner signing through two protected
-inputs, available only during packaging. Windows Authenticode and macOS codesign
-use the project-specific self-signed certificate; detached CMS signs each archive.
-Private trust is explicit, with no public-CA or Apple notarization claim. Unsigned
+inputs, available only during packaging. Windows Authenticode
+uses the project-specific self-signed certificate; detached CMS signs each archive.
+Private trust is explicit, with no public-CA or notarization claim. Unsigned
 older artifacts are not signed releases. See [signing verification](docs/SIGNING.md).
 Published binaries need matching Corresponding Source and applicable dependency notices.
 Keep credentials, logs, caches, generated media tools and user data out of Git

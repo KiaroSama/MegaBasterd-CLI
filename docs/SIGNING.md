@@ -2,8 +2,8 @@
 
 The owner explicitly selected a dedicated self-signed certificate for this project.
 This proves possession of the pinned owner key, not public certificate-authority
-trust. Windows SmartScreen/Gatekeeper warnings may remain. macOS releases are not
-Apple-notarized. No command here installs a trusted root or disables an OS policy.
+trust. Windows SmartScreen warnings may remain. Releases are not notarized and
+macOS is not supported. No command here installs a trusted root or disables an OS policy.
 
 Public certificate SHA-256:
 
@@ -34,7 +34,7 @@ the archive, import a root certificate or change your security settings.
 After verification, extract into a new empty directory and inspect `SIGNING.json`
 for the exact source commit. Check `SHA256SUMS` for every installed file. The native
 commands are `mb`, `mbcli` and `megabasterd-cli`. Windows binaries carry Authenticode
-and macOS binaries carry native code signatures. Linux archives use detached CMS.
+signatures. Linux archives use detached CMS.
 
 ## Build and custody boundary
 
@@ -52,17 +52,9 @@ Windows verification checks the native payload signature and pinned owner certif
 without modifying a trusted-root store. Only success or the exact untrusted-root
 chain result is eligible; other errors fail. A changed PE payload or different owner
 must be rejected. Neither the hosted runner nor the user's machine gains root trust.
-The macOS runner uses an isolated temporary keychain, temporarily adds it to the
-runner's keychain search list, restores the previous list and removes it in cleanup.
-This does not install a trusted root or change certificate trust policy.
-Its mode-700 scratch directory contains a mode-600 PKCS#12 transport with a
-nonsecret, fixed transport password. Unlike an empty password, this produces an
-encrypted key bag that Apple's importer accepts; the password is not a security
-boundary. The protected directory and deletion are mandatory. Private key material
-and the real custody password never appear in process arguments. The transport
-is never published or cached and is deleted with the keychain; protected recovery
-custody and native SHA-256 signatures are unchanged.
+Private key material and the real custody password never appear in process
+arguments; signing scratch is deleted in cleanup.
 
 The release process verifies tamper rejection and native signatures. The owner
 retains an exportable protected recovery key outside published artifacts. No public
-CA, timestamp authority, Apple Developer ID or notarization is asserted.
+CA, timestamp authority or notarization is asserted.
