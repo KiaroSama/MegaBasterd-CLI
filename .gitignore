@@ -136,6 +136,7 @@ desktop.ini
 *.lnk
 
 # Local assistant/tooling state
+/.cargo/
 .claude/
 .kiro/
 .codex/

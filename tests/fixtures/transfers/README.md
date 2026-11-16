@@ -30,7 +30,7 @@ ciphertext from the Rust code under test.
 
 `cargo test --locked --lib transfers::download_peer_tests` and
 `cargo test --locked --lib transfers::upload_peer_tests` exercise these vectors
-through the native transfer implementation. `cargo xtask verify` runs those
+through the native transfer implementation. `cargo run --locked --package xtask -- verify` runs those
 tests as part of the complete suite and records the actual commit/results.
 The fixtures require no historical interpreter during normal builds or CI.
 

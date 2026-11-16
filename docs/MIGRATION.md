@@ -45,7 +45,7 @@ preserved source-contract denominator, not a claim that libtest and pytest
 collect the same number of parameter-expanded test cases. Independent vectors
 and bounded network/process/filesystem fixtures remain part of the suite.
 
-`cargo xtask verify` verifies source digests, discovers every native test, checks
+`cargo run --locked --package xtask -- verify` verifies source digests, discovers every native test, checks
 that all discovered tests passed, and only then reconciles applicable mappings.
 The exact commit, target architecture and all case dispositions are recorded in
 a CI artifact. Formatting, static types/Clippy, dependency policy and the prior

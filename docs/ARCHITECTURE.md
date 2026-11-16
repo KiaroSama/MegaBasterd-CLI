@@ -262,7 +262,7 @@ Native process-tree/pipe/cancellation tests remain required.
 `tests/fixtures/cli-schema.json` records the independently transcribed source
 schema. Crypto, link, local-file and transfer vectors retain source provenance.
 The parity ledger keeps all 1,416 baseline definitions across 164 modules.
-`cargo xtask verify` checks target hashes, discovers and executes the native
+`cargo run --locked --package xtask -- verify` checks target hashes, discovers and executes the native
 harnesses, then reconciles each applicable mapping with actual passing results.
 Receipts include the exact commit, native OS and architecture; static source
 inspection alone never marks a test passed.

@@ -696,6 +696,6 @@ fn main() -> Result<()> {
         Some("verify") => verify(),
         Some("package") => package(),
         Some("media") => media(),
-        _ => Err("Usage: cargo xtask <verify|package|media>".into()),
+        _ => Err("Usage: cargo run --locked --package xtask -- <verify|package|media>".into()),
     }
 }

@@ -105,8 +105,9 @@ needs `--obsidian`.
 
 ## Automatic sync
 
-`.claude/hooks/sync-graphs.ps1` is a Claude Code `PostToolUse` hook registered in
-`.claude/settings.json`. After a tool call that edits a file, it:
+A maintainer may run an optional, local-only editor `PostToolUse` hook that keeps
+both graphs fresh. It is not part of the repository. After a tool call that edits a
+file, it:
 
 1. reads the event from stdin and takes the edited path,
 2. exits silently unless that path is inside this repository and has a modelled
@@ -145,6 +146,6 @@ concept node pointing at one can never reappear in a rebuild, and it would trip
 the refusal above for a node that has no chance of coming back. The merge checks
 every semantic node against the scan manifest for exactly this reason.
 
-To turn it off, remove the `sync-graphs` entry from `.claude/settings.json`. The
-hook is tracked so a clone inherits it; everything else under `.claude/` stays
-local.
+The hook and its registration stay in the ignored local editor configuration, so
+a clone does not inherit it; without it, run `graphify update .` and re-index
+Codebase-Memory by hand after edits.

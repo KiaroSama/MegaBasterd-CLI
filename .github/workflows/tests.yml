@@ -41,7 +41,7 @@ jobs:
           test "$(tar -tzf media-linux.tar.gz | sort)" = "$(printf 'ffmpeg\nffprobe')"
           mkdir -p ../media/bin
           tar -xzf media-linux.tar.gz -C ../media/bin
-      - run: cargo xtask media
+      - run: cargo run --locked --package xtask -- media
       - name: Preserve the 76 percent coverage gate
         env:
           MEGABASTERD_CI_PYTHON: ${{ steps.source-python.outputs.python-path }}

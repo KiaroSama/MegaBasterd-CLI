@@ -7,13 +7,13 @@ repository root.
 ```bash
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
-cargo xtask media
-cargo xtask verify
+cargo run --locked --package xtask -- media
+cargo run --locked --package xtask -- verify
 cargo build --locked --release --bins -p megabasterd-cli
-cargo xtask package
+cargo run --locked --package xtask -- package
 ```
 
-`cargo xtask media` obtains a checksum-pinned FFmpeg/ffprobe 9.0.2 pair for real
+`cargo run --locked --package xtask -- media` obtains a checksum-pinned FFmpeg/ffprobe 9.0.2 pair for real
 MP4/WebM decoding tests. On Unix it builds a minimal test-only toolchain; on
 Windows it extracts the pinned public binary pair. The immutable download retries
 at most twice within a 60-second retry window, retaining TLS and SHA-256 verification;
@@ -23,7 +23,7 @@ repeating the download and build. Nothing installs media tools
 into the user's application or system. A local compatible FFmpeg pair can also be
 supplied through `MEGABASTERD_FFMPEG` when running targeted tests.
 
-`cargo xtask verify` builds every test harness, discovers its tests, executes all
+`cargo run --locked --package xtask -- verify` builds every test harness, discovers its tests, executes all
 of them, rejects ignored/missing results and checks every applicable parity
 mapping. Each harness has a 180-second wall limit, bounded captured output and
 owned process-group/Windows-job cleanup, inside the 60-minute native job. It supplies
@@ -83,7 +83,7 @@ release binaries do not use Python; this helper runs only as a CI comparison ora
 
 ## Distribution
 
-`cargo xtask package` uses already-built Release binaries. Artifacts include
+`cargo run --locked --package xtask -- package` uses already-built Release binaries. Artifacts include
 all three aliases, SHA256SUMS, project licensing and the matching Cargo source
 package. The manual root enables dedicated owner signing through two protected
 inputs, available only during packaging. Windows Authenticode and macOS codesign

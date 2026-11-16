@@ -39,9 +39,9 @@ ureq 3.5 transport adaptation below.
 
 ### Tooling
 
-- Track a Claude Code `PostToolUse` hook, `.claude/hooks/sync-graphs.ps1`, so
-  every clone inherits it. After an edit it refreshes the graphify graph and the
-  Codebase-Memory index in a detached worker, which costs no model tokens. The
+- Document an optional local-only editor `PostToolUse` hook (not tracked). After
+  an edit it refreshes the graphify graph and the Codebase-Memory index in a
+  detached worker, which costs no model tokens. The
   hook blocks on neither graph's work: graphify queues its own rebuild behind a
   per-repository lock, and the index call starts only when no job is already
   running.
