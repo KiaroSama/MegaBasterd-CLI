@@ -534,6 +534,7 @@ fn resolver_and_credentials_fail_closed_without_external_dns_or_sockets() {
     let timeout = NextTimeout {
         after: ureq::unversioned::transport::time::Duration::from_secs(1),
         reason: ureq::Timeout::Global,
+        ..NextTimeout::default()
     };
     assert!(
         resolver

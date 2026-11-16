@@ -3,15 +3,27 @@
 ## [2.0.1] - 2026-11-15
 
 Adds native Linux arm64 and Windows arm64 builds, so every release covers x64
-and arm64 on Linux, Windows and macOS. No application code changed since 2.0.0.
+and arm64 on Linux, Windows and macOS. The only application change is the
+ureq 3.5 transport adaptation below.
 
 ### Build
 
 - Build, test and package `aarch64-unknown-linux-gnu` on `ubuntu-26.04-arm` and
   `aarch64-pc-windows-msvc` on `windows-11-arm`, both on native hardware rather
   than cross-compiled.
+- Coverage reuses media tools only from the Linux x64 job; the arm64 job had
+  uploaded the same artifact name.
+
+### Dependencies
+
+- Update `ureq` 3.4.2 to 3.5.2 and `libc` 0.2.190 to 0.2.191. The pinned proxy
+  connector now forwards ureq's shutdown registration and clock to the new
+  transport API; proxy, TLS and timeout behaviour is unchanged.
 
 ### Tests
+
+- Wait for listener readiness in the HTTP refusal test; macOS could connect
+  before the listener was ready to accept.
 
 - Widen the easiness-192 hashcash vector deadline from 30 s to 300 s. The
   deadline only stops a hang; the Rosetta 2 macOS Intel runner needed 98 s.

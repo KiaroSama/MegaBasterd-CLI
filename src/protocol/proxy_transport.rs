@@ -230,6 +230,7 @@ impl ProxyConnector {
                 timeout: details.timeout,
                 current_time: details.current_time.clone(),
                 run_connector: details.run_connector.clone(),
+                register_shutdown: details.register_shutdown.clone(),
             };
             transport = tls
                 .connect(&outer, Some(transport))
@@ -248,7 +249,7 @@ impl ProxyConnector {
                 password.as_deref().map_or("", |value| value.as_str()),
             ))
         };
-        let mut stream = TransportAdapter::new(transport);
+        let mut stream = TransportAdapter::new(transport, details.current_time.clone());
         stream.set_timeout(details.timeout);
         match self.proxy.scheme() {
             "http" | "https" => proxy_handshake::connect(&mut stream, target, credentials)?,
