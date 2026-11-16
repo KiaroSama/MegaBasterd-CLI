@@ -100,7 +100,10 @@ mod tests {
             client
                 .set_write_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
-            let (socket, _) = listener.accept().unwrap();
+            // connect() can finish before a BSD listener is ready to accept.
+            let (socket, _) =
+                crate::protocol::test_peer::accept_ready(&listener, Duration::from_secs(2))
+                    .unwrap();
             client
                 .write_all(b"HEAD / HTTP/1.1\r\nHost: localhost\r\n\r\n")
                 .unwrap();
@@ -140,7 +143,8 @@ mod tests {
         excess
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
-        let (socket, _) = listener.accept().unwrap();
+        let (socket, _) =
+            crate::protocol::test_peer::accept_ready(&listener, Duration::from_secs(2)).unwrap();
         refusals.push(socket);
         assert_eq!(refusals.0.len(), CAPACITY);
         match excess.read(&mut [0]) {
