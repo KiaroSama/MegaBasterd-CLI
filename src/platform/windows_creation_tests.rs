@@ -9,9 +9,7 @@ use std::{
 
 use super::*;
 use crate::terminal::{logging::Logger, output::Output};
-
-#[path = "../../tests/common/windows_log_acl.rs"]
-mod windows_log_acl;
+use crate::windows_log_acl;
 
 struct CreationOverride {
     directory: PathBuf,

@@ -6,9 +6,7 @@ use crate::{platform::secure_files::OutputDirectory, terminal::output::Output};
 use std::{io, sync::Arc};
 
 #[cfg(windows)]
-#[allow(dead_code)] // This fixture uses only the shared independent ACL observer.
-#[path = "../../tests/common/windows_log_acl.rs"]
-mod windows_log_acl;
+use crate::windows_log_acl;
 
 #[derive(Clone, Default)]
 struct Capture(Arc<Mutex<Vec<u8>>>);

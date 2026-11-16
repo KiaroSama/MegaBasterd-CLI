@@ -422,6 +422,9 @@ fn ordinary_output_directory_and_readonly_source_do_not_require_private_permissi
     drop(anchor);
     drop(private_anchor);
     #[cfg(windows)]
+    // On Windows this only clears FILE_ATTRIBUTE_READONLY so scratch cleanup can delete it;
+    // the lint's world-writable concern is Unix-only.
+    #[allow(clippy::permissions_set_readonly_false)]
     {
         let mut permissions = fs::metadata(output.join("source")).unwrap().permissions();
         permissions.set_readonly(false);

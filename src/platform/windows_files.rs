@@ -585,12 +585,12 @@ impl Directory {
             Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => return Err(error),
         };
-        if let Some(file) = &destination {
-            if identity_query(source.as_raw_handle())? == identity_query(file.as_raw_handle())? {
-                return Err(Error::invalid(
-                    "Publication source and destination name the same file",
-                ));
-            }
+        if let Some(file) = &destination
+            && identity_query(source.as_raw_handle())? == identity_query(file.as_raw_handle())?
+        {
+            return Err(Error::invalid(
+                "Publication source and destination name the same file",
+            ));
         }
         let cloned = source.try_clone()?;
         File::from(cloned).sync_all()?;
@@ -654,12 +654,12 @@ impl Directory {
     }
     fn remove_checked(&self, name: &OsStr, expected_identity: Option<&str>) -> Result<()> {
         let file = self.file(name, false, true, false, true)?;
-        if let Some(expected) = expected_identity {
-            if identity_query(file.as_raw_handle())? != expected {
-                return Err(Error::protocol(
-                    "Cleanup refused because the file identity changed",
-                ));
-            }
+        if let Some(expected) = expected_identity
+            && identity_query(file.as_raw_handle())? != expected
+        {
+            return Err(Error::protocol(
+                "Cleanup refused because the file identity changed",
+            ));
         }
         let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
         // SAFETY: exact verified DELETE handle, typed disposition live through synchronous call.
