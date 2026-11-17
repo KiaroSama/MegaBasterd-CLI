@@ -247,7 +247,7 @@ impl Accounts {
             .ok_or_else(|| Error::invalid("Stored account was not found"))?;
         account.quota_total = Some(total);
         account.quota_used = Some(used);
-        account.last_used_iso = Some(chrono::Utc::now().to_rfc3339());
+        account.last_used_iso = Some(crate::storage::files::utc_now_rfc3339());
         Self::validate(&data)?;
         locked.save(&data)
     }

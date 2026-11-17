@@ -8,7 +8,7 @@ use std::sync::{
 };
 use std::time::Instant;
 
-use chrono::Utc;
+use jiff::Timestamp;
 use serde_json::Value;
 
 use super::redaction::{literal, log_text, sanitize, text};
@@ -68,7 +68,9 @@ impl Logger {
         mut open: impl FnMut(&PrivateDirectory, &OsStr) -> Result<File>,
     ) -> Result<Self> {
         let directory = PrivateDirectory::ensure(directory)?;
-        let prefix = Utc::now().format("mb_%Y-%m-%d_%H-%M-%S_UTC").to_string();
+        let prefix = Timestamp::now()
+            .strftime("mb_%Y-%m-%d_%H-%M-%S_UTC")
+            .to_string();
         for collision in 0..100u32 {
             let name = OsString::from(if collision == 0 {
                 format!("{prefix}.log")
@@ -157,7 +159,7 @@ impl Logger {
     }
 
     pub fn write(&self, level: &str, component: &str, message: &str, fields: &Value) -> Result<()> {
-        let stamp = Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
+        let stamp = Timestamp::now().strftime("%Y-%m-%d %H:%M:%S UTC");
         let fields = sanitize(fields, false);
         let record = format!(
             "[{stamp}] [{}] [{}] run={} cmd={} {} {}\n",

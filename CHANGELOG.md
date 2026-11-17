@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Timestamps now come from `jiff` instead of `chrono`, which RUSTSEC-2026-0543
+  marks unmaintained. Queue, account, upload-log and log-file timestamps keep
+  the same UTC format, and files written by earlier builds still load.
+
 ### Removed
 
 - macOS support. CI, signing and packaging now cover only Linux and Windows on

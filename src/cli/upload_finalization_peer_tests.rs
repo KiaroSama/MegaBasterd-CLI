@@ -251,7 +251,11 @@ fn confirmed_finalization_shares_logs_and_runs_the_literal_command_once_without_
         assert_eq!(logged["account"], "fixture@example.invalid");
         assert!(logged.get("public_link").is_some());
         assert_eq!(logged["public_link"], record["share_link"]);
-        chrono::DateTime::parse_from_rfc3339(logged["ts"].as_str().unwrap()).unwrap();
+        logged["ts"]
+            .as_str()
+            .unwrap()
+            .parse::<jiff::Timestamp>()
+            .unwrap();
         let human = String::from_utf8(stderr.0.lock().unwrap().clone()).unwrap();
         assert!(human.contains("[INFO] Uploaded file  ;$(not-shell).bin"));
         match mode {

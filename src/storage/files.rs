@@ -64,6 +64,13 @@ pub fn random_id() -> Result<String> {
     Ok(hex::encode(bytes))
 }
 
+/// Current UTC time as RFC 3339 with an explicit `+00:00` offset, the format queue and account files already hold.
+pub fn utc_now_rfc3339() -> String {
+    jiff::Timestamp::now()
+        .display_with_offset(jiff::tz::Offset::UTC)
+        .to_string()
+}
+
 pub fn read_bounded(file: &File, maximum: u64) -> Result<Zeroizing<Vec<u8>>> {
     if file.metadata()?.len() > maximum {
         return Err(Error::Corrupt(

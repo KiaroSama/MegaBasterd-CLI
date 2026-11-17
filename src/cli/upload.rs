@@ -667,7 +667,7 @@ fn finalize_effects(
     if let Some(path) = context.config.upload_log_path.as_deref() {
         let mut log = record.clone();
         log["public_link"] = log["share_link"].clone();
-        log["ts"] = json!(chrono::Utc::now().to_rfc3339());
+        log["ts"] = json!(crate::storage::files::utc_now_rfc3339());
         if let Err(error) = hooks::upload_log(Path::new(path), &log) {
             context.output.message(
                 "WARNING",

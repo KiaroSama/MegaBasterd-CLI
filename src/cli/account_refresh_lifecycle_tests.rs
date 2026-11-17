@@ -110,7 +110,7 @@ fn parsed_refresh_all_releases_each_account_response_before_context_drop() {
                 let stamp = updated["accounts"][index]["last_used_iso"]
                     .as_str()
                     .unwrap();
-                chrono::DateTime::parse_from_rfc3339(stamp).unwrap();
+                stamp.parse::<jiff::Timestamp>().unwrap();
                 expected["accounts"][index]["quota_total"] = json!(16384u64 << index);
                 expected["accounts"][index]["quota_used"] = json!(1024u64 << index);
                 expected["accounts"][index]["last_used_iso"] = json!(stamp);

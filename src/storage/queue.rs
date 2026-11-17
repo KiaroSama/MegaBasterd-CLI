@@ -12,12 +12,12 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
     aead::{Aead, KeyInit, Payload},
 };
-use chrono::{DateTime, Utc};
+use jiff::{Timestamp, fmt::temporal::Pieces, tz::Offset};
 use rand::{TryRng, rngs::SysRng};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-use super::files::{LockedStore, STORE_VERSION, Store, random_id, read_bounded};
+use super::files::{LockedStore, STORE_VERSION, Store, random_id, read_bounded, utc_now_rfc3339};
 use crate::{
     crypto::wire::{b64_url_decode, b64_url_encode},
     error::{Error, Result},
@@ -132,13 +132,17 @@ fn corrupt(message: &str) -> Error {
 fn lease_lost() -> Error {
     Error::Busy("Queue lease was lost or expired; stale writer refused".into())
 }
-fn timestamp(value: &str) -> Result<DateTime<Utc>> {
-    let parsed = DateTime::parse_from_rfc3339(value)
-        .map_err(|_| corrupt("Queue timestamp is not timezone-aware RFC3339"))?;
-    if parsed.offset().local_minus_utc() != 0 {
-        return Err(corrupt("Queue timestamps must be UTC"));
+fn timestamp(value: &str) -> Result<Timestamp> {
+    let not_rfc3339 = || corrupt("Queue timestamp is not timezone-aware RFC3339");
+    let pieces = Pieces::parse(value).map_err(|_| not_rfc3339())?;
+    match pieces.to_numeric_offset() {
+        None => return Err(not_rfc3339()),
+        Some(offset) if offset != Offset::UTC => {
+            return Err(corrupt("Queue timestamps must be UTC"));
+        }
+        Some(_) => {}
     }
-    Ok(parsed.with_timezone(&Utc))
+    value.parse().map_err(|_| not_rfc3339())
 }
 fn valid_run(value: &str) -> bool {
     !value.is_empty()
@@ -389,7 +393,7 @@ impl Queue {
             kind,
             size: 0,
             status: JobStatus::Pending,
-            created_iso: Utc::now().to_rfc3339(),
+            created_iso: utc_now_rfc3339(),
             finished_iso: None,
             run_id: None,
             heartbeat_iso: None,
@@ -407,7 +411,7 @@ impl Queue {
         locked.save(&data)?;
         Ok(id)
     }
-    fn live(item: &QueueItem, now: DateTime<Utc>) -> Result<bool> {
+    fn live(item: &QueueItem, now: Timestamp) -> Result<bool> {
         Ok(item.status == JobStatus::Active
             && item.run_id.is_some()
             && item
@@ -416,10 +420,10 @@ impl Queue {
                 .map(timestamp)
                 .transpose()?
                 .is_some_and(|beat| {
-                    now.signed_duration_since(beat).num_milliseconds() <= LEASE_SECONDS * 1000
+                    now.duration_since(beat).as_millis() <= i128::from(LEASE_SECONDS) * 1000
                 }))
     }
-    fn recover_locked(&self, data: &mut QueueData, now: DateTime<Utc>) -> Result<Vec<String>> {
+    fn recover_locked(&self, data: &mut QueueData, now: Timestamp) -> Result<Vec<String>> {
         let mut recovered = Vec::new();
         for item in &mut data.items {
             if item.status != JobStatus::Active || Self::live(item, now)? {
@@ -443,7 +447,7 @@ impl Queue {
     pub fn recover_interrupted(&self) -> Result<Vec<String>> {
         let locked = self.store.lock()?;
         let mut data = self.load(&locked)?;
-        let recovered = self.recover_locked(&mut data, Utc::now())?;
+        let recovered = self.recover_locked(&mut data, Timestamp::now())?;
         if !recovered.is_empty() {
             locked.save(&data)?;
         }
@@ -455,7 +459,7 @@ impl Queue {
         }
         let locked = self.store.lock()?;
         let mut data = self.load(&locked)?;
-        let now = Utc::now();
+        let now = Timestamp::now();
         let recovered = self.recover_locked(&mut data, now)?;
         for item in &mut data.items {
             if !matches!(item.status, JobStatus::Pending | JobStatus::Interrupted) {
@@ -472,7 +476,7 @@ impl Queue {
                 .ok_or_else(|| corrupt("Queue lease generation overflow"))?;
             item.status = JobStatus::Active;
             item.run_id = Some(run_id.to_owned());
-            item.heartbeat_iso = Some(now.to_rfc3339());
+            item.heartbeat_iso = Some(now.display_with_offset(Offset::UTC).to_string());
             item.finished_iso = None;
             let item = item.clone();
             locked.save(&data)?;
@@ -490,7 +494,7 @@ impl Queue {
         Ok(current.id == lease.id
             && current.lease_epoch == lease.lease_epoch
             && current.run_id == lease.run_id
-            && Self::live(current, Utc::now())?)
+            && Self::live(current, Timestamp::now())?)
     }
     pub fn touch(&self, lease: &QueueItem) -> Result<bool> {
         let locked = self.store.lock()?;
@@ -501,7 +505,7 @@ impl Queue {
         if !Self::owns(item, lease)? {
             return Ok(false);
         }
-        item.heartbeat_iso = Some(Utc::now().to_rfc3339());
+        item.heartbeat_iso = Some(utc_now_rfc3339());
         locked.save(&data)?;
         Ok(true)
     }
@@ -533,8 +537,10 @@ impl Queue {
         message.zeroize();
         item.enc_payload = Self::seal(item, &payload, &key)?;
         item.status = status;
-        let finished = Utc::now().max(timestamp(&item.created_iso)?);
-        item.finished_iso = status.terminal().then(|| finished.to_rfc3339());
+        let finished = Timestamp::now().max(timestamp(&item.created_iso)?);
+        item.finished_iso = status
+            .terminal()
+            .then(|| finished.display_with_offset(Offset::UTC).to_string());
         item.run_id = None;
         item.heartbeat_iso = None;
         locked.save(&data)
@@ -657,5 +663,24 @@ impl Queue {
         let backup = self.preserve(&locked)?;
         locked.save(&QueueData::default())?;
         Ok(Some(backup))
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod timestamp_tests {
+    use super::*;
+
+    #[test]
+    fn writer_output_round_trips_as_utc_and_offsets_stay_corrupt() {
+        let written = utc_now_rfc3339();
+        assert!(written.ends_with("+00:00"), "{written}");
+        timestamp(&written).unwrap();
+        // Files written by the chrono build use the same shape and must still load.
+        timestamp("2026-11-17T10:44:34.123456789+00:00").unwrap();
+        timestamp("2000-01-01T00:00:00Z").unwrap();
+        assert!(timestamp("2026-11-17T10:44:34+03:30").is_err());
+        assert!(timestamp("2026-11-17T10:44:34").is_err());
+        assert!(timestamp("not a time").is_err());
     }
 }

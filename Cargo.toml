@@ -33,13 +33,13 @@ path = "src/megabasterd-cli.rs"
 aes = { version = "0.9.4", features = ["zeroize"] }
 aes-gcm = { version = "0.11.1", features = ["zeroize"] }
 base64 = "0.23.1"
-chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 cipher = { version = "0.5.2", features = ["zeroize"] }
 clap = { version = "4.6.7", features = ["derive", "env"] }
 crossterm = "0.29.0"
 ctr = { version = "0.10.1", features = ["zeroize"] }
 ctrlc = "3.5.2"
 flate2 = "1.1.11"
+jiff = { version = "1.0.0", default-features = false, features = ["std"] }
 hex = "0.4.3"
 hmac = "0.13.0"
 md-5 = "0.11.0"
