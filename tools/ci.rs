@@ -471,8 +471,8 @@ fn package() -> Result<()> {
     ]))?;
     print!("{}", String::from_utf8_lossy(&source.stderr));
     fs::copy(
-        root().join("target/package/megabasterd-cli-2.0.1.crate"),
-        destination.join("megabasterd-cli-2.0.1.crate"),
+        root().join("target/package/megabasterd-cli-2.0.2.crate"),
+        destination.join("megabasterd-cli-2.0.2.crate"),
     )?;
     let signed = std::env::var("MBCLI_SIGN_RELEASE").as_deref() == Ok("1");
     let signing_script = root().join(".github/scripts/Sign-Release.ps1");
@@ -512,7 +512,7 @@ fn package() -> Result<()> {
     };
     let archives = root().join(".ci-work/distribution");
     fs::create_dir_all(&archives)?;
-    let name = format!("megabasterd-cli-2.0.1-{target}.tar.gz");
+    let name = format!("megabasterd-cli-2.0.2-{target}.tar.gz");
     let archive = archives.join(&name);
     output(
         Command::new("tar")

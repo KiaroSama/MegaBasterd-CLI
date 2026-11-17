@@ -9,7 +9,7 @@ Python runtime bridge is included in the native implementation.
 
 [![CI runs manual native validation on four targets](https://img.shields.io/badge/CI-manual%20native%20validation-2563eb)](.github/workflows/release.yml)
 [![License GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-16a34a)](LICENSE)
-[![Latest release v2.0.1](https://img.shields.io/badge/release-v2.0.1-9333ea)](https://github.com/KiaroSama/MegaBasterd-CLI/releases/tag/v2.0.1)
+[![Latest release v2.0.2](https://img.shields.io/badge/release-v2.0.2-9333ea)](https://github.com/KiaroSama/MegaBasterd-CLI/releases/tag/v2.0.2)
 [![Line coverage gate at 76 percent](https://img.shields.io/badge/coverage%20gate-76%25%20lines-15803d)](.github/workflows/tests.yml)
 [![Rust toolchain 1.99.1](https://img.shields.io/badge/rust-1.99.1-8b5cf6)](rust-toolchain.toml)
 [![Runs on Linux and Windows, x64 and arm64](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%28x64%20%2B%20arm64%29-0891b2)](#installation)

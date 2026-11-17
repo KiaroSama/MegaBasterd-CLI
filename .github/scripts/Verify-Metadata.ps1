@@ -7,7 +7,7 @@ foreach($name in @('mb','mbcli','megabasterd-cli')){
     $path=Join-Path $Directory ($name+'.exe')
     $version=[Diagnostics.FileVersionInfo]::GetVersionInfo([IO.Path]::GetFullPath($path))
     if($version.CompanyName -cne 'Kiaro Sama' -or $version.ProductName -cne 'MegaBasterd CLI' -or
-       $version.FileVersion -cne '2.0.1' -or $version.ProductVersion -cne '2.0.1' -or
+       $version.FileVersion -cne '2.0.2' -or $version.ProductVersion -cne '2.0.2' -or
        $version.Comments -cne ('Source commit: '+$SourceCommit)){
         throw 'Native release metadata mismatch.'
     }

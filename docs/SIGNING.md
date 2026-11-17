@@ -23,7 +23,7 @@ verifier from this repository before running it. PowerShell 7 is required by the
 verifier, not by the application. Replace the archive name with the actual target.
 
 ```bash
-pwsh -NoProfile -File Verify-Release.ps1 -Archive megabasterd-cli-2.0.1-x86_64-pc-windows-msvc.tar.gz -Certificate OWNER-CERTIFICATE.cer
+pwsh -NoProfile -File Verify-Release.ps1 -Archive megabasterd-cli-2.0.2-x86_64-pc-windows-msvc.tar.gz -Certificate OWNER-CERTIFICATE.cer
 ```
 
 The verifier checks the pinned certificate fingerprint, validity, detached CMS

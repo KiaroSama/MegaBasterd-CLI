@@ -1,6 +1,9 @@
 # Changelog
 
-## [Unreleased]
+## [2.0.2] - 2026-11-17
+
+Replaces the unmaintained `chrono` dependency and drops macOS. No command,
+flag or file format changed.
 
 ### Changed
 

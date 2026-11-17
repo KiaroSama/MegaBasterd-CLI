@@ -139,7 +139,7 @@ fn packaged_launcher_delegates_without_raw_transcripts_or_late_file_scrubbing() 
     let package = include_str!("../tools/ci.rs");
     assert!(package.contains("fn package()"));
     assert!(package.contains("SHA256SUMS"));
-    assert!(package.contains("megabasterd-cli-2.0.1.crate"));
+    assert!(package.contains("megabasterd-cli-2.0.2.crate"));
     for binary in [
         env!("CARGO_BIN_EXE_mb"),
         env!("CARGO_BIN_EXE_mbcli"),

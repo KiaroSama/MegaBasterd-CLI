@@ -13,7 +13,7 @@ body:
     attributes:
       label: Version
       description: "Run `mb --version` and paste the output."
-      placeholder: "mb 2.0.1"
+      placeholder: "mb 2.0.2"
     validations:
       required: true
 
