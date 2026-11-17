@@ -3,7 +3,6 @@
 
 use super::*;
 use crate::storage::files::Store;
-use std::time::Duration;
 
 fn saved_paths(states: &Path) -> Vec<PathBuf> {
     std::fs::read_dir(states)
@@ -30,7 +29,7 @@ fn require_released_lease(states: &Path) {
     assert_eq!(paths.len(), 1);
     assert!(
         Store::new(paths[0].with_extension(""))
-            .with_timeout(Duration::ZERO)
+            .with_timeout(crate::storage::files::RELEASED_LOCK_GRACE)
             .lock()
             .is_ok()
     );

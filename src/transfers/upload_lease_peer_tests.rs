@@ -144,7 +144,7 @@ fn actual_upload_retains_its_lease_until_receipt_drop_and_distinct_sources_do_no
             for path in paths {
                 assert!(
                     Store::new(path.with_extension("lease"))
-                        .with_timeout(Duration::ZERO)
+                        .with_timeout(crate::storage::files::RELEASED_LOCK_GRACE)
                         .lock()
                         .is_ok()
                 );
@@ -223,7 +223,7 @@ fn actual_upload_error_releases_the_same_persistent_lease_before_a_successful_re
             drop(uploaded);
             assert!(
                 Store::new(&lease_path)
-                    .with_timeout(Duration::ZERO)
+                    .with_timeout(crate::storage::files::RELEASED_LOCK_GRACE)
                     .lock()
                     .is_ok()
             );

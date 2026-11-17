@@ -16,6 +16,11 @@ use crate::platform::secure_files::PrivateDirectory;
 #[path = "file_commit_tests.rs"]
 mod commit_tests;
 
+/// How long a test waits to re-acquire a lock it just released. A parallel test's fork can hold a
+/// duplicate of the flock descriptor until its exec closes it, so a zero-timeout retry is racy.
+#[cfg(test)]
+pub(crate) const RELEASED_LOCK_GRACE: Duration = Duration::from_secs(2);
+
 pub const STORE_VERSION: u64 = 2;
 pub const MAX_STORE_BYTES: u64 = 64 * 1024 * 1024;
 

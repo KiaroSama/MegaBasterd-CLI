@@ -176,7 +176,7 @@ fn actual_upload_lease_excludes_another_process_and_recovers_after_abrupt_owner_
     assert!(super::data_paths(&states).is_empty());
     assert!(
         crate::storage::files::Store::new(lease_path)
-            .with_timeout(Duration::ZERO)
+            .with_timeout(crate::storage::files::RELEASED_LOCK_GRACE)
             .lock()
             .is_ok()
     );

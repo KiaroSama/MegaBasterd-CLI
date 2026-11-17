@@ -329,7 +329,7 @@ fn failed_private_commit_preserves_the_previous_session_and_removes_only_its_sta
         drop(locked);
         assert!(
             Store::new(&path)
-                .with_timeout(Duration::ZERO)
+                .with_timeout(crate::storage::files::RELEASED_LOCK_GRACE)
                 .lock()
                 .is_ok()
         );

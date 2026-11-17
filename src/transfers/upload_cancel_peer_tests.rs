@@ -93,7 +93,7 @@ fn pending_upload_token_cancellation_closes_without_retry_coverage_or_registrati
             assert_eq!(std::fs::read(&source).unwrap(), original);
             assert!(
                 crate::storage::files::Store::new(saved_paths[0].with_extension("lease"))
-                    .with_timeout(Duration::ZERO)
+                    .with_timeout(crate::storage::files::RELEASED_LOCK_GRACE)
                     .lock()
                     .is_ok()
             );
